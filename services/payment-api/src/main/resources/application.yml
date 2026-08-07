@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: payment-api
+
+server:
+  port: 8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+# No datasource, no Kafka bootstrap-servers configured on purpose (M1): the service
+# must start standalone. Those land in M2 (infra) / M3 (producer wiring).

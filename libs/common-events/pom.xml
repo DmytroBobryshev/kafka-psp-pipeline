@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example.psp</groupId>
+    <artifactId>kafka-psp-pipeline</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>common-events</artifactId>
+  <packaging>jar</packaging>
+
+  <name>common-events</name>
+  <description>
+    Shared event envelope (ADR-0002). Plain Java, no Spring - imported by every producer and
+    consumer, including services that never touch Spring Web. JSON for now (Maven module gains
+    Avro codegen in M9, per ADR-0002).
+  </description>
+
+  <dependencies>
+    <!-- Lombok: compile-time only, never shows up on the runtime classpath -->
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Test -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

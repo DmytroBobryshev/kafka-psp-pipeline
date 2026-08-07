@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example.psp</groupId>
+    <artifactId>kafka-psp-pipeline</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>payment-api</artifactId>
+  <packaging>jar</packaging>
+
+  <name>payment-api</name>
+  <description>
+    Hexagonal ARCHETYPE service (M1). A compilable walking skeleton: web + actuator only, no
+    database or Kafka connection wired yet (that lands in M2/M3). Package layout follows
+    PLAN.md's hexagonal template and is enforced by an ArchUnit test.
+  </description>
+
+  <dependencies>
+    <!-- Internal libs -->
+    <dependency>
+      <groupId>com.example.psp</groupId>
+      <artifactId>common-events</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.example.psp</groupId>
+      <artifactId>common-web</artifactId>
+    </dependency>
+
+    <!-- Web + actuator only; no spring-boot-starter-data-jpa, no spring-kafka yet -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- Lombok + MapStruct (annotation processor order fixed in the parent) -->
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mapstruct</groupId>
+      <artifactId>mapstruct</artifactId>
+    </dependency>
+
+    <!-- Test -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>payment-api</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
