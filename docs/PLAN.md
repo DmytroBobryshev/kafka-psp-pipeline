@@ -16,7 +16,20 @@ Flow: `POST /payments` -> payment-api (Postgres + outbox) -> `payments.requested
 
 Which Claude model + reasoning effort to use per task, and how to launch subagents. Heuristic: **haiku** for deterministic/mechanical work, **sonnet** as the implementation default, **opus** for architecture, correctness-critical logic, and deep review, **fable** (Mythos-class, above opus) as orchestrator/driver, as the escalation tier when an opus attempt stalls, and for phase-end cross-cutting reviews. Effort tiers: `low` (mechanical), `medium` (standard implementation), `high` (subtle correctness/design), `xhigh` (only for the hardest cross-cutting reviews).
 
+### How model and effort are actually set
+
+They are *not* controlled the same way, and this matters for cost:
+
+| Knob | Session (you) | Subagent via the Agent tool | Subagent via a Workflow script |
+|---|---|---|---|
+| **Model** | `/model <tier>` | Set per launch, independent of the session | Set per `agent()` call |
+| **Effort** | `/effort <tier>` | **Inherited from the session — not settable per agent** | Set per `agent()` call |
+
+Consequence: launching a sonnet subagent while the session sits at `xhigh` runs boilerplate work at deep-reasoning cost. So the effort column below is a target for the **session** setting while that module is being worked on; agents inherit it. Only Workflow runs can pin effort per agent — use one when a phase genuinely needs mixed effort levels (e.g. haiku/low scaffolding fanning out alongside an opus/high review).
+
 ### Per-module routing
+
+Model applies to the implementing agent; effort is the session level to set for that module (agents inherit it).
 
 | Scope | Model | Effort | Why |
 |---|---|---|---|
@@ -38,19 +51,21 @@ Which Claude model + reasoning effort to use per task, and how to launch subagen
 
 ### Agent-launch defaults (subagents per task type)
 
-| Task | Agent | Model / effort |
-|---|---|---|
-| Codebase exploration / lookups | Explore | haiku / low |
-| Planning a module before coding | ecc:planner or Plan | opus / high |
-| Java/Spring code review after each module | ecc:java-reviewer | opus / high |
-| React/TS review (M17) | ecc:react-reviewer + ecc:typescript-reviewer | sonnet / medium |
-| Build/compile error fixing | ecc:java-build-resolver / ecc:react-build-resolver | sonnet / low |
-| Security review (M14, gateway) | ecc:security-reviewer | opus / high |
-| Docs/README sync | ecc:doc-updater | haiku / low |
-| Final per-phase architecture review | ecc:architect | fable / xhigh |
-| Escalation after a failed opus attempt | claude (general) | fable / high |
+Model is passed explicitly at launch. Effort is inherited from the session unless the row is run inside a Workflow, where the listed effort can be pinned per agent.
 
-Rule of thumb: when unsure, inherit the session model and default effort; escalate to opus/high only where the table says correctness or architecture is at stake, and drop to haiku/low for anything you could script.
+| Task | Agent | Model (set per launch) | Effort (session, or pinned in a Workflow) |
+|---|---|---|---|
+| Codebase exploration / lookups | Explore | haiku | low |
+| Planning a module before coding | ecc:planner or Plan | opus | high |
+| Java/Spring code review after each module | ecc:java-reviewer | opus | high |
+| React/TS review (M17) | ecc:react-reviewer + ecc:typescript-reviewer | sonnet | medium |
+| Build/compile error fixing | ecc:java-build-resolver / ecc:react-build-resolver | sonnet | low |
+| Security review (M14, gateway) | ecc:security-reviewer | opus | high |
+| Docs/README sync | ecc:doc-updater | haiku | low |
+| Final per-phase architecture review | ecc:architect | fable | xhigh |
+| Escalation after a failed opus attempt | claude (general) | fable | high |
+
+Rules of thumb: escalate to opus/high only where the table says correctness or architecture is at stake, and drop to haiku/low for anything you could script. Keep the session effort near the work actually being done — a cheap model at `xhigh` is not cheap. Before starting a module, state the model and effort and confirm the session matches.
 
 ---
 
