@@ -1,0 +1,340 @@
+# infra/compose/docker-compose.yml
+#
+# M2 - Infrastructure baseline for the Kafka PSP pipeline. See README.md in this directory for
+# the full writeup: topology diagram, topics table, "prove it" experiments with real observed
+# output, and troubleshooting.
+#
+# ============================================================================================
+# THE #1 MISCONFIGURATION: KAFKA_ADVERTISED_LISTENERS (read this before touching listener config)
+# ============================================================================================
+# Every broker below opens THREE listeners:
+#
+#   PLAINTEXT  (container port 9092)  - for clients running INSIDE this compose network
+#                                        (schema-registry, akhq, kafka-exporter, other services
+#                                        in later modules). Advertised as the container's
+#                                        Compose-DNS hostname, e.g. `kafka1:9092` - only
+#                                        resolvable *inside* the `kafka-psp-net` network.
+#   CONTROLLER (container port 9093)  - KRaft controller-quorum traffic ONLY (broker-to-broker
+#                                        metadata replication). Never advertised to clients.
+#   EXTERNAL   (container port 29092) - for clients running on YOUR LAPTOP (kafka CLI, kcat,
+#                                        this README's produce/consume commands). Advertised as
+#                                        `localhost:<mapped-host-port>`.
+#
+# Why three, and why does this matter: a Kafka client's first connection is to any broker in
+# `bootstrap.servers`; that broker then hands back its FULL advertised.listeners metadata for
+# every partition leader, and the client reconnects directly to whatever that metadata says.
+# If a broker only advertises its Compose-internal hostname (`kafka1:9092`), a HOST client that
+# initially reached it via `localhost:29092` receives `kafka1:9092` as the next address to
+# dial - which does not resolve outside Docker's network - and the client hangs or errors with
+# "no route to host" / DNS resolution failures. This is the single most common Kafka Docker
+# misconfiguration (PLAN.md calls it out explicitly). The fix is exactly what's below: a
+# distinct advertised host:port PER AUDIENCE, mapped through `listener.security.protocol.map`.
+#
+# Host-port note: all three brokers listen on container port 29092 for EXTERNAL, but each is
+# published to a DIFFERENT host port (29092/29093/29094 - see .env) because only one process on
+# your Mac can bind a given host port. Each broker's advertised EXTERNAL listener therefore
+# names ITS OWN mapped host port, not the shared container port. Get this wrong (e.g. every
+# broker advertising `localhost:29092`) and two of the three brokers become unreachable from
+# the host even though `docker compose ps` shows all three healthy.
+# ============================================================================================
+
+networks:
+  kafka-psp-net:
+    name: kafka-psp-net
+    driver: bridge
+
+volumes:
+  kafka1-data:
+  kafka2-data:
+  kafka3-data:
+  postgres-data:
+  mongo-data:
+  prometheus-data:
+  grafana-data:
+
+x-kafka-common: &kafka-common
+  image: ${KAFKA_IMAGE}:${KAFKA_VERSION}
+  networks: [kafka-psp-net]
+  restart: unless-stopped
+  healthcheck:
+    # Talks to the broker's OWN internal listener from inside its own container - proves the
+    # broker process is actually serving the Kafka protocol, not just that the port is open.
+    test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1 || exit 1"]
+    interval: 10s
+    timeout: 10s
+    retries: 15
+    start_period: 40s
+  environment: &kafka-common-env
+    CLUSTER_ID: ${CLUSTER_ID}
+    KAFKA_PROCESS_ROLES: broker,controller
+    KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
+    KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+    KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+    KAFKA_LOG_DIRS: /var/lib/kafka/data
+    # ---- cluster-wide defaults, per docs/diagrams/topic-map.md "Cluster-wide defaults" ----
+    KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+    KAFKA_MIN_INSYNC_REPLICAS: 2
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+    KAFKA_LOG_RETENTION_MS: 604800000 # 7 days
+    KAFKA_LOG_CLEANUP_POLICY: delete
+    KAFKA_COMPRESSION_TYPE: zstd
+    KAFKA_UNCLEAN_LEADER_ELECTION_ENABLE: "false" # flipped deliberately in the M19 drill
+    # Explicit topic creation only (create-topics.sh) - no accidental default-config topics.
+    # Kafka Streams (M10) and Kafka Connect (M6/M13) create their own internal topics via the
+    # AdminClient regardless of this setting, so disabling it here costs nothing later.
+    KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    KAFKA_NUM_PARTITIONS: 1
+
+services:
+  # ============================================================================================
+  # Kafka brokers - 3-node KRaft cluster, combined broker+controller roles (fine for a laptop;
+  # a real deployment would split dedicated controller nodes - see README "Compromises").
+  # ============================================================================================
+  kafka1:
+    <<: *kafka-common
+    hostname: kafka1
+    container_name: kafka1
+    ports:
+      - "${KAFKA1_EXTERNAL_PORT}:29092" # host tools -> EXTERNAL listener
+    environment:
+      <<: *kafka-common-env
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
+      # Internal name resolves only inside kafka-psp-net; EXTERNAL name/port is what YOU dial
+      # from the host - must match the host-side port this broker is actually published on.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:9092,EXTERNAL://localhost:${KAFKA1_EXTERNAL_PORT}
+    volumes:
+      - kafka1-data:/var/lib/kafka/data
+
+  kafka2:
+    <<: *kafka-common
+    hostname: kafka2
+    container_name: kafka2
+    ports:
+      - "${KAFKA2_EXTERNAL_PORT}:29092"
+    environment:
+      <<: *kafka-common-env
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:9092,EXTERNAL://localhost:${KAFKA2_EXTERNAL_PORT}
+    volumes:
+      - kafka2-data:/var/lib/kafka/data
+
+  kafka3:
+    <<: *kafka-common
+    hostname: kafka3
+    container_name: kafka3
+    ports:
+      - "${KAFKA3_EXTERNAL_PORT}:29092"
+    environment:
+      <<: *kafka-common-env
+      KAFKA_NODE_ID: 3
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:9092,EXTERNAL://localhost:${KAFKA3_EXTERNAL_PORT}
+    volumes:
+      - kafka3-data:/var/lib/kafka/data
+
+  # ============================================================================================
+  # Schema Registry - runs inside the compose network, so it is an INTERNAL client: it talks to
+  # brokers over the PLAINTEXT listener using Compose DNS names, never EXTERNAL/localhost.
+  # ============================================================================================
+  schema-registry:
+    image: confluentinc/cp-schema-registry:${SCHEMA_REGISTRY_VERSION}
+    hostname: schema-registry
+    container_name: schema-registry
+    networks: [kafka-psp-net]
+    restart: unless-stopped
+    depends_on:
+      kafka1: { condition: service_healthy }
+      kafka2: { condition: service_healthy }
+      kafka3: { condition: service_healthy }
+    ports:
+      - "${SCHEMA_REGISTRY_PORT}:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka1:9092,PLAINTEXT://kafka2:9092,PLAINTEXT://kafka3:9092
+      SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL: PLAINTEXT
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/subjects > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  # ============================================================================================
+  # AKHQ - Kafka UI. Also an internal client: connects via kafka1/2/3:9092, plus Schema Registry
+  # over the Compose network. See akhq/application.yml.
+  # ============================================================================================
+  akhq:
+    image: tchiotludo/akhq:${AKHQ_VERSION}
+    hostname: akhq
+    container_name: akhq
+    networks: [kafka-psp-net]
+    restart: unless-stopped
+    depends_on:
+      kafka1: { condition: service_healthy }
+      kafka2: { condition: service_healthy }
+      kafka3: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+    ports:
+      - "${AKHQ_PORT}:8080"
+    volumes:
+      - ./akhq/application.yml:/app/application.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  # ============================================================================================
+  # PostgreSQL - payment-api, ledger, psp-connector (docs/PLAN.md persistence table; ADR-0005).
+  # One container, three logical databases + three scoped users - see postgres/init/.
+  # ============================================================================================
+  postgres:
+    image: postgres:${POSTGRES_VERSION}
+    hostname: postgres
+    container_name: postgres
+    networks: [kafka-psp-net]
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      PAYMENT_API_DB: ${PAYMENT_API_DB}
+      PAYMENT_API_DB_USER: ${PAYMENT_API_DB_USER}
+      PAYMENT_API_DB_PASSWORD: ${PAYMENT_API_DB_PASSWORD}
+      LEDGER_DB: ${LEDGER_DB}
+      LEDGER_DB_USER: ${LEDGER_DB_USER}
+      LEDGER_DB_PASSWORD: ${LEDGER_DB_PASSWORD}
+      PSP_CONNECTOR_DB: ${PSP_CONNECTOR_DB}
+      PSP_CONNECTOR_DB_USER: ${PSP_CONNECTOR_DB_USER}
+      PSP_CONNECTOR_DB_PASSWORD: ${PSP_CONNECTOR_DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # ============================================================================================
+  # MongoDB - webhook-notifier, analytics, audit-trail (docs/PLAN.md persistence table).
+  # One container, three logical databases + three scoped users - see mongo/init/.
+  # ============================================================================================
+  mongodb:
+    image: mongo:${MONGO_VERSION}
+    hostname: mongodb
+    container_name: mongodb
+    networks: [kafka-psp-net]
+    restart: unless-stopped
+    ports:
+      - "${MONGO_PORT}:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      WEBHOOK_NOTIFIER_DB: ${WEBHOOK_NOTIFIER_DB}
+      WEBHOOK_NOTIFIER_DB_USER: ${WEBHOOK_NOTIFIER_DB_USER}
+      WEBHOOK_NOTIFIER_DB_PASSWORD: ${WEBHOOK_NOTIFIER_DB_PASSWORD}
+      ANALYTICS_DB: ${ANALYTICS_DB}
+      ANALYTICS_DB_USER: ${ANALYTICS_DB_USER}
+      ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD}
+      AUDIT_TRAIL_DB: ${AUDIT_TRAIL_DB}
+      AUDIT_TRAIL_DB_USER: ${AUDIT_TRAIL_DB_USER}
+      AUDIT_TRAIL_DB_PASSWORD: ${AUDIT_TRAIL_DB_PASSWORD}
+    volumes:
+      - mongo-data:/data/db
+      - ./mongo/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'db.runCommand(\"ping\").ok' | mongosh --quiet -u ${MONGO_ROOT_USER} -p ${MONGO_ROOT_PASSWORD} --authenticationDatabase admin || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # ============================================================================================
+  # Metrics: kafka-exporter (protocol-based, not JMX - see README "Metrics" section for why)
+  # ============================================================================================
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:${KAFKA_EXPORTER_VERSION}
+    hostname: kafka-exporter
+    container_name: kafka-exporter
+    networks: [kafka-psp-net]
+    restart: unless-stopped
+    depends_on:
+      kafka1: { condition: service_healthy }
+      kafka2: { condition: service_healthy }
+      kafka3: { condition: service_healthy }
+    command:
+      - "--kafka.server=kafka1:9092"
+      - "--kafka.server=kafka2:9092"
+      - "--kafka.server=kafka3:9092"
+      - "--kafka.version=3.8.0"
+      - "--web.listen-address=:9308"
+    ports:
+      - "${KAFKA_EXPORTER_PORT}:9308"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9308/metrics || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_VERSION}
+    hostname: prometheus
+    container_name: prometheus
+    networks: [kafka-psp-net]
+    restart: unless-stopped
+    depends_on:
+      kafka-exporter: { condition: service_healthy }
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 15s
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION}
+    hostname: grafana
+    container_name: grafana
+    networks: [kafka-psp-net]
+    restart: unless-stopped
+    depends_on:
+      prometheus: { condition: service_healthy }
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      # NOT nested under the provisioning/dashboards mount above - Docker cannot create a
+      # mountpoint inside a path that's already the target of another bind mount (this bit us
+      # during verification: grafana/dashboards was originally mounted at
+      # /etc/grafana/provisioning/dashboards/files and the container failed to start with
+      # "read-only file system" trying to create that mountpoint). Kept as a sibling path
+      # instead, referenced by dashboard.yml's `options.path`.
+      - ./grafana/dashboards:/etc/grafana/dashboards-data:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 15s

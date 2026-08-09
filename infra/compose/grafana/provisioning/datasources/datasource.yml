@@ -1,0 +1,13 @@
+# infra/compose/grafana/provisioning/datasources/datasource.yml
+#
+# Auto-provisions the Prometheus datasource on Grafana startup - no manual "Add data source"
+# click needed.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

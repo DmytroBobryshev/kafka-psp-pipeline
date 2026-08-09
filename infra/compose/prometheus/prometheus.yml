@@ -1,0 +1,19 @@
+# infra/compose/prometheus/prometheus.yml
+#
+# Scrapes kafka-exporter (protocol-based Kafka metrics: brokers, topics, partitions, ISR,
+# leaders, consumer group lag - see README "Metrics: kafka-exporter vs jmx_exporter" for why
+# this was chosen over a JMX javaagent) and itself.
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka-exporter:9308"]
+        labels:
+          cluster: kafka-psp-compose

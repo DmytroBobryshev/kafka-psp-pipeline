@@ -1,0 +1,15 @@
+# infra/compose/grafana/provisioning/dashboards/dashboard.yml
+#
+# Tells Grafana to load every dashboard JSON in grafana/dashboards/ on startup.
+apiVersion: 1
+
+providers:
+  - name: default
+    orgId: 1
+    folder: Kafka
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards-data

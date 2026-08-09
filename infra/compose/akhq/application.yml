@@ -1,0 +1,12 @@
+# infra/compose/akhq/application.yml
+#
+# AKHQ connects over the internal PLAINTEXT listener (docker-network hostnames kafka1/2/3:9092)
+# because AKHQ itself runs as a container on the compose network - it is an "in-container
+# client", never a host tool. See README "advertised.listeners" section.
+akhq:
+  connections:
+    kafka-psp-compose:
+      properties:
+        bootstrap.servers: "kafka1:9092,kafka2:9092,kafka3:9092"
+      schema-registry:
+        url: "http://schema-registry:8081"
