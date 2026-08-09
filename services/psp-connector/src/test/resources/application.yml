@@ -1,0 +1,41 @@
+# Test-classpath override of src/main/resources/application.yml. PspConnectorApplicationTests
+# only needs the Spring context to load against an @EmbeddedKafka broker and an in-memory H2
+# database - the real integration is exercised for real against the live infra/compose stack,
+# captured in README.md, not reproduced here.
+spring:
+  application:
+    name: psp-connector
+  datasource:
+    url: jdbc:h2:mem:pspconnector;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+  flyway:
+    enabled: false
+  kafka:
+    # Overridden at runtime by @EmbeddedKafka's broker address (spring.kafka.bootstrap-servers
+    # system property it sets) - this value only matters before that override applies.
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: psp-connector.test.v1
+      auto-offset-reset: earliest
+      properties:
+        max.poll.records: 10
+        max.poll.interval.ms: 300000
+        session.timeout.ms: 45000
+        heartbeat.interval.ms: 3000
+
+psp-connector:
+  kafka:
+    payment-requested-topic: payments.payment-requested.v1
+    payment-status-changed-topic: payments.payment-status-changed.v1
+  provider:
+    min-latency-ms: 0
+    max-latency-ms: 1
+    decline-rate: 0.0
+    timeout-rate: 0.0
+    forced-latency-ms: 0
+    forced-outcome: NONE

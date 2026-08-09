@@ -1,0 +1,91 @@
+spring:
+  application:
+    name: psp-connector
+
+  kafka:
+    # No bootstrap-servers here on purpose - environment-specific, lives in
+    # application-docker-compose.yml (same convention as payment-api / PLAN.md 0.2).
+
+    consumer:
+      # group.id - see the long comment in config.KafkaConsumerConfig for what this controls.
+      # "psp-connector.v1" matches docs/diagrams/topic-map.md's consumer-groups table. Overridden
+      # per-experiment from the command line (e.g. --spring.kafka.consumer.group-id=... for the
+      # duplicates-vs-loss drill's isolated auto-commit/manual-ack groups).
+      group-id: psp-connector.v1
+
+      # auto.offset.reset=earliest - mandatory per docs/diagrams/topic-map.md; see
+      # config.KafkaConsumerConfig for why. auto-offset-reset is a real Spring Boot
+      # KafkaProperties field (unlike enable.auto.commit and the poll-loop settings below, which
+      # have no dedicated field and go under `properties`).
+      auto-offset-reset: earliest
+
+      properties:
+        # max.poll.records - deliberately small. See config.KafkaConsumerConfig for the full
+        # reasoning: at psp-connector.provider.max-latency-ms=5000 worst case, 10 records/batch is
+        # up to 50s of processing between poll() calls - comfortably under max.poll.interval.ms
+        # below in steady state, and small enough that the M4b drill (interval forced to 5000ms)
+        # reliably blows it with a single ~10s record.
+        max.poll.records: 10
+
+        # max.poll.interval.ms - steady-state default (300000ms/5min, the Kafka client default,
+        # set explicitly here rather than left implicit so the M4b drill's override is an obvious
+        # diff). Overridden to 5000 for the rebalance-storm drill:
+        #   --spring.kafka.consumer.properties.max.poll.interval.ms=5000
+        max.poll.interval.ms: 300000
+
+        # session.timeout.ms / heartbeat.interval.ms - background liveness, NOT processing time.
+        # See config.KafkaConsumerConfig for the full session-timeout-vs-max-poll-interval
+        # explanation. Kafka client defaults, made explicit for the same reason as above.
+        session.timeout.ms: 45000
+        heartbeat.interval.ms: 3000
+
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      # Same production settings as payment-api's producer (see its application.yml for the full
+      # acks/idempotence/batching commentary) - psp-connector is a producer too, of
+      # payments.payment-status-changed.v1.
+      acks: all
+      retries: 2147483647
+      batch-size: 32768
+      compression-type: zstd
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        linger.ms: 10
+        spring.json.add.type.headers: false
+
+server:
+  # payment-api is 8085, AKHQ 8080, Schema Registry 8081, Grafana 3000, Prometheus 9090 - this
+  # service uses 8086. Overridden per-instance for the M4c partition/consumer-ratio drill
+  # (--server.port=8087, 8088, ...).
+  port: 8086
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+# psp-connector custom properties
+psp-connector:
+  kafka:
+    payment-requested-topic: payments.payment-requested.v1
+    payment-status-changed-topic: payments.payment-status-changed.v1
+
+  provider:
+    # Steady-state simulation: 100ms-5s latency, ~10% declines, ~5% timeouts (module brief).
+    min-latency-ms: 100
+    max-latency-ms: 5000
+    decline-rate: 0.10
+    timeout-rate: 0.05
+    # 0 = disabled (use the random min/max range above). Set to e.g. 10000 to force ~10s
+    # processing for the rebalance-storm drill.
+    forced-latency-ms: 0
+    # NONE = use decline-rate/timeout-rate above. Set to APPROVED/DECLINED/TIMEOUT to force every
+    # call to that outcome for a deterministic experiment run.
+    forced-outcome: NONE
+
+# No datasource configured here on purpose - see application-docker-compose.yml. Running this
+# service without an active profile and without a database will fail to start
+# (spring-boot-starter-data-jpa requires a DataSource).

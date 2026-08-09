@@ -1,0 +1,27 @@
+# M4: run psp-connector against the infra/compose stack (infra/compose/README.md, .env).
+# Activate with SPRING_PROFILES_ACTIVE=docker-compose (same convention as payment-api).
+spring:
+  datasource:
+    # infra/compose/.env: PSP_CONNECTOR_DB / PSP_CONNECTOR_DB_USER / PSP_CONNECTOR_DB_PASSWORD.
+    # This user can only ever connect to the psp_connector database (ADR-0005's per-service
+    # Postgres grant, enforced at the container level).
+    url: jdbc:postgresql://localhost:5432/psp_connector
+    username: psp_connector
+    password: psp_connector_pw
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      # Flyway owns the schema (db/migration/V1__create_payment_attempts_table.sql); Hibernate
+      # only verifies the entity mapping matches what Flyway created.
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  kafka:
+    # Three brokers' HOST-side (EXTERNAL) listeners - same rationale as payment-api's equivalent
+    # entry (infra/compose/README.md's advertised-listeners section).
+    bootstrap-servers: localhost:29092,localhost:29093,localhost:29094
