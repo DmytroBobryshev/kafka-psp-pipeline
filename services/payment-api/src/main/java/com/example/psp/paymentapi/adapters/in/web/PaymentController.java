@@ -2,6 +2,7 @@ package com.example.psp.paymentapi.adapters.in.web;
 
 import com.example.psp.paymentapi.application.CreatePaymentUseCase;
 import com.example.psp.paymentapi.domain.model.Payment;
+import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -10,10 +11,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The M1 "health-ish" web adapter: thin enough to prove the hexagon wiring end to end (DTO -&gt;
- * MapStruct -&gt; use case -&gt; domain -&gt; MapStruct -&gt; DTO) without any real persistence or
- * Kafka behind it - {@code adapters/out/persistence} and {@code adapters/out/kafka} are stubs at
- * this stage. Real payment creation semantics (validation, outbox, actual publish) land in M3.
+ * The web adapter for the payment hexagon: DTO -&gt; MapStruct ({@link PaymentWebMapper}) -&gt;
+ * use case -&gt; domain -&gt; MapStruct -&gt; DTO (ADR-0007). M3 wires the use case to a real
+ * Postgres repository and a real Kafka producer (see {@code adapters/out/persistence} and
+ * {@code adapters/out/kafka}) - this controller itself stays thin; {@code @Valid} is the only
+ * addition over the M1 skeleton.
  *
  * <p>Liveness/readiness for the service itself is Spring Boot Actuator's job
  * ({@code /actuator/health}), already wired via {@code spring-boot-starter-actuator}.
@@ -31,7 +33,7 @@ public class PaymentController {
     }
 
     @PostMapping
-    public ResponseEntity<PaymentResponse> create(@RequestBody CreatePaymentRequest request) {
+    public ResponseEntity<PaymentResponse> create(@Valid @RequestBody CreatePaymentRequest request) {
         Payment payment = createPaymentUseCase.execute(mapper.toCommand(request));
         return ResponseEntity.status(HttpStatus.CREATED).body(mapper.toResponse(payment));
     }

@@ -1,0 +1,30 @@
+# M3: run payment-api against the infra/compose stack (infra/compose/README.md, .env).
+# Activate with SPRING_PROFILES_ACTIVE=docker-compose (naming convention set by PLAN.md 0.2 for
+# every profile that targets the docker-compose stack, e.g. the Eureka discovery-server profile).
+spring:
+  datasource:
+    # infra/compose/.env: PAYMENT_API_DB / PAYMENT_API_DB_USER / PAYMENT_API_DB_PASSWORD. This
+    # user can only ever connect to the payment_api database (ADR-0005's per-service Postgres
+    # grant, enforced at the container level, not just by convention here).
+    url: jdbc:postgresql://localhost:5432/payment_api
+    username: payment_api
+    password: payment_api_pw
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      # Flyway owns the schema (db/migration/V1__create_payments_table.sql); Hibernate only
+      # verifies the entity mapping matches what Flyway created - it must never generate DDL of
+      # its own in a service with a real migration tool.
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  kafka:
+    # Three brokers' HOST-side (EXTERNAL) listeners (infra/compose/README.md's advertised-
+    # listeners section) - a real multi-broker bootstrap list, not just kafka1, so the client can
+    # still discover the cluster if the first broker in the list happens to be down.
+    bootstrap-servers: localhost:29092,localhost:29093,localhost:29094

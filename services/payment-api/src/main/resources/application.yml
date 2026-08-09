@@ -2,8 +2,91 @@ spring:
   application:
     name: payment-api
 
+  # Kafka producer (M3). No bootstrap-servers here on purpose - that's environment-specific and
+  # lives in application-docker-compose.yml (activate with SPRING_PROFILES_ACTIVE=docker-compose,
+  # matching the profile-naming convention PLAN.md 0.2 sets for this repo). Everything below is
+  # environment-independent producer *behavior* and applies in every profile.
+  kafka:
+    producer:
+      # --- Serializers -------------------------------------------------------------------------
+      # Key: paymentId as plain UTF-8 text (ADR-0003). Value: the ADR-0002 envelope + event
+      # fields, JSON-encoded (Jackson serializes Java records natively; Avro replaces this in M9
+      # without changing the shape).
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+      # --- acks: how many replicas must persist a record before the produce call succeeds -------
+      #   acks=0   fire-and-forget - the leader doesn't even confirm receipt. Fastest, but a
+      #            broker restart or dropped connection loses records with zero signal to the
+      #            producer. Used ONLY in the M3 throughput experiment, never here.
+      #   acks=1   the partition LEADER writes to its own log and acks immediately, before
+      #            followers replicate. Faster than acks=all, but if the leader dies before
+      #            replication reaches the ISR, an already-acknowledged record is gone - this is
+      #            exactly what the M3 leader-kill drill reproduces and counts.
+      #   acks=all every in-sync replica (ISR - currently >= min.insync.replicas=2 on this topic,
+      #            see infra/compose) must persist the record before the leader acks. This is the
+      #            production setting and the one this application actually runs with.
+      acks: all
+
+      # --- retries: how many times to retry a send that failed with a retriable broker error ----
+      # (e.g. NOT_LEADER_OR_FOLLOWER during a leader election right after a broker dies).
+      # Effectively unbounded - the real ceiling is delivery.timeout.ms (default 120s), not a
+      # retry count, so this just makes sure "retries" itself is never the limiting factor.
+      retries: 2147483647
+
+      # --- batch.size / linger.ms: batching, in bytes and milliseconds --------------------------
+      # batch.size: max bytes per partition the producer accumulates before sending even if
+      # linger.ms hasn't elapsed. 32 KiB (double the client default of 16 KiB) so linger.ms=10 has
+      # room to actually build fuller batches under the M3 throughput experiment's load; see
+      # linger.ms below (spring.kafka.producer.properties, since Spring Boot's KafkaProperties has
+      # no dedicated linger-ms field).
+      batch-size: 32768
+
+      # --- compression.type -----------------------------------------------------------------------
+      # The cluster's broker-level default (infra/compose) is compression.type=zstd, which means a
+      # broker will RECOMPRESS any batch it receives in a different codec (or uncompressed) to
+      # zstd before writing to disk - extra broker CPU on every write. Compressing with zstd
+      # client-side avoids that: the broker can store the batch exactly as received.
+      compression-type: zstd
+
+      properties:
+        # --- enable.idempotence -----------------------------------------------------------------
+        # Gives every ProducerRecord a producer-id + per-partition sequence number, so the broker
+        # can detect and silently drop a duplicate caused by a CLIENT-SIDE retry (e.g. the ack for
+        # a successful write was lost on the network, so the client retried a write that had
+        # already landed). This is retry-level dedup only - it does NOT dedupe two genuinely
+        # separate publishPaymentCreated() calls; that's the M5 consumer-side idempotency table.
+        #
+        # Idempotence CONSTRAINS two other settings, and the broker enforces this at producer
+        # startup (refuses to initialize otherwise):
+        #   - acks MUST be "all". The idempotent producer's sequence-number bookkeeping is only
+        #     trustworthy if every write it believes succeeded is actually durable on every ISR
+        #     member; acks=0/1 could let the producer believe a write succeeded when a future
+        #     leader election drops it, which breaks the exactly-once-per-partition guarantee
+        #     idempotence is supposed to provide.
+        #   - max.in.flight.requests.per.connection MUST be <= 5 (Kafka enforces this ceiling
+        #     automatically since 2.1 for idempotent producers). The broker tracks a window of the
+        #     last 5 sequence numbers per partition to detect/reorder out-of-order retries without
+        #     leaving a gap it can't reconcile; more than 5 in flight and it can no longer
+        #     guarantee that reordering-detection window.
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+
+        # linger.ms: how long the producer waits after the first record in a new batch arrives,
+        # hoping more records for the same partition show up to fill it, before sending anyway.
+        # 10ms is a deliberate small delay - trades a few ms of added latency per record for
+        # meaningfully higher throughput under load (measured in the M3 throughput experiment).
+        linger.ms: 10
+
+        # Don't let Spring's JsonSerializer stamp __TypeId__/__ContentTypeId__ headers with this
+        # JVM's Java class name. ADR-0002's header contract is traceparent/event-id/event-type/
+        # aggregate-id only; a Java FQCN in a header means nothing to a non-Java consumer and
+        # nothing to Avro (M9).
+        spring.json.add.type.headers: false
+
 server:
-  port: 8081
+  # 8081 is Schema Registry and 8080 is AKHQ in infra/compose - keep services off both.
+  port: 8085
 
 management:
   endpoints:
@@ -11,5 +94,11 @@ management:
       exposure:
         include: health,info
 
-# No datasource, no Kafka bootstrap-servers configured on purpose (M1): the service
-# must start standalone. Those land in M2 (infra) / M3 (producer wiring).
+# payment-api custom properties (M3)
+payment-api:
+  kafka:
+    payment-requested-topic: payments.payment-requested.v1
+
+# No datasource configured here on purpose - see application-docker-compose.yml. Running this
+# service without an active profile and without a database will fail to start (spring-boot-
+# starter-data-jpa requires a DataSource); that's intentional now that M3 wires real persistence.

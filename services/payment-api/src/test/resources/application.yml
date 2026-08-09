@@ -1,0 +1,32 @@
+# Test-classpath override of src/main/resources/application.yml. PaymentApiApplicationTests only
+# needs the Spring context to load, not a real Postgres/Kafka - the real integration is exercised
+# for real against the live infra/compose stack, captured in services/payment-api/README.md, not
+# reproduced here. An in-memory H2 database (PostgreSQL compatibility mode) lets Hibernate build
+# the schema directly from the JPA entity so the context-load test needs neither Postgres nor
+# Flyway running.
+spring:
+  application:
+    name: payment-api
+  datasource:
+    url: jdbc:h2:mem:paymentapi;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+  flyway:
+    enabled: false
+  kafka:
+    # No broker is guaranteed to be running under plain `mvn test`. KafkaProducerFactory/
+    # KafkaTemplate construction never connects eagerly (the underlying KafkaProducer connects
+    # lazily on first send, which this test never triggers), so this value only matters if that
+    # assumption is ever wrong - kept short so a stray send() fails fast instead of hanging.
+    bootstrap-servers: localhost:29092
+    producer:
+      properties:
+        max.block.ms: 2000
+
+payment-api:
+  kafka:
+    payment-requested-topic: payments.payment-requested.v1

@@ -16,9 +16,9 @@
 
   <name>payment-api</name>
   <description>
-    Hexagonal ARCHETYPE service (M1). A compilable walking skeleton: web + actuator only, no
-    database or Kafka connection wired yet (that lands in M2/M3). Package layout follows
-    PLAN.md's hexagonal template and is enforced by an ArchUnit test.
+    payment-api (M3): POST /api/payments -&gt; validate -&gt; Postgres insert -&gt; publish
+    payments.payment-requested.v1. Hexagonal layout enforced by an ArchUnit test; MapStruct at
+    every boundary (web DTO, JPA entity, Kafka event).
   </description>
 
   <dependencies>
@@ -32,7 +32,7 @@
       <artifactId>common-web</artifactId>
     </dependency>
 
-    <!-- Web + actuator only; no spring-boot-starter-data-jpa, no spring-kafka yet -->
+    <!-- Web + actuator -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-web</artifactId>
@@ -40,6 +40,37 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <!-- Bean validation on the CreatePaymentRequest record (M3) -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+
+    <!-- Real Postgres persistence (M3, ADR-0005): JPA + Flyway-owned schema -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <!-- Flyway >= 10 split DB-specific support out of flyway-core -->
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+
+    <!-- Real Kafka producer (M3) -->
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka</artifactId>
     </dependency>
 
     <!-- Lombok + MapStruct (annotation processor order fixed in the parent) -->
@@ -60,8 +91,20 @@
       <scope>test</scope>
     </dependency>
     <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>com.tngtech.archunit</groupId>
       <artifactId>archunit-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- In-memory DB for the plain context-load test (PaymentApiApplicationTests) - the real
+         Postgres migration is exercised for real against the live compose stack, not here. -->
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>
