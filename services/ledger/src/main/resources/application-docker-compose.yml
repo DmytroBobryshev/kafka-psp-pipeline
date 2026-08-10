@@ -1,0 +1,31 @@
+# M7: run the ledger against the infra/compose stack (infra/compose/README.md, .env).
+# Activate with SPRING_PROFILES_ACTIVE=docker-compose (same convention as payment-api and
+# psp-connector).
+spring:
+  datasource:
+    # infra/compose/.env: LEDGER_DB / LEDGER_DB_USER / LEDGER_DB_PASSWORD. This user can only ever
+    # connect to the `ledger` database (ADR-0005's per-service Postgres grant, enforced at the
+    # container level - `psql -U ledger -d payment_api` fails with "permission denied").
+    url: jdbc:postgresql://localhost:5432/ledger
+    username: ledger
+    password: ledger_pw
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      # Flyway owns the schema (db/migration/V1__create_ledger_tables.sql); Hibernate only verifies
+      # the entity mapping matches what Flyway created.
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  kafka:
+    # Three brokers' HOST-side (EXTERNAL) listeners - same rationale as payment-api's and
+    # psp-connector's equivalent entries (infra/compose/README.md's advertised-listeners section).
+    # All three matter more here than elsewhere: the transaction coordinator for this producer's
+    # transactional.id is whichever broker leads the hashed __transaction_state partition, and it
+    # is generally not the same broker as any data-partition leader.
+    bootstrap-servers: localhost:29092,localhost:29093,localhost:29094

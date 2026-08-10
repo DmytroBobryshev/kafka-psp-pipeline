@@ -39,6 +39,7 @@
     <module>libs/common-web</module>
     <module>services/payment-api</module>
     <module>services/psp-connector</module>
+    <module>services/ledger</module>
   </modules>
 
   <!--

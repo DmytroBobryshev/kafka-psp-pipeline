@@ -1,0 +1,48 @@
+# Test-classpath override of src/main/resources/application.yml. LedgerApplicationTests only needs
+# the Spring context to load against an @EmbeddedKafka broker and an in-memory H2 database - the
+# real integration (transactional producer against three brokers, Flyway against the real `ledger`
+# database) is exercised for real against the live infra/compose stack and captured in README.md,
+# not reproduced here.
+spring:
+  application:
+    name: ledger
+  datasource:
+    url: jdbc:h2:mem:ledger;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+  flyway:
+    enabled: false
+  kafka:
+    # Overridden at runtime by @EmbeddedKafka's broker address (the spring.kafka.bootstrap-servers
+    # system property it sets) - this value only matters before that override applies.
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: ledger.test.v1
+      auto-offset-reset: earliest
+      properties:
+        max.poll.records: 50
+        max.poll.interval.ms: 300000
+        session.timeout.ms: 45000
+        heartbeat.interval.ms: 3000
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        spring.json.add.type.headers: false
+
+ledger:
+  instance-id: test
+  fail-after-produce: false
+  kafka:
+    payment-status-changed-topic: payments.payment-status-changed.v1
+    ledger-entry-recorded-topic: ledger.ledger-entry-recorded.v1
+    # Still a STABLE prefix, not a random one - the context-load test would pass either way, but a
+    # random value here would quietly model the exact anti-pattern the module argues against.
+    transactional-id-prefix: ledger-tx-test-

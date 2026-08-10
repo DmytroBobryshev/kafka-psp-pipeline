@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example.psp</groupId>
+    <artifactId>kafka-psp-pipeline</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>ledger</artifactId>
+  <packaging>jar</packaging>
+
+  <name>ledger</name>
+  <description>
+    ledger (M7): exactly-once semantics. Consumes payments.payment-status-changed.v1 with a
+    transactional producer (transactional.id, sendOffsetsToTransaction, read_committed),
+    maintains per-merchant balances in its own Postgres database, and publishes
+    ledger.ledger-entry-recorded.v1. Two DISTINCT mechanisms, never conflated: Kafka EOS covers
+    consume-offset-commit + produce (both in Kafka); the Postgres balance write is outside it and
+    is made idempotent the M5 way, keyed on the inbound envelope eventId. Hexagonal layout
+    enforced by an ArchUnit test; same conventions as psp-connector (M4/M5).
+  </description>
+
+  <dependencies>
+    <!-- Internal libs -->
+    <dependency>
+      <groupId>com.example.psp</groupId>
+      <artifactId>common-events</artifactId>
+    </dependency>
+
+    <!-- Web + actuator: no business REST endpoints (ADR-0004 - inter-service traffic is
+         Kafka-only), but actuator health/info/metrics needs a web server to expose HTTP, and the
+         M8 DLQ replay endpoint (payments.payment-status-changed.v1.ledger.dlq) will live here. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- Real Postgres persistence (ADR-0005: ledger owns its own database, `ledger`) -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <!-- Flyway >= 10 split DB-specific support out of flyway-core -->
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+
+    <!-- Kafka: transactional producer + read_committed consumer (this module's headline) -->
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka</artifactId>
+    </dependency>
+
+    <!-- Lombok + MapStruct (annotation processor order fixed in the parent) -->
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mapstruct</groupId>
+      <artifactId>mapstruct</artifactId>
+    </dependency>
+
+    <!-- Test -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- In-memory DB for the plain context-load test - the real Postgres migration is exercised
+         for real against the live compose stack, not here (same pattern as psp-connector). -->
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>ledger</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
