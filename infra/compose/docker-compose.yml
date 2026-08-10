@@ -194,11 +194,22 @@ services:
   # ============================================================================================
   # PostgreSQL - payment-api, ledger, psp-connector (docs/PLAN.md persistence table; ADR-0005).
   # One container, three logical databases + three scoped users - see postgres/init/.
+  #
+  # M6: `command` overrides the default `wal_level=replica` with `wal_level=logical`. Debezium's
+  # Postgres connector doesn't poll tables - it opens a logical replication slot and streams the
+  # write-ahead log itself, and Postgres physically cannot decode WAL records into row-level
+  # changes at `wal_level=replica` (that level only carries enough information for physical
+  # streaming replication/PITR, not logical decoding - this is a server-wide setting, not a
+  # per-database or per-table one, so it's set once here for the whole cluster). Applied via
+  # `command`, not `postgresql.conf` mounted over the entrypoint's own, so the image's default
+  # config is otherwise untouched. `max_wal_senders`/`max_replication_slots` are left at
+  # postgres:16's defaults (10 each) - one Debezium slot is nowhere near that ceiling.
   # ============================================================================================
   postgres:
     image: postgres:${POSTGRES_VERSION}
     hostname: postgres
     container_name: postgres
+    command: ["postgres", "-c", "wal_level=logical"]
     networks: [kafka-psp-net]
     restart: unless-stopped
     ports:
@@ -224,6 +235,79 @@ services:
       timeout: 5s
       retries: 10
       start_period: 15s
+
+  # ============================================================================================
+  # Kafka Connect (M6) - a single distributed-mode worker running Debezium's Postgres connector,
+  # pre-bundled in the `debezium/connect` image (chosen over confluentinc/cp-kafka-connect +
+  # `confluent-hub install debezium/debezium-connector-postgresql` purely to avoid a second,
+  # separate plugin-install step for a one-connector stack - see README "Image choices"). This
+  # worker is the payment-outbox relay: it streams payment-api's `outbox_event` table (via
+  # Postgres logical replication, hence `wal_level=logical` above) and republishes each row to
+  # `payments.payment-requested.v1` through the outbox event router SMT - registered separately
+  # by `register-connector.sh` against the REST API below, not baked into this image.
+  #
+  # `CONNECT_*`-prefixed env vars are generic passthrough: the image's entrypoint strips the
+  # `CONNECT_` prefix, lowercases what's left, and turns `_` into `.` to build
+  # connect-distributed.properties (e.g. `CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE` ->
+  # `value.converter.schemas.enable`) - the same convention as the un-prefixed KAFKA_* variables
+  # on the brokers above, one layer further in. The un-prefixed vars (BOOTSTRAP_SERVERS, GROUP_ID,
+  # *_STORAGE_TOPIC, KEY_CONVERTER, VALUE_CONVERTER) are the entrypoint's own named settings, not
+  # passthrough.
+  # ============================================================================================
+  kafka-connect:
+    image: debezium/connect:${DEBEZIUM_CONNECT_VERSION}
+    hostname: kafka-connect
+    container_name: kafka-connect
+    networks: [kafka-psp-net]
+    restart: unless-stopped
+    depends_on:
+      kafka1: { condition: service_healthy }
+      kafka2: { condition: service_healthy }
+      kafka3: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    ports:
+      - "${KAFKA_CONNECT_PORT}:8083" # Connect REST API - register/inspect connectors here
+    environment:
+      BOOTSTRAP_SERVERS: kafka1:9092,kafka2:9092,kafka3:9092
+      GROUP_ID: kafka-connect-psp
+      # Connect's own bookkeeping topics - NOT in create-topics.sh on purpose (see the comment
+      # there): the worker creates these itself via its embedded AdminClient on first start,
+      # regardless of the brokers' auto.create.topics.enable=false, using the replication-factor
+      # settings below.
+      CONFIG_STORAGE_TOPIC: connect.configs
+      OFFSET_STORAGE_TOPIC: connect.offsets
+      STATUS_STORAGE_TOPIC: connect.status
+      # Key = paymentId as plain text (ADR-0003); the outbox router sets this from
+      # outbox_event.aggregate_id (see payment-outbox-connector.json). StringConverter matches
+      # what payment-api's retired KafkaPaymentEventPublisher used (StringSerializer) and what
+      # psp-connector's consumer expects (StringDeserializer).
+      KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      # Value = plain JSON, no Connect schema/payload envelope - psp-connector's JsonDeserializer
+      # expects raw JSON bytes it can hand straight to Jackson, not
+      # {"schema":...,"payload":...}. schemas.enable=false is what strips that envelope.
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      # Matches the cluster-wide replication factor (docker-compose.yml top comment / topic-map);
+      # a 3-broker cluster losing one broker must not lose Connect's own config/offsets/status.
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "3"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "3"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "3"
+      # offset.storage.partitions has no config-topic equivalent (config storage is always
+      # exactly 1 partition, enforced by Connect itself, not configurable) - 25/5 are the
+      # upstream-recommended defaults for a small cluster, made explicit rather than left
+      # implicit (same style as the brokers' KAFKA_* block above).
+      CONNECT_OFFSET_STORAGE_PARTITIONS: "25"
+      CONNECT_STATUS_STORAGE_PARTITIONS: "5"
+    healthcheck:
+      # The worker itself, not any connector running on it - proves the REST API is up and the
+      # group of internal topics was created successfully. Connector/task RUNNING status is a
+      # separate check (register-connector.sh does that after registering).
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
 
   # ============================================================================================
   # MongoDB - webhook-notifier, analytics, audit-trail (docs/PLAN.md persistence table).

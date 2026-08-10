@@ -12,7 +12,6 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.stereotype.Component;
 
 /**
  * Real Kafka adapter for {@link PaymentEventPublisher} (M3), replacing the M1
@@ -27,12 +26,20 @@ import org.springframework.stereotype.Component;
  * {@link KafkaTemplate} bean in {@code config.KafkaProducerConfig}; this class only builds the
  * record and headers.
  *
- * <p>Called from {@link com.example.psp.paymentapi.application.CreatePaymentUseCase} AFTER the
- * Postgres row is already committed - see the dual-write comment there. A crash between the two
- * calls loses the event with no retry; M6's transactional outbox is the fix, not implemented
- * here.
+ * <p><b>Retired from the write path by M6.</b> Through M3-M5 this was called from
+ * {@link com.example.psp.paymentapi.application.CreatePaymentUseCase} AFTER the Postgres row was
+ * already committed - two separate systems, no shared transaction, so a crash between those two
+ * calls lost the event with no retry (the "dual-write problem" - see
+ * services/payment-api/README.md's M3 and M6 sections). M6 replaces this class on the POST path
+ * with {@code adapters.out.outbox.OutboxPaymentEventPublisher}, which writes an outbox row in the
+ * SAME transaction as the payment instead of calling Kafka directly; Debezium relays that row to
+ * this exact topic asynchronously (infra/compose). The {@code @Component} annotation is removed
+ * deliberately so Spring never wires this class in - it is kept only as a reference for what
+ * direct (non-transactional) publishing used to look like, and because
+ * {@code adapters.out.outbox.OutboxPaymentEventPublisher} intentionally mirrors its envelope-
+ * building logic. Do not re-annotate this class without also removing the outbox adapter, or
+ * {@link PaymentEventPublisher} will have two competing bean definitions.
  */
-@Component
 public class KafkaPaymentEventPublisher implements PaymentEventPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(KafkaPaymentEventPublisher.class);

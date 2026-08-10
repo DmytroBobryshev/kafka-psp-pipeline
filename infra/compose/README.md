@@ -38,11 +38,12 @@ flowchart TB
 
         sr["schema-registry<br/>:8081"]
         akhq["akhq (UI)<br/>:8080"]
-        pg[("postgres<br/>payment_api / ledger / psp_connector")]
+        pg[("postgres<br/>payment_api / ledger / psp_connector<br/>wal_level=logical (M6)")]
         mongo[("mongodb<br/>webhook_notifier / analytics / audit_trail")]
         kexp["kafka-exporter<br/>:9308"]
         prom["prometheus<br/>:9090"]
         graf["grafana<br/>:3000"]
+        connect["kafka-connect (M6)<br/>:8083<br/>Debezium Postgres connector"]
 
         k1 <-. controller quorum .-> k2
         k2 <-. controller quorum .-> k3
@@ -58,12 +59,14 @@ flowchart TB
         kexp --> k3
         prom -->|scrape /metrics| kexp
         graf -->|query| prom
+        connect -->|logical replication<br/>reads outbox_event WAL| pg
+        connect -->|PLAINTEXT :9092<br/>produces payments.payment-requested.v1| k1
     end
 
     cli -->|EXTERNAL :29092-29094| k1
     cli --> k2
     cli --> k3
-    browser -->|:8080 :3000 :8081| akhq
+    browser -->|:8080 :3000 :8081 :8083| akhq
     browser --> graf
     browser --> sr
 ```
@@ -140,6 +143,55 @@ Cluster-wide defaults (`docs/diagrams/topic-map.md`), set as broker config in
 | Postgres | `postgres:16-alpine` | Small image, current stable major. |
 | MongoDB | `mongo:7.0` | Current stable major with TTL-index support needed later (M8). |
 | Prometheus / Grafana | `prom/prometheus:v2.54.1` / `grafana/grafana:11.1.4` | Current stable releases at time of writing. |
+| Kafka Connect (M6) | `debezium/connect:2.7.3.Final` | Chosen over `confluentinc/cp-kafka-connect` + a separate `confluent-hub install debezium/debezium-connector-postgresql` step: this image ships a plain Kafka Connect distributed-mode worker with every Debezium connector (including `debezium-connector-postgres`) pre-installed, so there is no second plugin-provisioning step to get wrong for a stack that only needs one connector. Verified compatible with the 3.8.0-wire-protocol broker cluster above - Kafka Connect's client/broker compatibility is broad across minor versions. |
+
+## M6 - `wal_level=logical` and Kafka Connect
+
+Two changes support the transactional outbox pattern (`services/payment-api/README.md`'s M6
+section has the full writeup; this is the infra side only).
+
+**`wal_level=logical` on Postgres.** Debezium's Postgres connector doesn't poll tables - it opens
+a logical replication slot and streams the write-ahead log directly, and Postgres cannot decode
+WAL into row-level changes below `wal_level=logical` (the default, `replica`, only carries enough
+for physical streaming replication/PITR). This is a **server-wide** setting, not per-database or
+per-table, applied via `command: ["postgres", "-c", "wal_level=logical"]` on the `postgres`
+service rather than a mounted `postgresql.conf`, so the image's own default config is otherwise
+untouched. It requires a Postgres **restart** to take effect - `docker compose up -d postgres`
+recreates the container; the named `postgres-data` volume (and everything in it) survives, since
+this is a config change, not a re-initialization. On an already-running stack whose data volume
+predates this change, `01-init-databases.sh`/`02-debezium-replication.sh` will **not** re-run
+(init scripts only run against a fresh, empty data directory) - grant replication manually once:
+`docker compose exec postgres psql -U postgres -c "ALTER ROLE payment_api WITH REPLICATION;"`,
+then `docker compose up -d postgres` to pick up the `command` change. A genuinely fresh
+`docker compose down -v && up -d` needs neither step; both init scripts run automatically.
+
+**Replication privilege, scoped per-service.** `postgres/init/02-debezium-replication.sh` grants
+`REPLICATION` to the existing `payment_api` role (the same role Flyway already uses to own
+`payment_api`'s schema) rather than introducing a new shared credential - the Debezium connector
+authenticates as that role, so it can stream WAL for `payment_api` and nothing else, preserving
+the ADR-0005 per-service isolation the rest of this stack already relies on (that role still
+cannot even `CONNECT` to `ledger` or `psp_connector`).
+
+**`kafka-connect` service.** A single distributed-mode worker (see
+`services/payment-api/README.md`'s "Kafka Connect architecture" section for what
+worker/connector/task/converter each mean) exposing the REST API on `${KAFKA_CONNECT_PORT}`
+(`8083` by default). `CONNECT_*`-prefixed environment variables are generic passthrough - the
+image's entrypoint strips the `CONNECT_` prefix, lowercases, and turns `_` into `.` to build
+`connect-distributed.properties` - the same idea as this file's own `KAFKA_*` broker variables,
+one layer further into the stack.
+
+**Connector registration.** `register-connector.sh` is the M6 sibling of `create-topics.sh`:
+idempotent, `.env`-driven, safe to re-run. It renders
+`connect/payment-outbox-connector.json` (resolving the `${PAYMENT_API_DB_USER}`-style
+placeholders via `jq`, not shell substitution, so a password containing a JSON-special character
+can never corrupt the payload), `PUT`s it to `/connectors/payment-outbox-connector/config`
+(Kafka Connect's REST API defines `PUT` on that path as an upsert - create if absent, update in
+place if present), then polls `/connectors/<name>/status` until **both** `connector.state` and
+`tasks[0].state` report `RUNNING` - a connector can show `RUNNING` while its only task is
+`FAILED`, so checking connector state alone is not enough. If the task is `FAILED` (e.g. because
+an earlier config version was buggy), the script issues **one** automatic
+`POST .../restart?includeTasks=true` and retries - `PUT`ting a fixed config does not, on its own,
+restart an already-failed task, a genuine Kafka Connect gotcha hit during verification.
 
 ### Metrics: kafka-exporter vs. jmx_exporter
 
@@ -183,6 +235,7 @@ cd infra/compose
 docker compose up -d
 docker compose ps                 # wait for every service to show "healthy"
 ./create-topics.sh                # idempotent - safe to re-run
+./register-connector.sh           # M6 - idempotent - safe to re-run
 ```
 
 Endpoints (see `.env` to change ports):
@@ -196,6 +249,7 @@ Endpoints (see `.env` to change ports):
 | Prometheus | http://localhost:9090 |
 | Postgres | `localhost:5432` |
 | MongoDB | `localhost:27017` |
+| Kafka Connect REST API (M6) | http://localhost:8083 |
 
 Tear down: `docker compose down` (keeps volumes/data) or **`docker compose down -v`** (also
 deletes named volumes - full reset, next `up` reformats the KRaft log from scratch).
@@ -472,6 +526,18 @@ user can only connect to its own database.
 
 ## Compromises / what didn't fully match the ideal
 
+- **(M6) `snapshot.mode=no_data`** on the outbox connector means rows already present in
+  `outbox_event` at connector-registration time are never relayed - only inserts after
+  registration are captured. This is the textbook-correct choice for an outbox connector (see
+  `services/payment-api/README.md`'s "Known issues"), not an oversight, but it's a real gap if the
+  connector is ever registered *after* payment-api has already been accepting traffic against a
+  fresh table.
+- **(M6) No outbox cleanup job.** `outbox_event` grows forever on this service's side; nothing
+  purges rows Debezium has already relayed. Fine at learning-cluster scale.
+- **(M6) `topic.prefix=payment-api`** is set to satisfy the Postgres connector's required config
+  (it also seeds the replication-slot-adjacent internal naming), but since the outbox event router
+  SMT hardcodes the destination topic (`route.topic.replacement`), this prefix never actually
+  appears in any topic name a consumer sees - a slightly confusing but harmless required field.
 - **Combined broker+controller roles** on all 3 nodes (not dedicated controller-only nodes) -
   explicitly allowed by the task for a laptop; a production KRaft cluster would split these.
 - **kafka-exporter over a JMX javaagent** for metrics - see "Metrics" above for the reasoning
