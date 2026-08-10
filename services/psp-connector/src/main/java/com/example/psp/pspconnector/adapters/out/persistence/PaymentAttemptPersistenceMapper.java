@@ -15,6 +15,10 @@ import org.mapstruct.ReportingPolicy;
  * javadoc), so unlike {@code payment-api}'s equivalent mapper there is no hand-written
  * {@code toDomain} default method here yet; M5's real idempotency check (query-before-call) is
  * what will need one.
+ *
+ * <p>{@code inboundEventId} has no matching {@link PaymentAttempt} field of the same name - it is
+ * deliberately mapped from {@code causationEventId} (see {@link PaymentAttemptEntity}'s field
+ * comment for why the same value lands in two separate columns).
  */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface PaymentAttemptPersistenceMapper {
@@ -22,5 +26,6 @@ public interface PaymentAttemptPersistenceMapper {
     @Mapping(target = "amount", source = "amount.amount")
     @Mapping(target = "currency", source = "amount.currency")
     @Mapping(target = "outcome", expression = "java(attempt.getOutcome().name())")
+    @Mapping(target = "inboundEventId", source = "causationEventId")
     PaymentAttemptEntity toEntity(PaymentAttempt attempt);
 }

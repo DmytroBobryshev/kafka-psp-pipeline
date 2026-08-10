@@ -54,6 +54,17 @@ public class PaymentAttemptEntity {
     @Column(name = "causation_event_id", nullable = false)
     private UUID causationEventId;
 
+    // M5 LEVEL 1's idempotency key (V2 migration) - deliberately a SEPARATE, uniquely-constrained
+    // column from causationEventId above, even though both are populated from the exact same
+    // inbound EventEnvelope.eventId: causationEventId's job is the (unconstrained) causal-chain
+    // audit trail, this column's job is dedup. Nullable because V1 rows predate it - see the V2
+    // migration's comment. Not annotated unique=true here on purpose: Hibernate's ddl-auto=validate
+    // (docker-compose profile) only checks column existence/type against Flyway's schema, not
+    // constraints, so the real UNIQUE constraint lives solely in the V2 migration SQL, matching
+    // how the V1 (payment_id, provider_event_id) constraint is handled for this same entity.
+    @Column(name = "inbound_event_id")
+    private UUID inboundEventId;
+
     @Column(name = "trace_id", nullable = false, length = 255)
     private String traceId;
 

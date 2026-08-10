@@ -65,7 +65,11 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        # metrics added for M5: exposes the processed/deduplicated Micrometer counters at
+        # /actuator/metrics/psp-connector.payment.attempts.processed and
+        # /actuator/metrics/psp-connector.payment.attempts.deduplicated - see
+        # application.ProcessPaymentRequestUseCase and the README's M5 section.
+        include: health,info,metrics
 
 # psp-connector custom properties
 psp-connector:
@@ -85,6 +89,12 @@ psp-connector:
     # NONE = use decline-rate/timeout-rate above. Set to APPROVED/DECLINED/TIMEOUT to force every
     # call to that outcome for a deterministic experiment run.
     forced-outcome: NONE
+    # M5: probability (0.0-1.0) that a repeat authorize() call for a paymentId this adapter
+    # instance has already seen replays the identical previous callback (same providerEventId)
+    # instead of minting a fresh one - see SimulatedPaymentProviderAdapter's javadoc. 0 (default)
+    # disables deliberate duplicate emission entirely, matching M4 behaviour. Override for the M5
+    # replay-proof experiment, e.g. --psp-connector.provider.duplicate-rate=0.2.
+    duplicate-rate: 0
 
 # No datasource configured here on purpose - see application-docker-compose.yml. Running this
 # service without an active profile and without a database will fail to start

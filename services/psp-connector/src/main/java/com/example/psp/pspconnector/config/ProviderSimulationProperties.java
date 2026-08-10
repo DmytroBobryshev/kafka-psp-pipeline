@@ -18,6 +18,16 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *                        value in {@code [minLatencyMs, maxLatencyMs]}. 0 disables the override.
  * @param forcedOutcome    when not {@code NONE}, every call resolves to this outcome instead of
  *                        rolling against {@code declineRate}/{@code timeoutRate}.
+ * @param duplicateRate    probability (0.0-1.0) that a repeat {@code authorize()} call for a
+ *                        {@code paymentId} this adapter instance has already seen replays the
+ *                        identical previous {@link com.example.psp.pspconnector.domain.model.ProviderResult}
+ *                        (same {@code providerEventId}) instead of minting a fresh one - M5's
+ *                        "deliberate duplicate emission" knob (docs/PLAN.md), simulating a
+ *                        provider that redelivers/replays its own callback for the same logical
+ *                        attempt rather than a client-side retry legitimately reaching the
+ *                        provider a second time. Default 0 preserves M4 behaviour: every call
+ *                        gets a brand-new {@code providerEventId}, even for a paymentId seen
+ *                        before.
  */
 @ConfigurationProperties(prefix = "psp-connector.provider")
 public record ProviderSimulationProperties(
@@ -26,7 +36,8 @@ public record ProviderSimulationProperties(
         double declineRate,
         double timeoutRate,
         long forcedLatencyMs,
-        ForcedOutcome forcedOutcome) {
+        ForcedOutcome forcedOutcome,
+        double duplicateRate) {
 
     public ProviderSimulationProperties {
         if (minLatencyMs < 0 || maxLatencyMs < minLatencyMs) {
@@ -42,6 +53,10 @@ public record ProviderSimulationProperties(
                             + declineRate
                             + " timeout="
                             + timeoutRate);
+        }
+        if (duplicateRate < 0 || duplicateRate > 1.0) {
+            throw new IllegalArgumentException(
+                    "duplicateRate must be within [0,1], got " + duplicateRate);
         }
         if (forcedOutcome == null) {
             forcedOutcome = ForcedOutcome.NONE;

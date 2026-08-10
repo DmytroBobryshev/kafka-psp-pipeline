@@ -50,8 +50,11 @@ public class PaymentRequestedListener {
 
         useCase.execute(mapper.toCommand(event));
 
-        // Reached only when execute() returns normally (APPROVED or DECLINED, both published).
-        // A TIMEOUT never gets here - see ProcessPaymentRequestUseCase.
+        // Reached when execute() returns normally: APPROVED or DECLINED (both published), or an
+        // M5 duplicate - either level 1 (a replayed inbound eventId, caught before the provider
+        // was ever called) or level 2 ((paymentId, providerEventId), a duplicate provider
+        // callback) - deliberately skipped instead of published; see ProcessPaymentRequestUseCase.
+        // A TIMEOUT never gets here.
         ack.acknowledge();
     }
 }
