@@ -1,0 +1,43 @@
+{
+  "type": "record",
+  "name": "MerchantConfigChanged",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of merchants.merchant-config-changed.v1 (M10). docs/diagrams/topic-map.md flagged this topic as 'stays JSON until its module is built' - M10 IS that module, so it is born Avro rather than being migrated later. Registered under Schema Registry subject 'merchants.merchant-config-changed.v1-value' (TopicNameStrategy, ADR-0001).\n\nTHE TOMBSTONE CAVEAT, and it is the whole reason this schema has no 'deleted' flag: on a compacted topic a deletion is a record with a NULL VALUE under the merchant's key, not a record whose value says deleted=true. Log compaction's contract is 'retain at least the last value for every key'; the only way to make it retain NOTHING for a key is to hand it a value that means 'this key has no value'. A deleted=true record is still a value, so compaction would retain it forever and every GlobalKTable in the fleet would hold a row for a merchant that no longer exists. KafkaAvroSerializer#serialize(topic, null) returns null (no magic byte, no schema id, zero bytes), and KafkaAvroDeserializer maps null bytes back to null - so a tombstone never gets validated against, or even reaches, this schema. See services/payment-api/README.md's 'Merchant config' section.\n\nThis record therefore describes only the PUT (upsert) case. Every field except webhookUrl is required, because a compacted topic carries whole-state snapshots, not deltas: compaction keeps the last record per key and throws the rest away, so a partial record would leave a consumer that starts from a compacted offset unable to reconstruct the fields the discarded records carried.",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope"
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "IS the record key (ADR-0003) AND envelope.aggregateId. On a compacted topic the key is not a routing hint, it is the identity compaction dedupes on - so 'key == entity id' is mandatory here in a way it is not on any delete-policy topic in this system."
+    },
+    {
+      "name": "displayName",
+      "type": "string",
+      "doc": "Human-readable merchant name. Denormalised into analytics' windowed aggregates by the GlobalKTable join, so a dashboard never has to call payment-api to render a merchant row."
+    },
+    {
+      "name": "status",
+      "type": "string",
+      "doc": "'ACTIVE' or 'SUSPENDED'. Note the deliberate absence of a 'DELETED' value - deletion is a tombstone (see the record-level doc), not a status."
+    },
+    {
+      "name": "payoutCurrency",
+      "type": "string",
+      "doc": "ISO-4217 three-letter code the merchant is settled in."
+    },
+    {
+      "name": "webhookUrl",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Callback endpoint; null when the merchant has not configured one. The only optional field - see the record-level doc on why whole-state snapshots cannot have optional fields in general."
+    },
+    {
+      "name": "declineRateAlertThresholdBps",
+      "type": "int",
+      "doc": "Per-merchant decline-rate alert threshold in basis points (1 bp = 0.01%), e.g. 1500 = 15%. Read by analytics' 1-minute windowed aggregate via the GlobalKTable join: the window flags itself when its own decline rate crosses THIS merchant's threshold, which is the concrete reason the join exists at all rather than the aggregation running standalone."
+    }
+  ]
+}

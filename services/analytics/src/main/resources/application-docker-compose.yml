@@ -1,0 +1,34 @@
+# M10: run analytics against the infra/compose stack (infra/compose/README.md, .env).
+# Activate with SPRING_PROFILES_ACTIVE=docker-compose (same convention as every other service).
+spring:
+  data:
+    mongodb:
+      # infra/compose/.env: ANALYTICS_DB / ANALYTICS_DB_USER / ANALYTICS_DB_PASSWORD.
+      # authSource=analytics because infra/compose/mongo/init/01-init-databases.sh creates this
+      # user scoped to (and only to) the analytics database - same "physical vs logical
+      # separation" shortcut as Postgres (ADR-0005), same as webhook-notifier's equivalent entry.
+      uri: mongodb://analytics:analytics_pw@localhost:27017/analytics?authSource=analytics
+
+  kafka:
+    # Three brokers' HOST-side (EXTERNAL) listeners - same rationale as every other service's
+    # equivalent entry (infra/compose/README.md's advertised-listeners section). Kafka Streams
+    # reads this through KafkaProperties in config.KafkaStreamsConfig.
+    bootstrap-servers: localhost:29092,localhost:29093,localhost:29094
+
+# analytics runs on the HOST (java -jar ...), so it reaches Schema Registry via its published host
+# port - localhost:8081, same convention as every other service's equivalent entry.
+analytics:
+  schema-registry:
+    url: http://localhost:8081
+
+  streams:
+    # A STABLE, NAMED path, not ${java.io.tmpdir}. Two reasons, both operational:
+    #   1. The state-restore proof deletes this directory and restarts the service. A path under
+    #      /var/folders/... on macOS is both hard to find and eligible for OS cleanup, which makes
+    #      "did the state really come back from the changelog?" impossible to answer honestly.
+    #   2. Disk. 12 tasks x 1 window store = 12 RocksDB directories under here. Knowing exactly
+    #      where they are is the difference between `du -sh` and guessing.
+    # Inspect / wipe with:
+    #   du -sh ~/.kafka-psp/analytics-streams-state/analytics-streams.v1
+    #   rm -rf  ~/.kafka-psp/analytics-streams-state
+    state-dir: ${user.home}/.kafka-psp/analytics-streams-state

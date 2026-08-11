@@ -98,6 +98,11 @@ management:
 payment-api:
   kafka:
     payment-requested-topic: payments.payment-requested.v1
+    # M10: the merchant-config command surface (PUT/DELETE /api/merchants/{id}/config). This is
+    # the ONE topic payment-api produces to directly - cleanup.policy=compact, key=merchantId,
+    # 3 partitions (docs/diagrams/topic-map.md). DELETE publishes a null value (a tombstone); see
+    # domain.port.MerchantConfigPublisher for why that is not routed through the M6 outbox.
+    merchant-config-changed-topic: merchants.merchant-config-changed.v1
   # schema-registry.url is environment-specific (M9 Phase 1) - see application-docker-compose.yml.
   # Read by config.SchemaRegistryConfig to build the KafkaAvroSerializer that Avro-encodes
   # payments.payment-requested.v1's outbox payload; payment-api runs no other Schema Registry

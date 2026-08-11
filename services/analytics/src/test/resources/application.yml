@@ -1,0 +1,49 @@
+# Test-classpath override of src/main/resources/application.yml. AnalyticsApplicationTests only
+# needs the Spring context to load - the real integration (12 partitions, a live Schema Registry,
+# a real RocksDB restore from the changelog) is exercised for real against the live infra/compose
+# stack and captured in README.md, not reproduced here. The topology's actual BEHAVIOUR is covered
+# without any of that by AnalyticsTopologyTest, which runs the real topology under
+# TopologyTestDriver with a mock:// schema registry.
+spring:
+  application:
+    name: analytics
+  data:
+    mongodb:
+      # Never actually connected to: Spring Boot's Mongo autoconfiguration does not validate
+      # connectivity eagerly, and auto-index-creation is off below so nothing performs a round
+      # trip at startup (same reasoning as webhook-notifier's test application.yml).
+      uri: mongodb://localhost:27017/analytics_test
+      auto-index-creation: false
+  kafka:
+    # Overridden at runtime by @EmbeddedKafka's broker address - this value only matters before
+    # that override applies.
+    bootstrap-servers: localhost:9092
+    streams:
+      # THE setting that makes this a context-load test rather than an integration test. With
+      # auto-startup=true the StreamsBuilderFactoryBean would start a real KafkaStreams client
+      # against the single embedded broker, which cannot satisfy the internal topics'
+      # replication.factor=3 (config.KafkaStreamsConfig) - the topology is still BUILT here, so a
+      # broken topology or a missing Serde bean still fails this test.
+      auto-startup: false
+
+analytics:
+  schema-registry:
+    # SpecificAvroSerde#configure never connects eagerly (lazy on first serialize/deserialize,
+    # which no context-load test triggers), so this value only needs to be present, not reachable.
+    url: http://localhost:8081
+  kafka:
+    payment-status-changed-topic: payments.payment-status-changed.v1
+    merchant-config-changed-topic: merchants.merchant-config-changed.v1
+  streams:
+    application-id: analytics-streams.test.v1
+    state-dir: ${java.io.tmpdir}/kafka-psp/analytics-streams-test
+    num-stream-threads: 1
+    processing-guarantee: at_least_once
+    application-server: localhost:8089
+    commit-interval: 5s
+    state-store-cache-max-bytes: 1048576
+  windows:
+    size: 60s
+    grace: 30s
+    store-retention: 15m
+    changelog-additional-retention: 5m

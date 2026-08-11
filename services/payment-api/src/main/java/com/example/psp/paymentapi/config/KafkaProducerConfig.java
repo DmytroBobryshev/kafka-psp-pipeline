@@ -1,6 +1,7 @@
 package com.example.psp.paymentapi.config;
 
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -28,9 +29,17 @@ public class KafkaProducerConfig {
         return new DefaultKafkaProducerFactory<>(producerProps);
     }
 
+    /**
+     * {@code @Qualifier} added in M10: {@code config.MerchantConfigKafkaConfig} introduced a
+     * second {@code ProducerFactory<String, Object>} (Avro-serializing, for
+     * {@code merchants.merchant-config-changed.v1}), so the type alone no longer identifies a
+     * bean. Spring's by-parameter-name fallback does not apply to {@code @Bean} method arguments
+     * unless the build passes {@code -parameters}, which this one does not - so the qualifier is
+     * the fix, not a stylistic preference.
+     */
     @Bean
     public KafkaTemplate<String, Object> kafkaTemplate(
-            ProducerFactory<String, Object> paymentProducerFactory) {
+            @Qualifier("paymentProducerFactory") ProducerFactory<String, Object> paymentProducerFactory) {
         return new KafkaTemplate<>(paymentProducerFactory);
     }
 }

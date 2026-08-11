@@ -75,6 +75,16 @@ SUBJECTS=(
   "webhooks.webhook-delivery-requested.v2.retry.5s-value|BACKWARD"
   "webhooks.webhook-delivery-requested.v2.retry.1m-value|BACKWARD"
   "webhooks.webhook-delivery-requested.v2.retry.15m-value|BACKWARD"
+  # M10: merchants.merchant-config-changed.v1 is born Avro rather than migrated - M10 IS the
+  # module docs/diagrams/topic-map.md meant by "stays JSON until its module is built". payment-api
+  # is its only producer (adapters.out.kafka.KafkaMerchantConfigPublisher, a direct send, NOT the
+  # M6 outbox - see that class's javadoc); analytics is the only consumer, as a GlobalKTable.
+  #
+  # Note what has NO subject here and never will: the topic's TOMBSTONES. A delete is a record
+  # with a null value, and a null value never reaches the serializer, so it is never validated
+  # against - and never registers - a schema. The subject below governs the PUT (upsert) shape
+  # only.
+  "merchants.merchant-config-changed.v1-value|BACKWARD"
 )
 
 echo "Setting compatibility for ${#SUBJECTS[@]} subject(s) ..."

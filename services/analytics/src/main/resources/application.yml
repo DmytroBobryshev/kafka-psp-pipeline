@@ -1,0 +1,119 @@
+spring:
+  application:
+    name: analytics
+
+  kafka:
+    # No bootstrap-servers here on purpose - environment-specific, lives in
+    # application-docker-compose.yml (same convention as every other service). Kafka Streams reads
+    # it from this same KafkaProperties block via config.KafkaStreamsConfig.
+    #
+    # Note what is NOT configured under spring.kafka here: no consumer block, no producer block.
+    # Kafka Streams builds and owns both clients itself; anything that must reach them goes through
+    # StreamsConfig's consumerPrefix()/producerPrefix() in config.KafkaStreamsConfig, where the
+    # reasoning is attached. Setting spring.kafka.consumer.* would silently do nothing.
+
+  data:
+    mongodb:
+      # uri is environment-specific - see application-docker-compose.yml.
+      auto-index-creation: true # creates merchant_window_idx from the @CompoundIndex on the document
+
+server:
+  # payment-api 8085, psp-connector 8086, ledger 8087, webhook-notifier 8088, AKHQ 8080,
+  # Schema Registry 8081, Grafana 3000, Prometheus 9090 - this service uses 8089.
+  port: 8089
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # metrics exposes the kafka.stream.* Micrometer meters spring-kafka binds from the Streams
+        # client - task/thread state, records-lag, process-rate. The lag meters are what tell you a
+        # restore has finished without watching the log.
+        include: health,info,metrics
+
+analytics:
+  kafka:
+    # 12 partitions, key=merchantId (ADR-0003), Avro since M9 Phase 2. The key is why this
+    # application has no repartition topic - see README, "Internal topics".
+    payment-status-changed-topic: payments.payment-status-changed.v1
+    # 3 partitions, key=merchantId, cleanup.policy=compact, retention=infinite. Read as a
+    # GlobalKTable: every instance holds every partition, so the 12-vs-3 partition mismatch that
+    # would break a KTable join is simply not a constraint.
+    merchant-config-changed-topic: merchants.merchant-config-changed.v1
+
+  # schema-registry.url is environment-specific - see application-docker-compose.yml.
+
+  streams:
+    # THE identity of this Streams application. Also the consumer group.id, the prefix of every
+    # internal topic, and the state.dir sub-directory name. Matches docs/diagrams/topic-map.md
+    # verbatim; changing it starts a brand-new application with empty state (config.KafkaStreamsConfig).
+    application-id: analytics-streams.v1
+
+    # Where RocksDB writes. Overridden to a stable, named path in the docker-compose profile -
+    # the default here keeps a bare `java -jar` self-contained. Layout underneath:
+    #   <state-dir>/<application-id>/<taskId>/rocksdb/<storeName>/
+    state-dir: ${java.io.tmpdir}/kafka-psp/analytics-streams
+
+    # Threads in THIS instance. Task count is fixed by the topology (12, one per input partition);
+    # threads decide how many run at once, NOT how many RocksDB instances exist. 2 on a laptop.
+    num-stream-threads: 2
+
+    # at_least_once, deliberately - the Mongo projection is idempotent and outside any Kafka
+    # transaction anyway. Full reasoning in config.KafkaStreamsConfig; flip to exactly_once_v2 to
+    # see Streams-managed EOS (ledger, M7, already proves the hand-rolled kind).
+    processing-guarantee: at_least_once
+
+    # Advertised to other instances so KafkaStreams#queryMetadataForKey can route an interactive
+    # query to whoever owns a key. Must match server.port. The cross-instance RPC hop that uses it
+    # is deferred (README, "Compromises") - but a wrong value here would be a lie to the group.
+    application-server: localhost:8089
+
+    # Commits offsets AND flushes the record cache downstream, so this also sets the ceiling on
+    # how often MongoDB is written per key. 5s: fast enough that a projection appears while you are
+    # still watching, slow enough to collapse a burst.
+    commit-interval: 5s
+
+    # The record cache, across all stores in this instance. Collapses repeated updates to the same
+    # key between commits - the reason a merchant taking 500 payments/minute produces ~12 Mongo
+    # writes/minute, not 500. Set to 0 to see every single update (and 500 writes).
+    state-store-cache-max-bytes: 10485760 # 10 MiB, the Kafka default
+
+  windows:
+    # 1-minute tumbling windows (PLAN.md M10 brief). Tumbling = ofSizeAndGrace with no advance,
+    # so windows are fixed, non-overlapping [T, T+60s) buckets and every record lands in exactly
+    # one of them.
+    size: 60s
+
+    # GRACE PERIOD - 30 seconds. The reasoning, concretely for this pipeline:
+    #
+    #  * What grace covers: records whose EVENT time (envelope.occurredAt, ADR-0002) falls in a
+    #    window that stream time has already passed. Stream time here advances from
+    #    payments.payment-status-changed.v1's own event timestamps, so out-of-orderness comes from
+    #    (a) the producer's linger.ms=10 + retry backoff on a leader election, (b) psp-connector
+    #    instances whose clocks differ, and (c) the merge across 12 partitions when a task owns
+    #    more than one. None of those are minutes-scale; a broker leader election - the worst
+    #    realistic case - resolves in single-digit seconds.
+    #  * What grace costs: results are only final at windowEnd + grace, and the windowed store (and
+    #    therefore its changelog) must retain at least size + grace. Every second of grace is
+    #    latency-to-final plus disk.
+    #  * Why not 0: a leader election during a 1-minute window would silently drop the records it
+    #    delayed, and a decline-rate gauge that under-counts during exactly the incident you are
+    #    investigating is worse than one that is 30 s behind.
+    #  * Why not 5 minutes: it would make every window's final value arrive 6 minutes after the
+    #    fact and multiply windowed state 6x, to catch reordering this pipeline cannot produce.
+    #
+    # 30s is also what docs/diagrams/topic-map.md already assumed when it sized the windowed
+    # changelog ("a 1-minute tumbling window with a 30 s grace keeps ~90 s of window state").
+    grace: 30s
+
+    # How long the windowed RocksDB store keeps closed windows. FLOOR is size + grace (90s) -
+    # Streams refuses to build the store below that, because a window could expire mid-grace.
+    # Everything above the floor is purely "how far back can an interactive query see", paid in
+    # disk. 15 minutes on a host with ~36 GiB free: enough to show a meaningful history in one
+    # response, small enough that 12 RocksDB instances stay trivial.
+    store-retention: 15m
+
+    # Added to store-retention to compute the changelog topic's retention.ms. Kafka's default is
+    # 24h of slack, i.e. 96x more changelog history than the store it backs. 5 minutes is ample
+    # headroom for a restore that starts moments after a crash.
+    changelog-additional-retention: 5m

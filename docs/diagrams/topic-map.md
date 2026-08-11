@@ -22,13 +22,33 @@ so): `replication.factor=3`, `min.insync.replicas=2`, `cleanup.policy=delete`,
 | `refunds.refund-failed.v1` | `merchantId` | 6 | 7 d | delete | psp-connector | ledger, webhook-notifier, analytics, realtime-gateway |
 | `refunds.reservation-released.v1` | `merchantId` | 6 | 7 d | delete | ledger | analytics, realtime-gateway |
 | `ledger.ledger-entry-recorded.v1` | `merchantId` | 6 | 30 d | delete | ledger | analytics, realtime-gateway, Connect Mongo sink (audit-trail) |
-| `merchants.merchant-config-changed.v1` | `merchantId` | 3 | ∞ (compacted) | compact | payment-api (merchant config API) | psp-connector, webhook-notifier, analytics, ledger — all as `GlobalKTable` |
+| `merchants.merchant-config-changed.v1` | `merchantId` | 3 | ∞ (compacted) | compact | payment-api (merchant config API, **direct produce — not the outbox**) | analytics (`GlobalKTable`, M10); psp-connector, webhook-notifier, ledger later, same way |
+
+**M10 compaction settings** on `merchants.merchant-config-changed.v1`, applied by
+`infra/compose/create-topics.sh` via `kafka-configs --alter` (`kafka-topics --create
+--if-not-exists` never alters an existing topic's configs) and verified on the cluster:
+`min.cleanable.dirty.ratio=0.1` (default 0.5 — at the default, half the log must be obsolete
+before the cleaner runs at all, which on a low-volume config topic can be never),
+`delete.retention.ms=60000` (default 24 h — how long a *tombstone* survives after the cleaning
+pass that could remove it, so consumers that are behind still observe the delete),
+`segment.ms=60000` + `segment.bytes=1048576` (defaults 7 d / 1 GiB — the log cleaner never
+touches the **active** segment, so with the default a low-volume topic is never compacted at
+all), `max.compaction.lag.ms=60000`. The 60 s values make the tombstone drill watchable and are
+deliberately wrong for a real cluster. Full explanation:
+services/payment-api/README.md's "M10 - Merchant config" section.
+
+**Deletion on this topic is a tombstone** — a record with the merchant's key and a `null` value —
+never a `deleted` flag in the value. A flag *is* a value, so compaction would retain it forever
+and every downstream `GlobalKTable` would keep a live row for a merchant that no longer exists.
 
 **Wire format (M9):** `payments.payment-requested.v1` (Phase 1) and, as of Phase 2,
 `payments.payment-status-changed.v1` and `ledger.ledger-entry-recorded.v1` are Avro + Schema
 Registry, cut in place with no topic-version bump (ADR-0001's breaking-change test does not fire -
-field-for-field identical shape, same reasoning phase 1 already established). `refunds.*` and
-`merchants.merchant-config-changed.v1` stay JSON until their respective modules are built. See
+field-for-field identical shape, same reasoning phase 1 already established). `refunds.*` stays
+JSON until its module is built. **`merchants.merchant-config-changed.v1` is Avro as of M10** — it
+was never migrated, it was *born* Avro, because M10 is the module that first produces to it
+(subject `merchants.merchant-config-changed.v1-value`, `BACKWARD`). Its tombstones have no schema
+and never touch the registry: a null value never reaches the serializer. See
 services/payment-api/README.md (Phase 1), services/psp-connector/README.md and
 services/ledger/README.md (Phase 2) for the full decisions, stale-record handling per topic, and
 compatibility-mode registration.
@@ -93,20 +113,41 @@ Created and managed by Kafka Streams from `application.id = analytics-streams.v1
 create, rename, or hand-edit these** — the names are derived and the application will not find
 a renamed store. Listed for lag dashboards, disk sizing, and M18 quota/ACL planning.
 
-| Name | Key | Partitions | Retention | cleanup.policy | Producers | Consumers |
-|---|---|---|---|---|---|---|
-| `analytics-streams.v1-merchant-metrics-1m-changelog` | `merchantId` (windowed) | 12 | ∞ + `delete.retention.ms` | compact | analytics (Streams) | analytics (state restore) |
-| `analytics-streams.v1-merchant-config-store-changelog` | `merchantId` | 3 | ∞ | compact | analytics (Streams) | analytics (state restore) |
-| `analytics-streams.v1-saga-state-changelog` | `refundId` | 6 | ∞ | compact | analytics (Streams) | analytics (state restore) |
-| `analytics-streams.v1-<node>-repartition` | re-keyed (`paymentId` for the M13 join) | 12 | `retention.ms=-1`, purged via `deleteRecords` | delete | analytics (Streams) | analytics (Streams) |
+| Name | Key | Partitions | Retention | cleanup.policy | Producers | Consumers | Status |
+|---|---|---|---|---|---|---|---|
+| `analytics-streams.v1-merchant-metrics-1m-changelog` | `merchantId` (windowed) | 12 | `retention.ms=1200000` (20 min) | **compact,delete** | analytics (Streams) | analytics (state restore) | **exists (M10)** |
+| ~~`analytics-streams.v1-merchant-config-store-changelog`~~ | `merchantId` | 3 | ∞ | compact | — | — | **never created — see below (M10)** |
+| `analytics-streams.v1-saga-state-changelog` | `refundId` | 6 | ∞ | compact | analytics (Streams) | analytics (state restore) | predicted (M11) |
+| `analytics-streams.v1-<node>-repartition` | re-keyed (`paymentId` for the M13 join) | 12 | `retention.ms=-1`, purged via `deleteRecords` | delete | analytics (Streams) | analytics (Streams) | predicted (M13) — **not created by M10** |
 
-The repartition topic exists because `payments.payment-requested.v1` is keyed by `paymentId`
-while `payments.payment-status-changed.v1` is keyed by `merchantId` (ADR-0003), so the M13
-stream-stream join is not co-partitioned and one side must be re-keyed. Its partition count
-**must** equal 12 to co-partition with the other side.
+**Corrected by M10, measured against the live cluster.** After the M10 topology ran,
+`kafka-topics --list | grep analytics` returned exactly **one** topic — the windowed changelog.
+Two rows above were predictions this module falsified:
 
-Windowed changelogs inherit the window's retention: `windowSize + gracePeriod`, so a 1-minute
-tumbling window with a 30 s grace keeps ~90 s of window state plus compaction.
+1. **There is no `-merchant-config-store-changelog`.** A `GlobalKTable`'s source topic already
+   *is* its changelog: `merchants.merchant-config-changed.v1` is compacted, so it retains the last
+   value per key forever, which is precisely a changelog. Kafka Streams therefore marks global
+   stores non-logged, and `Materialized.withLoggingEnabled()` on a global table is rejected. This
+   is a direct payoff of the compaction decision — the global store costs zero extra topics.
+2. **There is no repartition topic in M10.** ADR-0003 keys
+   `payments.payment-status-changed.v1` by `merchantId`, which is the aggregation's grouping key,
+   and nothing in the topology changes the key (the `GlobalKTable` join preserves it; there is no
+   `selectKey`/`map`; the grouping uses `groupByKey()` and not `groupBy((k,v) -> k)`, which would
+   set the repartition flag unconditionally). The repartition row stays as an **M13** prediction:
+   that module's stream-stream join of `payments.payment-requested.v1` (`paymentId`) against
+   `payments.payment-status-changed.v1` (`merchantId`) is genuinely not co-partitioned, so one
+   side must be re-keyed, at 12 partitions to match the other side.
+
+The windowed changelog's `cleanup.policy` is `compact,delete` — **both** — not `compact` alone:
+compaction keeps the last value per (key, window) while the delete policy ages whole windows out.
+Its `retention.ms` is the store's retention (`analytics.windows.store-retention = 15m`) plus
+`windowstore.changelog.additional.retention.ms` (`5m`), giving the 20 minutes observed. Kafka's
+default for that second term is 24 h; analytics trims it deliberately for the disk budget. A
+1-minute tumbling window with a 30 s grace keeps ~90 s of *live* window state (the floor the
+store's retention may not go below), and analytics keeps 15 minutes so an interactive query has
+some history to show.
+
+Full reasoning, plus the topology as Streams prints it: services/analytics/README.md.
 
 ## Kafka Connect internal topics
 
@@ -127,7 +168,7 @@ compacted config topic. Debezium's Postgres connector needs no schema-history to
 | `ledger.v1` | ledger | `payments.payment-status-changed.v1`, `refunds.refund-requested.v1`, `refunds.refund-completed.v1`, `refunds.refund-failed.v1` |
 | `webhook-notifier.planner.v1` | webhook-notifier | `payments.payment-status-changed.v1`, `refunds.refund-completed.v1`, `refunds.refund-failed.v1` |
 | `webhook-notifier.executor.v1` | webhook-notifier | `webhooks.webhook-delivery-requested.v2` + the three `.v2` retry topics (M9 Phase 2; was `.v1` through M8) |
-| `analytics-streams.v1` | analytics | Streams-managed (`payments.*`, `refunds.*`, `ledger.*`) |
+| `analytics-streams.v1` | analytics | Streams-managed. **M10 actual:** `payments.payment-status-changed.v1` + `merchants.merchant-config-changed.v1` (the latter via the `GlobalKTable`'s own global thread, which uses no consumer group and commits no offsets — it always reads every partition from the beginning). `refunds.*` / `ledger.*` come with M11/M13. The group id is not configured anywhere: Streams derives it from `application.id`. |
 | `payment-api.replies.v1` | payment-api | `psp.provider-status-reply.v1` |
 | `realtime-gateway.<instanceId>` | realtime-gateway | `payments.*`, `refunds.*` — **unique per instance**; consumer groups load-split, they do not fan out (M12) |
 | `connect-mongo-audit-sink` | Kafka Connect | `ledger.ledger-entry-recorded.v1`, `payments.payment-status-changed.v1` |

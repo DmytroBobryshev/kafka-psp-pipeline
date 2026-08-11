@@ -57,6 +57,7 @@
     <module>services/psp-connector</module>
     <module>services/ledger</module>
     <module>services/webhook-notifier</module>
+    <module>services/analytics</module>
   </modules>
 
   <!--
@@ -113,6 +114,18 @@
       <dependency>
         <groupId>io.confluent</groupId>
         <artifactId>kafka-avro-serializer</artifactId>
+        <version>${confluent.version}</version>
+      </dependency>
+      <!-- M10: SpecificAvroSerde - the Kafka Streams-shaped wrapper around the same
+           KafkaAvroSerializer/Deserializer pair above (a Serde is just serializer + deserializer
+           in one object, which is the form every Streams API takes). Same ${confluent.version} as
+           kafka-avro-serializer and as the running registry, for the reason the property's own
+           comment gives. It transitively pulls org.apache.kafka:kafka-streams at Confluent's
+           bundled version; the Spring Boot BOM's kafka-streams entry wins, which is what we want -
+           one Kafka client version across the whole build. -->
+      <dependency>
+        <groupId>io.confluent</groupId>
+        <artifactId>kafka-streams-avro-serde</artifactId>
         <version>${confluent.version}</version>
       </dependency>
 

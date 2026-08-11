@@ -672,3 +672,227 @@ not apply where no schema exists yet. Cutting `payments.payment-requested.v1` fr
 in place left ~1,200 old JSON records on the topic, which the Avro consumer met with
 `Unknown magic byte!` - the registry could not have warned about that, because JSON records carry
 no schema id to check. See the topic-versioning discussion above.
+
+---
+
+## M10 - Merchant config: the compacted-topic command surface
+
+M10 adds a second REST surface to this service:
+
+```
+PUT    /api/merchants/{merchantId}/config   -> a VALUE     on merchants.merchant-config-changed.v1
+DELETE /api/merchants/{merchantId}/config   -> a TOMBSTONE on merchants.merchant-config-changed.v1
+```
+
+payment-api owns this API because ADR-0004 puts every command that enters the system on this
+service's REST surface, and because this service already is the only externally-reachable one.
+Everything downstream reads the topic — analytics as a `GlobalKTable` (services/analytics), and
+psp-connector / webhook-notifier / ledger in later modules.
+
+`merchants.merchant-config-changed.v1` is **Avro** as of M10. docs/diagrams/topic-map.md said it
+"stays JSON until its module is built" — M10 *is* that module, so it is born Avro rather than
+migrated later. Subject `merchants.merchant-config-changed.v1-value`, `BACKWARD`, set by
+`infra/compose/register-schemas.sh` before the first `PUT` registers version 1. Schema:
+`libs/common-events/src/main/avro/06-merchant-config-changed.avsc`.
+
+### Why this write path does NOT use the M6 outbox
+
+The outbox exists to solve the **dual-write problem**: `POST /api/payments` performs two writes
+(the `payments` row and the event) that must commit atomically, so the event becomes a row in the
+same Postgres transaction and Debezium relays it later.
+
+This path has **one** write. There is no `merchant_config` table and there is not going to be
+one: the compacted topic *is* the system of record — `cleanup.policy=compact` guarantees the last
+value for every key is retained forever, which is exactly the durability contract a key/value
+table gives you. "Persist the config" and "publish the event" are the same act. With nothing to
+be atomic *with*, an outbox row would add a second store that then has to be reconciled against
+the topic; it would create the consistency problem it exists to solve.
+
+Three further reasons, all verifiable in this repo:
+
+1. **The outbox physically cannot carry a tombstone as built.**
+   `db/migration/V2__create_outbox_event_table.sql` declares `payload … NOT NULL`, and `V3`
+   retypes it `BYTEA` — still `NOT NULL`. Debezium's `EventRouter` only emits a null-valued
+   record when `route.tombstone.on.empty.payload=true`, which
+   `infra/compose/connect/payment-outbox-connector.json` does not set. Supporting `DELETE`
+   through the outbox means a schema migration **plus** a connector reconfiguration, to reach a
+   record shape a two-line `KafkaTemplate.send(topic, key, null)` produces directly.
+2. **The single connector is hard-wired to one topic.** It sets
+   `"transforms.outbox.route.topic.replacement": "payments.payment-requested.v1"` — a literal,
+   not `${routedByValue}`. Routing a second aggregate type through it means editing and
+   re-registering the live connector that carries M6's and M9 Phase 1's end-to-end evidence, for
+   a feature that does not need it.
+3. **The failure mode the outbox protects against does not arise.** If the send fails, nothing
+   committed anywhere; the caller gets a 500 and retries the `PUT`. Compaction makes that retry
+   free — the operation is a whole-state upsert under a fixed key, so replaying it N times
+   converges on the same last value. The outbox is for writes the caller *cannot* safely re-drive
+   because a local row already committed.
+
+**What is given up:** the send is a real network call inside the request (blocking, 10 s timeout,
+`KafkaMerchantConfigPublisher`), so a broker outage surfaces as a failed HTTP call rather than a
+queued row. That is the right trade here — a config change the operator believes succeeded but
+which never reached the topic would be worse than an honest 5xx.
+
+### Tombstones: a null value, not a `deleted` flag
+
+`DELETE` publishes a record with the merchant's key and a **`null` value**. Nothing else. This is
+not a stylistic choice and a flag is not an equivalent design; the null is load-bearing in three
+separate places at once.
+
+1. **The broker's log cleaner.** Compaction's contract is "retain *at least the last value* for
+   each key". The only way to make it retain *nothing* for a key is to hand it a record that has
+   no value. A `deleted=true` record **is** a value, so compaction keeps it forever and the log
+   never shrinks by one byte — you have built a table that can only grow.
+2. **Kafka Streams.** A `KTable`/`GlobalKTable` deletes its row when it sees a null value, so a
+   lookup afterwards returns `null` with **zero** consumer-side code. With a flag, every consumer
+   in the fleet must remember to check it — a rule that is one new consumer away from being
+   forgotten, and whose failure is silent (a deleted merchant looks active).
+3. **The ecosystem.** Connect sinks, ksqlDB, the MongoDB sink in M13 — all already agree that
+   null means delete. It is the only portable delete signal there is.
+
+Consequences that follow from that, visible in the code:
+
+- **The Avro schema has no `deleted` field and `MerchantStatus` has no `DELETED` constant.**
+  `SUSPENDED` exists because a suspension genuinely *is* a state — the config still exists and
+  downstream services should still see it. Deletion is not a state.
+- **A tombstone never touches Schema Registry.** `KafkaAvroSerializer#serialize(topic, null)`
+  returns `null` immediately — no magic byte, no schema id, zero bytes of value — so the record
+  is never validated against (and never registers) a schema. The registered subject governs the
+  `PUT` shape only.
+- **The ADR-0002 header duplication stops being a convenience and becomes necessary.** A
+  tombstone has no value, so there is nowhere else for provenance to live;
+  `KafkaMerchantConfigPublisher` writes `event-id` / `event-type` / `aggregate-id` as headers on
+  both record shapes, and for a tombstone they are the only trace of who deleted what and when.
+- **`DELETE` returns `202 Accepted`, not `204 No Content`.** The tombstone is durably on the
+  topic when the method returns, but "the key is gone" is not yet true *anywhere*: the cleaner
+  has not run, downstream `GlobalKTable`s may not have consumed it, and the tombstone itself
+  lingers for `delete.retention.ms`. 202 states that honestly; 204 would claim a completed
+  deletion that has, at that instant, deleted nothing.
+
+### `PUT`, not `PATCH` — whole-state snapshots
+
+Compaction keeps the **last record** per key and discards everything before it, so a consumer
+that starts reading at a compacted offset sees exactly one record per merchant and must be able
+to reconstruct the whole configuration from it alone. A partial update would leave that consumer
+missing the fields the discarded records carried. So every field except `webhookUrl` is required,
+and a "just change the webhook URL" edit re-sends everything. `PATCH` would also have to read the
+current value to merge into — and the only place that value lives is the topic itself, which
+ADR-0004 forbids reading over service-to-service REST.
+
+There is deliberately no `GET` here either, for the same reason: the services that need merchant
+config already hold it. analytics exposes it at
+`GET /api/analytics/merchants/{merchantId}/config` (port 8089), read straight out of its
+`GlobalKTable`.
+
+### The compaction settings that matter
+
+Applied by `infra/compose/create-topics.sh` through `kafka-configs --alter` (note: `kafka-topics
+--create --if-not-exists` never alters an existing topic's configs, and this topic has existed
+since the M2 baseline). Verified on the live cluster:
+
+```
+cleanup.policy            = compact          (default for this cluster: delete)
+min.cleanable.dirty.ratio = 0.1              (broker default 0.5)
+delete.retention.ms       = 60000            (broker default 86400000 = 24 h)
+segment.ms                = 60000            (broker default 604800000 = 7 d)
+segment.bytes             = 1048576          (broker default 1073741824 = 1 GiB)
+max.compaction.lag.ms     = 60000            (broker default Long.MAX_VALUE)
+retention.ms              = -1               (infinite)
+```
+
+| Setting | What it does | Why this value |
+|---|---|---|
+| `cleanup.policy=compact` | Retain at least the last value per key, forever, instead of deleting whole segments by age. | This is what makes the topic a durable key/value table, and what makes a `GlobalKTable`'s bootstrap `O(merchants)` rather than `O(config changes)`. |
+| `min.cleanable.dirty.ratio` | The cleaner only picks a partition once `dirty_bytes / total_bytes` exceeds this. | At the 0.5 default, **half** the log must be obsolete before anything is cleaned — on a low-volume config topic, that can be *never*. 0.1 makes the tombstone drill finish. Aggressive on purpose; cleaning is CPU + IO, and production values trade promptness for that. |
+| `delete.retention.ms` | How long a **tombstone** is kept after the cleaning pass that could have removed it. | The answer to "why is my tombstone still there?". See below. |
+| `segment.ms` / `segment.bytes` | When the broker rolls a new log segment. | See below — this is the setting that decides whether compaction happens *at all*. |
+| `max.compaction.lag.ms` | Upper bound on how long a dirty record may go uncompacted, regardless of dirty ratio. | Belt and braces: forces the cleaner onto a nearly-idle partition that `min.cleanable.dirty.ratio` alone would leave forever. |
+
+**Why a tombstone is not removed immediately.** It must not be. Compaction could physically drop
+a null-valued record the moment it cleans, but then a consumer that is *behind* — or a
+`GlobalKTable` bootstrapping for the first time — would read the log, never see the delete, and
+keep the row forever. `delete.retention.ms` is the promise "any consumer that catches up within
+this window will observe the deletion". So a tombstone lives through two phases: first it is the
+key's last value (and compaction preserves it like any last value), then, once cleaned, it
+survives a further `delete.retention.ms` before disappearing. 24 h is the production-safe answer
+to "how far behind may a consumer be". The 60 s here is chosen to make the drill watchable and is
+exactly the wrong value for a real cluster.
+
+**Why the active segment is never compacted.** The log cleaner rewrites closed segments into new
+ones. The **active** segment — the one the broker is currently appending to — cannot be rewritten
+in place: its end offset is still moving, and producers hold it open. So the cleaner skips it,
+always. The consequence bites immediately on a low-volume topic: with the 7-day default
+`segment.ms`, every record this topic will ever receive sits in the active segment, nothing is
+ever eligible, and compaction appears completely broken no matter what `cleanup.policy` or the
+dirty ratio say. **This is the single most common "compaction doesn't work" cause.** Rolling a
+new segment every 60 s (or 1 MiB, whichever comes first) is what makes records eligible here. The
+cost is many small segments: more open file handles, more index files, more cleaner passes.
+
+`retention.ms=-1` alongside `cleanup.policy=compact` is not redundant belt-and-braces — a topic
+*can* be `compact,delete` (Kafka Streams' own windowed changelogs are exactly that, see
+services/analytics/README.md), where compaction keeps the last value per key *and* whole old
+segments still age out. Setting `-1` here says: never age anything out, compaction is the only
+cleanup.
+
+### Where it lives
+
+```
+adapters/in/web/     MerchantConfigController, UpsertMerchantConfigRequest,
+                     MerchantConfigResponse, MerchantConfigWebMapper
+application/         MerchantConfigUseCase, UpsertMerchantConfigCommand
+domain/model/        MerchantConfig, MerchantStatus
+domain/port/         MerchantConfigPublisher          <- the outbox-vs-direct reasoning lives here
+adapters/out/kafka/  KafkaMerchantConfigPublisher, MerchantConfigAvroEventFactory
+config/              MerchantConfigKafkaConfig        <- its own ProducerFactory/KafkaTemplate
+```
+
+`MerchantConfigUseCase` carries **no** `@Transactional` and **no** repository port, in deliberate
+contrast to `CreatePaymentUseCase`. There is no local write to be atomic with; annotating it
+would open a Postgres transaction that does nothing and, worse, would suggest to a reader that
+the Kafka send participates in it.
+
+`MerchantConfigKafkaConfig` builds a **separate** `ProducerFactory`/`KafkaTemplate` rather than
+reconfiguring `KafkaProducerConfig`'s: that one still carries `application.yml`'s
+`value-serializer: JsonSerializer` for the retired M3 adapter, and flipping it globally would
+silently change what that class does if it were ever re-enabled. Everything else — `acks=all`,
+`enable.idempotence`, retries, batching, compression — is inherited from the same
+`KafkaProperties` block, so this producer's durability behaviour is identical to the rest of the
+system's by construction.
+
+**Idempotence and ordering matter more here than on a delete-policy topic.**
+`enable.idempotence=true` plus `max.in.flight.requests.per.connection<=5` (ADR-0003's global
+defaults) give per-partition ordering across retries. Compaction resolves a key to its **last**
+record by offset, so a retry that lands out of order does not merely deliver events out of
+sequence — it permanently installs the wrong value, including resurrecting a merchant whose
+tombstone was overtaken by a re-sent update.
+
+### Proof (live cluster)
+
+```
+$ curl -X PUT localhost:8085/api/merchants/acme-001/config -H 'Content-Type: application/json' \
+    -d '{"displayName":"ACME Corp","status":"ACTIVE","payoutCurrency":"EUR",
+         "webhookUrl":"https://acme.test/hooks","declineRateAlertThresholdBps":1500}'
+HTTP 200
+{"merchantId":"acme-001","displayName":"ACME Corp","status":"ACTIVE","payoutCurrency":"EUR",
+ "webhookUrl":"https://acme.test/hooks","declineRateAlertThresholdBps":1500}
+
+# read back out of analytics' GlobalKTable over the compacted topic - a different process,
+# a different database, no service-to-service REST
+$ curl -s localhost:8089/api/analytics/merchants/acme-001/config
+{"merchantId":"acme-001","displayName":"ACME Corp","status":"ACTIVE","payoutCurrency":"EUR",
+ "webhookUrl":"https://acme.test/hooks","declineRateAlertThresholdBps":1500}
+```
+
+#### Tombstone proof
+
+<!-- PLACEHOLDER - run by the orchestrator, not by this module's implementation.
+     DELETE /api/merchants/acme-001/config (expect 202), then show:
+       (a) the record on merchants.merchant-config-changed.v1 has a NULL value - e.g.
+           kafka-console-consumer --property print.key=true --property print.value=true
+           --from-beginning, where the tombstone prints as "acme-001<TAB>null",
+       (b) GET /api/analytics/merchants/acme-001/config flips 200 -> 404 (the GlobalKTable row is
+           gone, with no consumer-side flag check anywhere),
+       (c) after segment.ms=60000 rolls the active segment and the cleaner runs, the key is gone
+           from the log entirely; after a further delete.retention.ms=60000, so is the tombstone. -->
+
+_To be filled in._

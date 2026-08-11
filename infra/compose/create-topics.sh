@@ -94,6 +94,78 @@ for row in "${TOPICS[@]}"; do
   fi
 done
 
+# ---------------------------------------------------------------------------------------------
+# M10: compaction tuning for merchants.merchant-config-changed.v1
+#
+# `kafka-topics --create --if-not-exists` NEVER alters an existing topic's configs, and this
+# topic already existed from the M2 baseline - so these go through `kafka-configs --alter`, which
+# IS idempotent and does apply to a live topic.
+#
+# What each setting does, and why a compacted topic needs all four rather than just
+# cleanup.policy=compact:
+#
+#   cleanup.policy=compact
+#     Retain AT LEAST the last value for every key, forever, instead of deleting whole segments
+#     by age. This is what makes the topic a durable key/value table and what makes a
+#     GlobalKTable's bootstrap O(merchants) rather than O(config changes).
+#
+#   min.cleanable.dirty.ratio=0.1   (broker default 0.5)
+#     The log cleaner only picks a partition when dirty_bytes / total_bytes exceeds this. At the
+#     0.5 default, HALF the log must be duplicate/obsolete records before anything is cleaned -
+#     on a low-volume config topic that can be never. 0.1 makes cleaning start after 10% churn,
+#     which is what turns "send a tombstone and watch the key disappear" into an experiment that
+#     finishes. It is deliberately aggressive for a learning cluster: cleaning is CPU + IO, and
+#     production values trade promptness for that cost.
+#
+#   delete.retention.ms=60000       (broker default 86400000 = 24 h)
+#     How long a TOMBSTONE is kept after the cleaning pass that could have removed it. This is
+#     THE setting that answers "why is my tombstone still there?". A tombstone is not removed
+#     immediately, and must not be: a consumer that is behind (or a GlobalKTable bootstrapping
+#     for the first time) has to actually SEE the null-valued record to learn the key is gone. If
+#     tombstones vanished the instant compaction ran, a slow consumer would read the log, never
+#     see the delete, and keep the row forever. 24 h is the production-safe answer to "how far
+#     behind may a consumer be"; 60 s is chosen here so the drill is watchable, and it is exactly
+#     the wrong value for a real cluster.
+#
+#   segment.ms=60000 / segment.bytes=1048576
+#     The log cleaner works on CLOSED segments and NEVER touches the ACTIVE (currently-written)
+#     segment - the broker is appending to it, so its offsets are still moving and it cannot be
+#     rewritten in place. With the 7-day default segment.ms on a topic that gets a handful of
+#     records, every record lives in the active segment and NOTHING is ever compacted, no matter
+#     what the dirty ratio says. This is the single most common "compaction doesn't work" cause.
+#     Rolling a new segment every 60 s (or 1 MiB, whichever comes first) guarantees records become
+#     eligible. Cost: many small segments, i.e. more open file handles and more index files.
+#
+#   max.compaction.lag.ms=60000
+#     Upper bound on how long a dirty record may go uncompacted, regardless of dirty ratio. Belt
+#     and braces for the drill: it forces the cleaner to run on a nearly-clean, nearly-idle
+#     partition that min.cleanable.dirty.ratio alone would leave alone forever.
+#
+# name | config=value,config=value...
+EXTRA_CONFIGS=(
+  "merchants.merchant-config-changed.v1|cleanup.policy=compact,min.cleanable.dirty.ratio=0.1,delete.retention.ms=60000,segment.ms=60000,segment.bytes=1048576,max.compaction.lag.ms=60000"
+)
+
+run_kafka_configs() {
+  if [[ "$MODE" == "host" ]]; then
+    kafka-configs --bootstrap-server "$HOST_BOOTSTRAP" "$@"
+  else
+    docker compose exec -T kafka1 kafka-configs --bootstrap-server "$INTERNAL_BOOTSTRAP" "$@"
+  fi
+}
+
+echo
+echo "Applying per-topic config overrides (${#EXTRA_CONFIGS[@]}) ..."
+for row in "${EXTRA_CONFIGS[@]}"; do
+  IFS='|' read -r name configs <<< "$row"
+  if run_kafka_configs --alter --entity-type topics --entity-name "$name" --add-config "$configs" > /dev/null; then
+    printf '  OK    %-55s %s\n' "$name" "$configs"
+  else
+    printf '  FAIL  %s\n' "$name"
+    fail=1
+  fi
+done
+
 echo
 if [[ "$fail" -eq 0 ]]; then
   echo "All topics present. Verify with:"

@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example.psp</groupId>
+    <artifactId>kafka-psp-pipeline</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>analytics</artifactId>
+  <packaging>jar</packaging>
+
+  <name>analytics</name>
+  <description>
+    analytics (M10): the Kafka Streams service. A GlobalKTable over the compacted
+    merchants.merchant-config-changed.v1 topic, left-joined against the Avro
+    payments.payment-status-changed.v1 stream, aggregated into per-merchant 1-minute tumbling
+    windows (volume, decline rate, average latency), exposed over REST as interactive queries
+    against the local RocksDB state store and projected into MongoDB so results outlive the
+    store. Hexagonal layout enforced by an ArchUnit test; same conventions as ledger (M7).
+  </description>
+
+  <dependencies>
+    <!-- Internal libs: the generated Avro classes for both input topics live in common-events. -->
+    <dependency>
+      <groupId>com.example.psp</groupId>
+      <artifactId>common-events</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.example.psp</groupId>
+      <artifactId>common-web</artifactId>
+    </dependency>
+
+    <!-- Web + actuator. Unlike ledger, the REST surface here is NOT incidental: interactive
+         queries are the whole point of endpoint /api/analytics/** (ADR-0004 still holds - these
+         are read-only queries served to an operator/UI, not inter-service commands). -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <!-- Bean validation on the interactive-query request parameters (lookbackMinutes bounds) -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+
+    <!-- MongoDB (ADR-0005 / PLAN.md persistence table: analytics owns the `analytics` database).
+         Windowed aggregates are projected here so a result survives both the state store's
+         retention window and a wiped state directory. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-mongodb</artifactId>
+    </dependency>
+
+    <!-- Kafka Streams. spring-kafka contributes @EnableKafkaStreams / StreamsBuilderFactoryBean
+         (lifecycle + the StreamsBuilder bean); kafka-streams is the engine itself. Version of the
+         latter comes from the Spring Boot BOM, NOT from Confluent's transitive one. -->
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-streams</artifactId>
+    </dependency>
+
+    <!-- M9 wire format: both input topics are Avro + Schema Registry, so every Serde on a source
+         node is a SpecificAvroSerde. -->
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.confluent</groupId>
+      <artifactId>kafka-streams-avro-serde</artifactId>
+    </dependency>
+
+    <!-- Lombok + MapStruct (annotation processor order fixed in the parent) -->
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mapstruct</groupId>
+      <artifactId>mapstruct</artifactId>
+    </dependency>
+
+    <!-- Test -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- TopologyTestDriver: runs the REAL topology in-process, with no broker, no Schema Registry
+         and no RocksDB-on-disk beyond a temp dir. This is what lets `mvn verify` assert window
+         boundaries, grace-period behaviour and GlobalKTable tombstone semantics without the
+         compose stack - see AnalyticsTopologyTest. -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-streams-test-utils</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>analytics</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
