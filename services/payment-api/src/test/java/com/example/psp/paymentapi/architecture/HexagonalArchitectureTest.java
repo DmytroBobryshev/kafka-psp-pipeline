@@ -145,6 +145,10 @@ class HexagonalArchitectureTest {
                         // something else, so this stays a domain-only assertion.
                         .or()
                         .haveSimpleNameEndingWith("MerchantConfig")
+                        // M11: the refund aggregate. RefundController/UseCase/Repository/
+                        // Publisher/Response/Entity/Mapper/Command all end in something else.
+                        .or()
+                        .haveSimpleNameEndingWith("Refund")
                         .should()
                         .resideInAPackage("..domain..");
 

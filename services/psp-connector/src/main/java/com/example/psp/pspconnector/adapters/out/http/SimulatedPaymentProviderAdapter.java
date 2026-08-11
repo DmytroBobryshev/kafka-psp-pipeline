@@ -4,7 +4,10 @@ import com.example.psp.pspconnector.config.ProviderSimulationProperties;
 import com.example.psp.pspconnector.domain.model.Money;
 import com.example.psp.pspconnector.domain.model.ProviderOutcome;
 import com.example.psp.pspconnector.domain.model.ProviderResult;
+import com.example.psp.pspconnector.domain.model.RefundOutcome;
+import com.example.psp.pspconnector.domain.model.RefundProviderResult;
 import com.example.psp.pspconnector.domain.port.PaymentProviderPort;
+import com.example.psp.pspconnector.domain.port.RefundProviderPort;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -45,9 +48,20 @@ import org.springframework.stereotype.Component;
  * production pattern (no eviction, and it is invisible to other psp-connector instances in the
  * consumer group). A real implementation would use a bounded/TTL cache or push the idempotency
  * key to the actual provider API.
+ *
+ * <h2>M11: also the refund path's simulated provider</h2>
+ *
+ * <p>{@link #refund} lives on this same class rather than a separate one - one component
+ * simulating one external acquirer, the same way a real PSP's HTTP client would expose both
+ * charge and refund operations behind one integration. It reuses the SAME latency knobs
+ * ({@code minLatencyMs}/{@code maxLatencyMs}/{@code forcedLatencyMs}) as {@link #authorize}, but a
+ * SEPARATE, two-way outcome vocabulary ({@link RefundForcedOutcome}, {@link RefundOutcome}) - see
+ * services/psp-connector/README.md's M11 section for the forceable property the orchestrator uses
+ * to drive the happy-path and compensation proofs deterministically, and for why a refund timeout
+ * is not modelled (the module brief only needs the two decisive outcomes).
  */
 @Component
-public class SimulatedPaymentProviderAdapter implements PaymentProviderPort {
+public class SimulatedPaymentProviderAdapter implements PaymentProviderPort, RefundProviderPort {
 
     private static final Logger log = LoggerFactory.getLogger(SimulatedPaymentProviderAdapter.class);
 
@@ -89,6 +103,45 @@ public class SimulatedPaymentProviderAdapter implements PaymentProviderPort {
                 providerEventId);
 
         return result;
+    }
+
+    /**
+     * M11: executes a refund. No duplicate-callback simulation and no attempt cache here - the
+     * refund path's idempotency is M5 level 1 only, entirely psp-connector's own
+     * {@code refund_attempts} table (see {@code domain.model.RefundAttempt}'s javadoc); this
+     * adapter is called at most once per distinct inbound event because
+     * {@code application.ExecuteRefundUseCase} checks that BEFORE calling here.
+     */
+    @Override
+    public RefundProviderResult refund(UUID refundId, UUID paymentId, String merchantId, Money amount) {
+        long latencyMs = resolveLatencyMs();
+        sleep(latencyMs);
+
+        RefundOutcome outcome = resolveRefundOutcome();
+        UUID providerReference = UUID.randomUUID();
+
+        log.info(
+                "Simulated provider refund call refundId={} paymentId={} merchantId={} latencyMs={} "
+                        + "outcome={} providerReference={}",
+                refundId,
+                paymentId,
+                merchantId,
+                latencyMs,
+                outcome,
+                providerReference);
+
+        return new RefundProviderResult(providerReference, outcome, latencyMs);
+    }
+
+    private RefundOutcome resolveRefundOutcome() {
+        // refundForcedOutcome > 0 overrides the dice roll entirely - THE property the orchestrator
+        // forces to drive the two deterministic saga proofs (happy path / compensation). See
+        // ProviderSimulationProperties's javadoc and README.
+        if (properties.refundForcedOutcome() != RefundForcedOutcome.NONE) {
+            return properties.refundForcedOutcome().toRefundOutcome();
+        }
+        double roll = ThreadLocalRandom.current().nextDouble();
+        return roll < properties.refundDeclineRate() ? RefundOutcome.DECLINED : RefundOutcome.COMPLETED;
     }
 
     private boolean shouldReplayDuplicate() {
@@ -146,6 +199,23 @@ public class SimulatedPaymentProviderAdapter implements PaymentProviderPort {
 
         ProviderOutcome toProviderOutcome() {
             return ProviderOutcome.valueOf(name());
+        }
+    }
+
+    /**
+     * {@code psp-connector.provider.refund-forced-outcome} vocabulary (M11) - THE property name
+     * the M11 orchestrator uses to drive the refund saga's two deterministic proofs. {@code NONE}
+     * means "use {@code refundDeclineRate}"; {@code COMPLETED}/{@code DECLINED} force every
+     * {@code refund()} call to that outcome. Deliberately two-way, not three - see this class's
+     * M11 javadoc section for why no refund timeout is modelled.
+     */
+    public enum RefundForcedOutcome {
+        NONE,
+        COMPLETED,
+        DECLINED;
+
+        RefundOutcome toRefundOutcome() {
+            return RefundOutcome.valueOf(name());
         }
     }
 }

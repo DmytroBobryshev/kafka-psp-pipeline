@@ -95,6 +95,34 @@ public final class LedgerEntry {
     }
 
     /**
+     * A completed refund (M11): money out of the merchant balance. Unlike {@link #credit}, this
+     * entry does <b>not</b> itself change {@code merchant_balances} when applied - the refund saga
+     * already subtracted the amount from the balance at reservation time
+     * ({@code domain.port.RefundRepository#tryReserveOrFail}), so settlement only makes that
+     * movement permanent and auditable. See {@code adapters.out.persistence.RefundWriteTransaction}
+     * for where this entry is written (a plain insert, deliberately not routed through
+     * {@code LedgerRepository#tryApply}, which always applies a second balance delta).
+     */
+    public static LedgerEntry debit(
+            UUID inboundEventId,
+            String merchantId,
+            UUID paymentId,
+            Money amount,
+            String traceId,
+            String correlationId) {
+        return new LedgerEntry(
+                UUID.randomUUID(),
+                inboundEventId,
+                merchantId,
+                paymentId,
+                EntryDirection.DEBIT,
+                amount,
+                traceId,
+                correlationId,
+                Instant.now());
+    }
+
+    /**
      * Reconstitutes an entry that already exists in storage - used by the persistence adapter's
      * mapper, never by {@code application/}.
      */

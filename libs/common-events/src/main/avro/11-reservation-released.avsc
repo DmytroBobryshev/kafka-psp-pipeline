@@ -1,0 +1,48 @@
+{
+  "type": "record",
+  "name": "ReservationReleased",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of refunds.reservation-released.v1 (M11) - the compensating event, and the heart of this module (ADR-0008). Produced by the ledger in exactly two situations, both restoring the merchant's balance by the reserved amount: (1) compensation - refunds.refund-failed.v1 arrives for a refund whose reservation is still RESERVED (the provider declined after a successful reservation); (2) timeout - a scheduled sweeper finds a reservation still RESERVED past refund.reservation.ttl (ADR-0008 rule 6: a lost refunds.refund-completed.v1 must not leak a reservation forever). Consumed by analytics/realtime-gateway in the full design (docs/diagrams/topic-map.md); no consumer exists within this module's declared scope (services/ledger, services/psp-connector). merchantId is the record key (ADR-0003).",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope",
+      "doc": "envelope.aggregateId = refundId. envelope.causationId = the inbound refunds.refund-failed.v1 event's own eventId for the compensation path, or null for the timeout path (the sweeper is not triggered by any inbound Kafka event - it is a root cause in its own right)."
+    },
+    {
+      "name": "refundId",
+      "type": "string",
+      "doc": "Correlates back to the same refund throughout the saga."
+    },
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "The payment the refund was for (UUID string form)."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "IS the record key (ADR-0003)."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 4
+      },
+      "doc": "The amount restored to the merchant's balance."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "doc": "ISO-4217 three-letter currency code."
+    },
+    {
+      "name": "reason",
+      "type": "string",
+      "doc": "'COMPENSATION' (a refunds.refund-failed.v1 arrived while the reservation was still active) or 'TIMEOUT' (the reservation aged past refund.reservation.ttl and was swept)."
+    }
+  ]
+}

@@ -13,7 +13,16 @@ import org.springframework.kafka.test.context.EmbeddedKafka;
  * reproduced here.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@EmbeddedKafka(partitions = 1, topics = {"payments.payment-requested.v1"})
+@EmbeddedKafka(
+        partitions = 1,
+        topics = {
+            "payments.payment-requested.v1",
+            // M11: refunds.funds-reserved.v1 is consumed; refund-completed/refund-failed are
+            // produced (config.RefundKafkaConsumerConfig, adapters.out.kafka.KafkaRefundStatusPublisher).
+            "refunds.funds-reserved.v1",
+            "refunds.refund-completed.v1",
+            "refunds.refund-failed.v1"
+        })
 class PspConnectorApplicationTests {
 
     @Test

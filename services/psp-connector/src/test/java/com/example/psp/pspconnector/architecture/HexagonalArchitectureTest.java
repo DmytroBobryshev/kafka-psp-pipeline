@@ -141,6 +141,11 @@ class HexagonalArchitectureTest {
                         .haveSimpleNameEndingWith("PaymentAttempt")
                         .or()
                         .haveSimpleNameEndingWith("ProviderResult")
+                        // M11: the refund saga's domain model.
+                        .or()
+                        .haveSimpleNameEndingWith("RefundAttempt")
+                        .or()
+                        .haveSimpleNameEndingWith("RefundProviderResult")
                         .should()
                         .resideInAPackage("..domain..");
 

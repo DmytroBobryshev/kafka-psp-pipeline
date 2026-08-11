@@ -543,3 +543,236 @@ consume-Avro/apply-Postgres/produce-Avro loop, inside one Kafka transaction, wor
 `ledger.ledger-entry-recorded.v1-value` - `TopicNameStrategy`, `BACKWARD` compatibility, set by
 `infra/compose/register-schemas.sh` before this service's first publish, same convention as every
 other M9 subject.
+
+## M11 - Refund saga (choreography)
+
+Implements [ADR-0008](../../docs/adr/0008-saga-choreography.md): no orchestrator, each service
+reacts to events and publishes its own. The ledger is the saga's centre of gravity - it reserves
+funds, settles or compensates, and is the only service exposing the saga's state over REST. See
+[docs/diagrams/sequence-refund-saga.md](../../docs/diagrams/sequence-refund-saga.md) for the
+canonical diagram this section implements; `services/psp-connector/README.md`'s M11 section covers
+the execution step from the other side.
+
+### Sequence - both paths
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant API as payment-api
+    participant K as Kafka
+    participant LED as ledger
+    participant PSP as psp-connector
+    participant SWEEP as ledger TTL sweeper
+
+    API->>K: refunds.refund-requested.v1 key=merchantId
+
+    K-->>LED: refunds.refund-requested.v1
+    LED->>LED: dedup on eventId (refund_processed_events)
+    alt balance >= amount
+        LED->>LED: refund_reservations row + balance -= amount (ONE tx)
+        LED->>LED: refund_saga_state RESERVED
+        LED->>K: refunds.funds-reserved.v1 key=merchantId
+    else insufficient balance
+        LED->>LED: refund_saga_state FAILED reason=INSUFFICIENT_BALANCE
+        LED->>K: refunds.refund-failed.v1 key=merchantId (ADR-0006 category B)
+    end
+
+    K-->>PSP: refunds.funds-reserved.v1
+    PSP->>PSP: dedup on eventId, execute at (simulated) provider
+
+    alt provider completes
+        PSP->>K: refunds.refund-completed.v1 key=merchantId
+        K-->>LED: refunds.refund-completed.v1
+        LED->>LED: guarded RESERVED -> COMPLETED
+        LED->>LED: ledger_entries DEBIT (no further balance delta)
+        LED->>K: ledger.ledger-entry-recorded.v1
+    else provider declines
+        PSP->>K: refunds.refund-failed.v1 key=merchantId reason=PROVIDER_DECLINED
+        K-->>LED: refunds.refund-failed.v1
+        rect rgb(255,240,240)
+            Note over LED,K: COMPENSATION - the heart of this module
+            LED->>LED: guarded RESERVED -> RELEASED, balance += amount
+            LED->>K: refunds.reservation-released.v1 reason=COMPENSATION
+        end
+    end
+
+    Note over SWEEP: independently, on a fixed schedule (no inbound event)
+    SWEEP->>LED: findReservedOlderThan(now - refund.reservation.ttl)
+    SWEEP->>LED: guarded RESERVED -> RELEASED (CAS, races safely against compensation)
+    LED->>K: refunds.reservation-released.v1 reason=TIMEOUT
+```
+
+### Topic / key table
+
+| Topic | Key | Direction | Producer(s) | Why this key (ADR-0003) |
+|---|---|---|---|---|
+| `refunds.refund-requested.v1` | `merchantId` | in | payment-api (outbox) | Every saga step for one merchant serialises against that merchant's ledger row |
+| `refunds.funds-reserved.v1` | `merchantId` | out | ledger | Same reason - psp-connector's execution step lands in merchant order |
+| `refunds.refund-completed.v1` | `merchantId` | in | psp-connector | Settlement must observe the merchant's reservation in order |
+| `refunds.refund-failed.v1` | `merchantId` | **in AND out** | ledger (insufficient balance) **and** psp-connector (decline) | See "ADR-0008 rule 7" below |
+| `refunds.reservation-released.v1` | `merchantId` | out | ledger (compensation + TTL sweep) | Compensation must land after the reservation it releases, same partition |
+
+`envelope.aggregateId` on every event above is `refundId` (ADR-0002: the entity the event is
+about), which differs from the Kafka key - the same deliberate split ADR-0003 already documents
+for `payments.payment-requested.v1` vs `payments.payment-status-changed.v1`. One consequence worth
+flagging explicitly: because Debezium's outbox `EventRouter` maps ONE database column
+(`aggregate_id`) directly onto the Kafka key, `payment-api`'s `outbox_event.aggregate_id` holds
+`merchantId` for a refund row, not the refund's own id - see
+`adapters.out.outbox.OutboxRefundEventPublisher`'s javadoc in `services/payment-api` for the full
+reasoning.
+
+### ADR-0008 rule 7: why the ledger both produces and consumes `refunds.refund-failed.v1`
+
+Rule 7 says "a service MUST NOT publish to a topic it also consumes in the same saga" - and this
+service does exactly that, on purpose, because the module brief (docs/PLAN.md M11) requires it:
+the ledger publishes `refund-failed` on insufficient balance (step 2) and also consumes it for
+compensation (step 4). This is not the unbounded feedback loop rule 7 exists to forbid, for one
+concrete reason: the insufficient-balance branch **never reserves anything and transitions
+straight to the terminal `FAILED` state before publishing**. When the ledger later consumes that
+same event back, `RefundRepository#tryRelease` finds the saga already `FAILED` (not `RESERVED`)
+and reports `NOT_APPLICABLE` - a silent, single-hop no-op that produces no further event. The
+self-consumption terminates in one bounded hop; it never cascades. `ReleaseRefundUseCase`'s javadoc
+and `RefundWriteTransaction#release`'s class javadoc spell out every branch. An alternative that
+avoids the letter of rule 7 - a dedicated `refunds.refund-declined-at-request.v1` topic for the
+insufficient-balance case - was considered and rejected: it would fork one logical failure concept
+into two topics for a distinction (why the refund failed) that consumers of `refund-failed` (M17's
+tracker, webhook-notifier) don't need to make, and it isn't what `docs/diagrams/topic-map.md`
+already provisions.
+
+### State machine (held here, per `refundId`)
+
+```mermaid
+stateDiagram-v2
+    [*] --> RESERVED: refunds.refund-requested.v1 (balance sufficient)
+    [*] --> FAILED: refunds.refund-requested.v1 (balance insufficient)
+    RESERVED --> COMPLETED: refunds.refund-completed.v1
+    RESERVED --> RELEASED: refunds.refund-failed.v1 (compensation)
+    RESERVED --> RELEASED: TTL sweeper (timeout)
+    RELEASED --> NEEDS_MANUAL_REVIEW: refunds.refund-completed.v1 (LATE - see below)
+    FAILED --> NEEDS_MANUAL_REVIEW: refunds.refund-completed.v1 (pathological)
+    COMPLETED --> COMPLETED: duplicate refund-completed (idempotent no-op)
+    RELEASED --> RELEASED: duplicate refund-failed / duplicate TTL race (idempotent no-op)
+    FAILED --> FAILED: this service's own refund-failed looping back (NOT_APPLICABLE, no-op)
+    COMPLETED --> [*]
+    RELEASED --> [*]
+    NEEDS_MANUAL_REVIEW --> [*]
+```
+
+`[*] --> REQUESTED` is deliberately absent: this service resolves `refunds.refund-requested.v1`
+straight to `RESERVED` or `FAILED` inside one Postgres transaction, so no external reader could
+ever observe a persisted `REQUESTED` row here even if one were written - see
+`domain.model.RefundSagaStatus`'s javadoc. `REQUESTED` is real and visible exactly once: in
+payment-api's synchronous `202 Accepted` response to the original `POST`.
+
+Every arrow above is an explicit guarded transition
+(`RefundSagaStateJpaRepository#transitionIfStatus`, a compare-and-swap `UPDATE ... WHERE
+refund_id = ? AND status = ?`); anything not on this diagram is rejected and logged, never assumed
+impossible (ADR-0008 rule 3) - see `RefundWriteTransaction`'s class javadoc for the branch-by-branch
+reasoning of `#settle` and `#release`.
+
+### The documented late-completion edge case
+
+`docs/diagrams/sequence-refund-saga.md` calls out `RELEASED -> SETTLED` as illegal: if
+`refunds.refund-completed.v1` arrives after the reservation has already been released (compensation
+or TTL timeout), the money left the acquirer but this ledger already told the world the reservation
+was gone. This implementation's answer is the `NEEDS_MANUAL_REVIEW` state - not in the module
+brief's original five-state list (`REQUESTED`/`RESERVED`/`COMPLETED`/`FAILED`/`RELEASED`), added
+because the edge case the task requires implementing needs somewhere honest to record itself:
+overloading `FAILED` would claim the refund never happened (false - money moved), and overloading
+`RELEASED` would claim it was cleanly compensated (also false). `NEEDS_MANUAL_REVIEW` is terminal,
+visible via `GET /api/refunds/{refundId}`, and logged at `ERROR` with every identifying detail
+(`SettleRefundUseCase`) - a human reconciles it, nothing here auto-applies the debit.
+
+### Property names
+
+| Property | Default | Purpose |
+|---|---|---|
+| `ledger.refund.reservation-ttl` | `PT2M` | ADR-0008 rule 6's `refund.reservation.ttl`, under this service's `ledger.*` prefix. 2 minutes - "wrong for a real cluster, right for a demo" (same trade-off M10's compaction settings document), so the timeout path is observable without a long wait. |
+| `ledger.refund.sweep-interval` | `PT10S` | How often `adapters.in.scheduler.ReservationTtlSweeper` runs. |
+
+### REST endpoint
+
+`GET /api/refunds/{refundId}` - the saga-state read this module's step 5 asks for. 200 with the
+current `RefundSagaState` (refundId, paymentId, merchantId, amount, currency, status, reason,
+createdAt, updatedAt), or 404 (RFC 7807 `ProblemDetail`, via `common-web`'s
+`GlobalExceptionHandler` - added as a dependency in this module, previously unused since this
+service had no business REST endpoints through M7) if this ledger has not consumed the refund's
+`refunds.refund-requested.v1` yet.
+
+### Idempotency, in one table
+
+| Consumption point | Dedup key | Check-first | Constraint-race |
+|---|---|---|---|
+| `refunds.refund-requested.v1` | inbound `eventId` | `hasProcessedInboundEvent` | `refund_processed_events` PK, caught in `PostgresRefundRepository#tryReserveOrFail` |
+| `refunds.refund-completed.v1` | inbound `eventId` | guarded transition itself (CAS) | `refund_processed_events` PK, caught in `#trySettle` |
+| `refunds.refund-failed.v1` | inbound `eventId` | guarded transition itself (CAS) | `refund_processed_events` PK, caught in `#tryRelease` |
+| TTL sweep | none (no inbound event) | N/A | the CAS transition itself is the sole race guard |
+
+### Known compromises
+
+- **Only two proofs, not a general retry chain for the refund topics.** ADR-0006's real DLQ policy
+  (M8) is not built for the three new listeners; a poison-pill record is still handled by
+  `ErrorHandlingDeserializer` (category C), and any other exception is retried twice by the
+  existing `DefaultAfterRollbackProcessor` and then logged and skipped - the same documented gap
+  M7's listener already carries.
+- **The TTL sweeper is a single-instance, in-process `@Scheduled` job.** Running two ledger
+  instances means two sweepers on the same schedule; the CAS transition makes double-releasing
+  impossible, but it is not leader-elected. Acceptable at this project's scale; a production
+  version would use `ShedLock` or similar.
+- **The mandatory ADR-0008 analytics saga projection is out of this module's declared scope.**
+  ADR-0008 says building it "is mandatory, not optional... and must be delivered with M11, not
+  after it." This task's explicit brief scoped M11 to `services/ledger` and `services/psp-connector`
+  only; the projection is deferred, and until it exists the only way to see the saga's state is
+  this service's own `GET /api/refunds/{refundId}` plus direct inspection of each service's tables.
+
+### Happy path proof
+
+Measured on the live stack. Merchant seeded to `300.0000` by three settled payments, then a
+`60.00` refund requested against one of them with
+`--psp-connector.provider.refund-forced-outcome=COMPLETED`:
+
+| Measure | Result |
+|---|---|
+| balance before | `300.0000` |
+| `GET /api/refunds/{refundId}` | `COMPLETED` |
+| balance after | `240.0000` |
+| topics touched | `refund-requested`, `funds-reserved`, `refund-completed` |
+| `refund-failed` / `reservation-released` | not produced |
+
+The money left the balance once and stayed gone, which is what success looks like. Note also what
+the entry endpoint refused: a `120.00` refund against a `100.00` payment came back `400` with
+`"refund amount 120.00 (already requested 0) would exceed payment amount 100.00"` - the guard is at
+the edge, before any event is produced, so an impossible saga never starts.
+
+### Compensation proof
+
+The same flow with `--psp-connector.provider.refund-forced-outcome=DECLINED`, polling balance and
+saga state every 300ms so the intermediate state is visible rather than inferred:
+
+```
+t+0.1s   balance=240.0000   state=(none yet)
+t+0.5s   balance=210.0000   state=RESERVED     <- 30.00 withdrawn
+t+5.1s   balance=240.0000   state=RELEASED     <- compensation restored it
+```
+
+Event deltas across the run: `refunds.refund-failed.v1` +1, `refunds.reservation-released.v1` +1.
+An earlier run of the same drill ended `RELEASED` at amount `45.0000`.
+
+**For 4.6 seconds this merchant's balance was wrong.** Not stale, not eventually-consistent in the
+hand-wavy sense - actually, observably 30.00 short, and a dashboard reading it in that window would
+have shown the wrong number. That interval is the price of choreography, and the reason the saga
+tracks state at all: `RESERVED` is a real state a refund can be found in, not a transient the
+system pretends does not exist.
+
+**There is no rollback here, and there could not be.** The reservation was committed to Postgres in
+its own transaction. By the time the provider declined, that transaction was long closed - possibly
+on a different instance, certainly outside any shared scope. The only way to undo it is a *new
+forward action* that reverses the effect: consume `refund-failed`, release the reservation, credit
+the balance back, emit `reservation-released`. Compensation is not rollback; it is a second write
+that happens to restore the first one's invariant.
+
+Which is why idempotency matters more here than anywhere else in the project. **Releasing a
+reservation once restores the money; releasing it twice invents money.** A redelivered
+`refund-failed` - from a rebalance, a replay, an aborted transaction - must be a no-op, and that is
+enforced the M5 way, on the inbound envelope `eventId`, with both the check-first and
+constraint-race paths covered.

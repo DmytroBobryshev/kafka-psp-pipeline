@@ -1,0 +1,48 @@
+{
+  "type": "record",
+  "name": "RefundFailed",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of refunds.refund-failed.v1 (M11). Two distinct producers publish this same event shape, one at each of the saga's two decision points, per docs/PLAN.md's M11 brief: (1) the ledger, when refunds.refund-requested.v1 is consumed and the merchant's balance cannot cover the amount - no reservation is ever made, ADR-0006 category B, a business outcome, not an error; (2) psp-connector, when the (simulated) provider declines or permanently fails a refund it was asked to execute after a successful reservation - also category B. The ledger consumes this same topic for compensation (services/ledger/README.md's M11 section explains why that is a bounded, terminating exception to ADR-0008 rule 7, not an unbounded cycle). merchantId is the record key (ADR-0003).",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope",
+      "doc": "envelope.aggregateId = refundId. envelope.causationId = the inbound event that led to this failure - refunds.refund-requested.v1's eventId for the insufficient-balance path, refunds.funds-reserved.v1's eventId for the provider-decline path."
+    },
+    {
+      "name": "refundId",
+      "type": "string",
+      "doc": "Correlates back to the same refund throughout the saga."
+    },
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "The payment the refund was for (UUID string form)."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "IS the record key (ADR-0003)."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 4
+      },
+      "doc": "The amount that failed to be refunded."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "doc": "ISO-4217 three-letter currency code."
+    },
+    {
+      "name": "reason",
+      "type": "string",
+      "doc": "Machine-readable failure reason: 'INSUFFICIENT_BALANCE' (ledger, no reservation ever made) or 'PROVIDER_DECLINED' (psp-connector, after a successful reservation - see the forced-outcome property documented in services/psp-connector/README.md's M11 section for how the orchestrator drives this path deterministically)."
+    }
+  ]
+}

@@ -93,6 +93,11 @@ psp-connector:
   kafka:
     payment-requested-topic: payments.payment-requested.v1
     payment-status-changed-topic: payments.payment-status-changed.v1
+    # M11: refunds.funds-reserved.v1 is consumed (config.RefundKafkaConsumerConfig);
+    # refund-completed/refund-failed are produced (adapters.out.kafka.KafkaRefundStatusPublisher).
+    funds-reserved-topic: refunds.funds-reserved.v1
+    refund-completed-topic: refunds.refund-completed.v1
+    refund-failed-topic: refunds.refund-failed.v1
   # schema-registry.url is environment-specific (M9 Phase 1) - see application-docker-compose.yml.
   # Read by config.KafkaConsumerConfig to build the payments.payment-requested.v1 consumer's
   # KafkaAvroDeserializer. Outbound payments.payment-status-changed.v1 stays JSON (unaffected).
@@ -115,6 +120,15 @@ psp-connector:
     # disables deliberate duplicate emission entirely, matching M4 behaviour. Override for the M5
     # replay-proof experiment, e.g. --psp-connector.provider.duplicate-rate=0.2.
     duplicate-rate: 0
+
+    # M11: refund path. Reuses the min/max/forced latency knobs above; a separate, two-way outcome
+    # vocabulary (see SimulatedPaymentProviderAdapter.RefundForcedOutcome).
+    refund-decline-rate: 0.10
+    # NONE = use refund-decline-rate above. THE property the orchestrator forces to drive the two
+    # M11 saga proofs deterministically:
+    #   --psp-connector.provider.refund-forced-outcome=COMPLETED   (happy-path proof)
+    #   --psp-connector.provider.refund-forced-outcome=DECLINED    (compensation proof)
+    refund-forced-outcome: NONE
 
 # No datasource configured here on purpose - see application-docker-compose.yml. Running this
 # service without an active profile and without a database will fail to start

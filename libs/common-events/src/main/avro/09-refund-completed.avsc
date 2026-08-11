@@ -1,0 +1,48 @@
+{
+  "type": "record",
+  "name": "RefundCompleted",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of refunds.refund-completed.v1 (M11). Produced by psp-connector after it executes a refund against the (simulated) provider and the provider reports success. Consumed by the ledger, which converts the earlier reservation into a permanent DEBIT ledger entry (RESERVED -> COMPLETED in the saga state machine) WITHOUT a further balance change - the balance was already moved at reservation time; settlement only makes it permanent and produces the audit-trail ledger.ledger-entry-recorded.v1 entry. merchantId is the record key (ADR-0003).",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope",
+      "doc": "envelope.aggregateId = refundId. envelope.causationId = the inbound refunds.funds-reserved.v1 event's own eventId."
+    },
+    {
+      "name": "refundId",
+      "type": "string",
+      "doc": "Correlates back to the same refund throughout the saga."
+    },
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "The payment that was refunded (UUID string form)."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "IS the record key (ADR-0003)."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 4
+      },
+      "doc": "The refunded amount."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "doc": "ISO-4217 three-letter currency code."
+    },
+    {
+      "name": "providerReference",
+      "type": "string",
+      "doc": "The (simulated) provider's own reference for this refund (UUID string form) - the refund-path equivalent of payments.payment-status-changed.v1's providerReference, persisted in psp-connector's refund_attempts table for audit."
+    }
+  ]
+}

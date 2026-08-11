@@ -3,6 +3,7 @@ package com.example.psp.pspconnector.adapters.out.http;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.psp.pspconnector.adapters.out.http.SimulatedPaymentProviderAdapter.ForcedOutcome;
+import com.example.psp.pspconnector.adapters.out.http.SimulatedPaymentProviderAdapter.RefundForcedOutcome;
 import com.example.psp.pspconnector.config.ProviderSimulationProperties;
 import com.example.psp.pspconnector.domain.model.Money;
 import com.example.psp.pspconnector.domain.model.ProviderResult;
@@ -57,6 +58,7 @@ class SimulatedPaymentProviderAdapterTest {
     }
 
     private static ProviderSimulationProperties properties(double duplicateRate) {
-        return new ProviderSimulationProperties(0, 1, 0.0, 0.0, 0, ForcedOutcome.APPROVED, duplicateRate);
+        return new ProviderSimulationProperties(
+                0, 1, 0.0, 0.0, 0, ForcedOutcome.APPROVED, duplicateRate, 0.0, RefundForcedOutcome.NONE);
     }
 }

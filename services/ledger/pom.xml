@@ -31,10 +31,20 @@
       <groupId>com.example.psp</groupId>
       <artifactId>common-events</artifactId>
     </dependency>
+    <!-- M11: RFC 7807 ProblemDetail error handling (GlobalExceptionHandler) for the new
+         GET /api/refunds/{refundId} endpoint - same convention payment-api already uses. Without
+         this, a NoSuchElementException (an unknown refundId) falls through to Spring Boot's
+         generic 500 error page instead of a proper 404. The M8 DLQ replay endpoint this service's
+         web dependency was added for will use the same handler. -->
+    <dependency>
+      <groupId>com.example.psp</groupId>
+      <artifactId>common-web</artifactId>
+    </dependency>
 
-    <!-- Web + actuator: no business REST endpoints (ADR-0004 - inter-service traffic is
-         Kafka-only), but actuator health/info/metrics needs a web server to expose HTTP, and the
-         M8 DLQ replay endpoint (payments.payment-status-changed.v1.ledger.dlq) will live here. -->
+    <!-- Web + actuator: no business REST endpoints through M7 (ADR-0004 - inter-service traffic
+         is Kafka-only), but actuator health/info/metrics needs a web server to expose HTTP; M11
+         adds GET /api/refunds/{refundId}, and the M8 DLQ replay endpoint
+         (payments.payment-status-changed.v1.ledger.dlq) will live here too. -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-web</artifactId>

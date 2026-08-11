@@ -85,6 +85,16 @@ SUBJECTS=(
   # against - and never registers - a schema. The subject below governs the PUT (upsert) shape
   # only.
   "merchants.merchant-config-changed.v1-value|BACKWARD"
+
+  # M11: the refund saga (choreography, ADR-0008). refunds.*.v1 has no JSON history to migrate -
+  # every one of these subjects is born Avro, same "born, not migrated" story as
+  # merchants.merchant-config-changed.v1-value above. See services/ledger/README.md and
+  # services/psp-connector/README.md's M11 sections for producers/consumers per topic.
+  "refunds.refund-requested.v1-value|BACKWARD"
+  "refunds.funds-reserved.v1-value|BACKWARD"
+  "refunds.refund-completed.v1-value|BACKWARD"
+  "refunds.refund-failed.v1-value|BACKWARD"
+  "refunds.reservation-released.v1-value|BACKWARD"
 )
 
 echo "Setting compatibility for ${#SUBJECTS[@]} subject(s) ..."

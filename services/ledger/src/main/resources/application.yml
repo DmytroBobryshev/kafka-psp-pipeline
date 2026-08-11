@@ -94,6 +94,18 @@ ledger:
     payment-status-changed-topic: payments.payment-status-changed.v1
     ledger-entry-recorded-topic: ledger.ledger-entry-recorded.v1
 
+    # M11: the refund saga's five topics (ADR-0008). refund-requested/completed/failed are
+    # consumed (config.RefundKafkaConsumerConfig); funds-reserved/refund-failed/
+    # reservation-released are produced (adapters.out.kafka.KafkaRefundEventPublisher).
+    # refund-failed-topic is BOTH - see application.ReleaseRefundUseCase's javadoc for why
+    # consuming a topic this service also publishes to is a deliberate, bounded exception to
+    # ADR-0008 rule 7.
+    refund-requested-topic: refunds.refund-requested.v1
+    funds-reserved-topic: refunds.funds-reserved.v1
+    refund-completed-topic: refunds.refund-completed.v1
+    refund-failed-topic: refunds.refund-failed.v1
+    reservation-released-topic: refunds.reservation-released.v1
+
     # The transactional.id prefix. DefaultKafkaProducerFactory appends its own suffix to build the
     # actual transactional.id, so what must be stable is this prefix. Derived from instance-id
     # above rather than randomised per boot, because initTransactions() fences zombies by bumping
@@ -101,6 +113,14 @@ ledger:
     # producerId at epoch 0 and fences nothing at all, silently. Full explanation in
     # config.KafkaProducerConfig.
     transactional-id-prefix: ledger-tx-${ledger.instance-id}-
+
+  # M11: the TTL sweep (ADR-0008 rule 6). See adapters.in.scheduler.ReservationTtlSweeper's
+  # javadoc for why these live under ledger.* rather than ADR-0008's bare
+  # refund.reservation.ttl, and for the "wrong for a real cluster, right for a demo" 2-minute
+  # default.
+  refund:
+    reservation-ttl: PT2M
+    sweep-interval: PT10S
 
 # No datasource configured here on purpose - see application-docker-compose.yml. Running this
 # service without an active profile and without a database will fail to start

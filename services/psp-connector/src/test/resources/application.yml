@@ -32,6 +32,10 @@ psp-connector:
   kafka:
     payment-requested-topic: payments.payment-requested.v1
     payment-status-changed-topic: payments.payment-status-changed.v1
+    # M11: only PRESENCE matters for a context-load test, not reachability.
+    funds-reserved-topic: refunds.funds-reserved.v1
+    refund-completed-topic: refunds.refund-completed.v1
+    refund-failed-topic: refunds.refund-failed.v1
   # M9 Phase 1: KafkaAvroDeserializer only resolves this lazily (on first poll() that actually
   # needs to fetch/cache a schema) - PspConnectorApplicationTests never publishes to the topic, so
   # this value only needs to be present, not reachable.
@@ -45,3 +49,5 @@ psp-connector:
     forced-latency-ms: 0
     forced-outcome: NONE
     duplicate-rate: 0.0
+    refund-decline-rate: 0.0
+    refund-forced-outcome: NONE

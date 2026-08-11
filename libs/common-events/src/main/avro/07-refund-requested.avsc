@@ -1,0 +1,49 @@
+{
+  "type": "record",
+  "name": "RefundRequested",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of refunds.refund-requested.v1 (M11). Entry point of the refund saga (ADR-0008, choreography - no orchestrator): payment-api validates the refund against the original payment, writes a local refund row plus an outbox row in one Postgres transaction, and Debezium relays this event out - same M6 outbox mechanics as payments.payment-requested.v1, applied to a second aggregate. refundId is envelope.aggregateId; merchantId is the record key (ADR-0003: refunds.*.v1 keyed by merchantId, 6 partitions - every step of one merchant's refund saga serializes against that merchant's ledger balance). Born Avro - refunds.* has no JSON history to migrate (docs/diagrams/topic-map.md). Registered under Schema Registry subject 'refunds.refund-requested.v1-value' (TopicNameStrategy, ADR-0001), BACKWARD compatibility.",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope",
+      "doc": "envelope.aggregateId = refundId, envelope.aggregateType = 'refund'. Root envelope (no causationId) - this is where the saga begins."
+    },
+    {
+      "name": "refundId",
+      "type": "string",
+      "doc": "UUID string form, minted by payment-api. The saga's correlation id end to end - every refunds.*.v1 event for this refund carries the same refundId, since cross-topic ordering is not guaranteed (ADR-0003) and each service's saga-state table is keyed on it."
+    },
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "The payment being refunded (UUID string form). Carried through the whole saga for audit and for the M17 refund tracker's payment-to-refund linkage."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "The owning merchant; IS the record key (ADR-0003) - every refunds.*.v1 event for one merchant lands on one partition, in order, so the ledger has a single in-flight writer per balance across the whole saga, same invariant M7 relies on for payments.payment-status-changed.v1."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 4
+      },
+      "doc": "Amount to refund. Generates java.math.BigDecimal (enableDecimalLogicalType=true)."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "doc": "ISO-4217 three-letter currency code."
+    },
+    {
+      "name": "reason",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Free-text reason supplied by the caller (e.g. 'customer requested', 'duplicate charge'). Optional - never required for the saga to proceed."
+    }
+  ]
+}

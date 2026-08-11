@@ -597,3 +597,117 @@ VALUE (first 16 bytes): 00 00 00 00 02 48 30 31 39 66 66 32 33 35 2d 34
 
 Downstream (ledger, webhook-notifier) is documented in their own READMEs' M9 Phase 2 sections; the
 balance row and webhook delivery-attempt document produced by this exact run are captured there.
+
+## M11 - Refund saga (choreography)
+
+Implements [ADR-0008](../../docs/adr/0008-saga-choreography.md): no orchestrator. This service's
+role in the saga is the execution step - it consumes `refunds.funds-reserved.v1`, executes the
+refund against the (simulated) provider, and publishes the outcome. `services/ledger/README.md`'s
+M11 section owns the reservation/settlement/compensation/TTL state machine; this section owns the
+execution step and the property that drives it.
+
+### Sequence - both paths
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant LED as ledger
+    participant K as Kafka
+    participant PSP as psp-connector
+    participant PROV as Acquirer - simulated
+
+    LED->>K: refunds.funds-reserved.v1 key=merchantId
+    K-->>PSP: refunds.funds-reserved.v1
+    PSP->>PSP: dedup on inbound eventId (refund_attempts, M5 level 1)
+    PSP->>PROV: refund(refundId, paymentId, merchantId, amount)
+
+    alt provider completes
+        PROV-->>PSP: COMPLETED + providerReference
+        PSP->>PSP: record refund_attempts row
+        PSP->>K: refunds.refund-completed.v1 key=merchantId
+        K-->>LED: (ledger settles - see its README)
+    else provider declines
+        PROV-->>PSP: DECLINED + providerReference
+        Note over PSP: ADR-0006 category B - a business outcome,<br/>not a retry and not a DLQ record
+        PSP->>PSP: record refund_attempts row
+        PSP->>K: refunds.refund-failed.v1 key=merchantId reason=PROVIDER_DECLINED
+        K-->>LED: (ledger compensates - see its README)
+    end
+```
+
+### Topic / key table
+
+| Topic | Key | Direction | Why this key (ADR-0003) |
+|---|---|---|---|
+| `refunds.funds-reserved.v1` | `merchantId` | in | Every saga step for one merchant is ordered against the ledger's single-writer balance |
+| `refunds.refund-completed.v1` | `merchantId` | out | Same reason - the ledger's settlement listener needs merchant order |
+| `refunds.refund-failed.v1` | `merchantId` | out (this service is one of two producers - see `services/ledger/README.md`'s M11 section) | Same reason |
+
+### The forceable property
+
+**`psp-connector.provider.refund-forced-outcome`** (values `NONE` / `COMPLETED` / `DECLINED`,
+default `NONE`) - THE property the orchestrator forces to drive the saga's two deterministic
+proofs below, mirroring the payment path's `psp-connector.provider.forced-outcome`:
+
+```
+--psp-connector.provider.refund-forced-outcome=COMPLETED   # happy-path proof
+--psp-connector.provider.refund-forced-outcome=DECLINED    # compensation proof
+```
+
+`NONE` falls back to `psp-connector.provider.refund-decline-rate` (default `0.10`) for a randomised
+run. Both reuse the payment path's latency knobs (`min-latency-ms` / `max-latency-ms` /
+`forced-latency-ms`) - one simulated acquirer, one latency model
+(`adapters.out.http.SimulatedPaymentProviderAdapter#refund`).
+
+**Deliberately no refund timeout.** `RefundOutcome` is two-way (`COMPLETED` / `DECLINED`), unlike
+the payment path's three-way `ProviderOutcome`. The module brief's saga needs exactly the two
+decisive outcomes to prove happy-path and compensation; a modelled refund timeout would need its
+own retry-chain-and-DLQ treatment (M8 scope) to be meaningful, and would not exercise any part of
+this saga that a decline does not already exercise (both feed `refunds.refund-failed.v1`; a
+timeout would just add ADR-0006 category A plumbing this module does not otherwise touch).
+
+### Idempotency
+
+Only M5 **level 1** (replay/consumer idempotency, keyed on the inbound `refunds.funds-reserved.v1`
+event's own `eventId`) is implemented here - `domain.port.RefundAttemptLogRepository`, backed by
+`refund_attempts.causation_event_id UNIQUE` (`db/migration/V3__create_refund_attempts_table.sql`),
+check-first (`existsByInboundEventId`) plus constraint-race (`tryRecord` returning `false`, never
+throwing). **Level 2 (duplicate provider callback, keyed on a provider-minted id) is deliberately
+not replicated** for the refund path: the payment path's level 2 exists to catch
+`SimulatedPaymentProviderAdapter`'s deliberate duplicate-callback simulation
+(`duplicate-rate`), which this module does not extend to `refund()` - there is exactly one call to
+the provider per non-duplicate inbound event, and level 1 alone is sufficient to make that call
+happen at most once. A future module could add it back with the same two-constraint shape
+`payment_attempts` already demonstrates, if the refund path ever needs to simulate provider-side
+callback duplication too.
+
+### Known compromises
+
+- **No refund timeout / retry chain** - see "The forceable property" above.
+- **Level 2 idempotency not replicated** - see "Idempotency" above.
+- **No M8 DLQ for the three refund listeners' failure path** - same documented gap as this
+  service's M4/M5 listener; a `DefaultErrorHandler` with no custom retryable-exception
+  classification applies, so an unclassified exception is logged and skipped rather than parked
+  for replay.
+
+### Happy path proof
+
+With `--psp-connector.provider.refund-forced-outcome=COMPLETED`, a `60.00` refund consumed from
+`refunds.funds-reserved.v1` was executed at the simulated provider and published to
+`refunds.refund-completed.v1`. The ledger settled it and the merchant balance went `300.0000` ->
+`240.0000`, saga state `COMPLETED`. Full measurements in
+[ledger's README](../ledger/README.md#happy-path-proof), which owns the balance.
+
+### Compensation proof
+
+With `--psp-connector.provider.refund-forced-outcome=DECLINED`, the same flow produced
+`refunds.refund-failed.v1` instead, and the ledger's compensating listener released the
+reservation - balance dipping to `210.0000` and returning to `240.0000` within ~4.6s, ending
+`RELEASED`. Measurements in [ledger's README](../ledger/README.md#compensation-proof).
+
+**The role this service plays is worth stating precisely: a declined refund is not an error here.**
+Per ADR-0006 the provider answering "no" is a business outcome, so this service publishes
+`refund-failed` and commits its offset normally. It does not retry, does not DLQ, and does not
+throw. The failure event *is* the successful outcome of processing - the compensation it triggers
+downstream is a different service's concern, which is exactly what choreography means: this service
+knows the provider declined, and nothing at all about reservations or balances.

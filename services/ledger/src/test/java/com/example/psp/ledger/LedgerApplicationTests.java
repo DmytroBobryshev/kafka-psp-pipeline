@@ -22,7 +22,18 @@ import org.springframework.kafka.test.context.EmbeddedKafka;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @EmbeddedKafka(
         partitions = 1,
-        topics = {"payments.payment-status-changed.v1", "ledger.ledger-entry-recorded.v1"},
+        topics = {
+            "payments.payment-status-changed.v1",
+            "ledger.ledger-entry-recorded.v1",
+            // M11: the refund saga's five topics - three consumed, three produced (refund-failed
+            // is both), see config.RefundKafkaConsumerConfig and
+            // adapters.out.kafka.KafkaRefundEventPublisher.
+            "refunds.refund-requested.v1",
+            "refunds.funds-reserved.v1",
+            "refunds.refund-completed.v1",
+            "refunds.refund-failed.v1",
+            "refunds.reservation-released.v1"
+        },
         brokerProperties = {
             // A single embedded broker cannot satisfy the production defaults (RF 3 / min ISR 2)
             // for the internal transaction-state topic.

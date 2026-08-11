@@ -1,6 +1,7 @@
 package com.example.psp.pspconnector.config;
 
 import com.example.psp.pspconnector.adapters.out.http.SimulatedPaymentProviderAdapter.ForcedOutcome;
+import com.example.psp.pspconnector.adapters.out.http.SimulatedPaymentProviderAdapter.RefundForcedOutcome;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -28,6 +29,16 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *                        provider a second time. Default 0 preserves M4 behaviour: every call
  *                        gets a brand-new {@code providerEventId}, even for a paymentId seen
  *                        before.
+ * @param refundDeclineRate M11: probability (0.0-1.0) of a {@code DECLINED} outcome on
+ *                        {@code refund()} when {@code refundForcedOutcome} is {@code NONE}. Reuses
+ *                        {@code minLatencyMs}/{@code maxLatencyMs}/{@code forcedLatencyMs} above
+ *                        for simulated round-trip time - one simulated acquirer, one latency model,
+ *                        for both operations.
+ * @param refundForcedOutcome M11: THE property the orchestrator forces to drive the refund saga's
+ *                        two deterministic proofs. {@code NONE} uses {@code refundDeclineRate};
+ *                        {@code COMPLETED}/{@code DECLINED} force every {@code refund()} call to
+ *                        that outcome. See services/psp-connector/README.md's M11 section.
+ *                        Override: {@code --psp-connector.provider.refund-forced-outcome=DECLINED}.
  */
 @ConfigurationProperties(prefix = "psp-connector.provider")
 public record ProviderSimulationProperties(
@@ -37,7 +48,9 @@ public record ProviderSimulationProperties(
         double timeoutRate,
         long forcedLatencyMs,
         ForcedOutcome forcedOutcome,
-        double duplicateRate) {
+        double duplicateRate,
+        double refundDeclineRate,
+        RefundForcedOutcome refundForcedOutcome) {
 
     public ProviderSimulationProperties {
         if (minLatencyMs < 0 || maxLatencyMs < minLatencyMs) {
@@ -58,8 +71,15 @@ public record ProviderSimulationProperties(
             throw new IllegalArgumentException(
                     "duplicateRate must be within [0,1], got " + duplicateRate);
         }
+        if (refundDeclineRate < 0 || refundDeclineRate > 1.0) {
+            throw new IllegalArgumentException(
+                    "refundDeclineRate must be within [0,1], got " + refundDeclineRate);
+        }
         if (forcedOutcome == null) {
             forcedOutcome = ForcedOutcome.NONE;
+        }
+        if (refundForcedOutcome == null) {
+            refundForcedOutcome = RefundForcedOutcome.NONE;
         }
     }
 }

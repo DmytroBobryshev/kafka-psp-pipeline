@@ -191,6 +191,13 @@ class HexagonalArchitectureTest {
                         .haveSimpleNameEndingWith("LedgerEntry")
                         .or()
                         .haveSimpleNameEndingWith("MerchantBalance")
+                        // M11: the refund saga's domain model.
+                        .or()
+                        .haveSimpleNameEndingWith("RefundReservation")
+                        .or()
+                        .haveSimpleNameEndingWith("RefundSagaState")
+                        .or()
+                        .haveSimpleNameEndingWith("RefundRequest")
                         .should()
                         .resideInAPackage("..domain..")
                         .because("the domain model lives in domain/, whatever else is named after it");

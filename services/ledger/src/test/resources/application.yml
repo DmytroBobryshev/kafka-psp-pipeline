@@ -49,6 +49,16 @@ ledger:
   kafka:
     payment-status-changed-topic: payments.payment-status-changed.v1
     ledger-entry-recorded-topic: ledger.ledger-entry-recorded.v1
+    # M11: same five refunds.* topics as the main application.yml - only their PRESENCE matters
+    # for a context-load test, not their reachability (see the schema-registry.url note above).
+    refund-requested-topic: refunds.refund-requested.v1
+    funds-reserved-topic: refunds.funds-reserved.v1
+    refund-completed-topic: refunds.refund-completed.v1
+    refund-failed-topic: refunds.refund-failed.v1
+    reservation-released-topic: refunds.reservation-released.v1
     # Still a STABLE prefix, not a random one - the context-load test would pass either way, but a
     # random value here would quietly model the exact anti-pattern the module argues against.
     transactional-id-prefix: ledger-tx-test-
+  refund:
+    reservation-ttl: PT2M
+    sweep-interval: PT10S

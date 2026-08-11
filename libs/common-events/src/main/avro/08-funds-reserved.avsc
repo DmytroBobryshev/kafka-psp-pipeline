@@ -1,0 +1,43 @@
+{
+  "type": "record",
+  "name": "FundsReserved",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of refunds.funds-reserved.v1 (M11). Produced by the ledger after it consumes refunds.refund-requested.v1 and successfully reserves funds against the merchant's balance - a reservation row plus a balance effect, in one Postgres transaction (see services/ledger/README.md's M11 section). Consumed by psp-connector, which executes the refund at the (simulated) provider only after seeing this event - the reservation-before-execution ordering is what makes the compensation path meaningful: nothing is ever executed at the provider for a refund the merchant cannot afford. merchantId is the record key (ADR-0003), same as every refunds.*.v1 topic.",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope",
+      "doc": "envelope.aggregateId = refundId. envelope.causationId = the inbound refunds.refund-requested.v1 event's own eventId - the causal chain the M17 refund tracker's saga projection walks."
+    },
+    {
+      "name": "refundId",
+      "type": "string",
+      "doc": "Correlates back to refunds.refund-requested.v1 - the saga's key throughout, per ADR-0003's note that cross-topic ordering does not hold."
+    },
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "The payment being refunded (UUID string form)."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "IS the record key (ADR-0003)."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 4
+      },
+      "doc": "The reserved amount - identical to the requested amount; the ledger reserves in full or not at all (no partial reservations in this module)."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "doc": "ISO-4217 three-letter currency code."
+    }
+  ]
+}
