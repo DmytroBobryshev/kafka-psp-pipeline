@@ -1,5 +1,6 @@
 package com.example.psp.ledger.adapters.in.kafka;
 
+import com.example.psp.common.events.avro.PaymentStatusChanged;
 import com.example.psp.ledger.application.RecordLedgerEntryUseCase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -84,13 +85,13 @@ public class PaymentStatusChangedListener {
             topics = "${ledger.kafka.payment-status-changed-topic}",
             containerFactory = "paymentStatusChangedKafkaListenerContainerFactory")
     @Transactional("kafkaTransactionManager")
-    public void onMessage(PaymentStatusChangedEvent event) {
+    public void onMessage(PaymentStatusChanged event) {
         log.info(
                 "Consumed payment-status-changed eventId={} paymentId={} merchantId={} status={}",
-                event.envelope().eventId(),
-                event.paymentId(),
-                event.merchantId(),
-                event.status());
+                event.getEnvelope().getEventId(),
+                event.getPaymentId(),
+                event.getMerchantId(),
+                event.getStatus());
 
         useCase.execute(mapper.toCommand(event));
 

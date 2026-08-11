@@ -54,11 +54,16 @@ management:
 webhook-notifier:
   kafka:
     payment-status-changed-topic: payments.payment-status-changed.v1
-    delivery-requested-topic: webhooks.webhook-delivery-requested.v1
-    retry-5s-topic: webhooks.webhook-delivery-requested.v1.retry.5s
-    retry-1m-topic: webhooks.webhook-delivery-requested.v1.retry.1m
-    retry-15m-topic: webhooks.webhook-delivery-requested.v1.retry.15m
-    dlq-topic: webhooks.webhook-delivery-requested.v1.dlq
+    # M9 Phase 2: the delivery chain moved to a NEW v2 topic set (Avro, base + 3 retry tiers +
+    # dlq) rather than cutting v1 in place - see the README's M9 Phase 2 section for why. The old
+    # v1 chain (including v1.dlq, holding M8's poisoned-record evidence) is retired: still
+    # present in the cluster, still queryable by hand, but no longer produced or consumed by this
+    # service.
+    delivery-requested-topic: webhooks.webhook-delivery-requested.v2
+    retry-5s-topic: webhooks.webhook-delivery-requested.v2.retry.5s
+    retry-1m-topic: webhooks.webhook-delivery-requested.v2.retry.1m
+    retry-15m-topic: webhooks.webhook-delivery-requested.v2.retry.15m
+    dlq-topic: webhooks.webhook-delivery-requested.v2.dlq
     planner-group-id: webhook-notifier.planner.v1
     executor-group-id: webhook-notifier.executor.v1
 

@@ -494,3 +494,106 @@ and `config.KafkaProducerConfig` were not touched.
 `KafkaAutoCommitDriftConfig`) still deserializes this topic as JSON via the retired
 `PaymentRequestedEvent` type. It is off by default and out of M9 Phase 1's scope; running it
 against the live cluster now would poison-pill on every record. See those classes' javadoc.
+
+## M9 Phase 2 - producing Avro: `payments.payment-status-changed.v1`
+
+Phase 1 left this service's *outbound* topic on JSON ("`KafkaPaymentStatusPublisher` and
+`config.KafkaProducerConfig` were not touched"). Phase 2 closes that gap: this is now Avro +
+Schema Registry, produced by `adapters.out.kafka.PaymentStatusAvroEventFactory` (a plain factory
+method, not a MapStruct `@Mapper` - the same deliberate exception `payment-api`'s
+`PaymentAvroEventFactory` established in Phase 1) and `config.KafkaProducerConfig`'s
+`io.confluent.kafka.serializers.KafkaAvroSerializer` value-serializer, wired entirely through
+`application.yml` (`spring.kafka.producer.value-serializer` + `schema.registry.url` +
+`auto.register.schemas` in `properties`) since - unlike the inbound consumer - this producer needs
+no `ErrorHandlingDeserializer`-equivalent wrapper to configure by hand.
+
+**Why this is "the important one".** `payments.payment-requested.v1` (Phase 1) has exactly one
+producer and one consumer group. `payments.payment-status-changed.v1` has one producer
+(psp-connector, here) and **two** independent consumer groups - `ledger.v1` and
+`webhook-notifier.planner.v1` - both of which had to move to Avro in the same commit as this
+producer for any of the three services to keep working. See services/ledger/README.md's and
+services/webhook-notifier/README.md's M9 Phase 2 sections for the consumer side of the same
+cutover.
+
+### ADR-0001: still no `v2` topic, but the multi-consumer case gets a real answer
+
+Phase 1's `payments.payment-requested.v1` section already worked through the general argument
+(field-for-field identical Avro schema, no ADR-0001 breaking change, so no topic-version bump) and
+noted the honest gap: a hard cutover risks poison-pilling any consumer group that hits the old
+JSON backlog. Phase 1 accepted that risk because there was exactly one consumer, changed in
+lockstep. This topic has two, which is a materially different case worth stating rather than
+waving through with the same argument:
+
+- The schema is still field-for-field identical - the ADR-0001 breaking-change test still doesn't
+  fire.
+- Both consumers (`ledger.v1`, `webhook-notifier.planner.v1`) are owned by this same migration and
+  deployed in the same commit as this producer - not two independently-scheduled teams, which is
+  the scenario ADR-0001's `v1`/`v2` dual-write escape hatch is priced for.
+- Unlike Phase 1, this migration does not just *accept* the stale-JSON-backlog risk and log the
+  skips - it **drains** it: both consumer groups' committed offsets were reset to the topic's
+  current log-end (`kafka-consumer-groups --reset-offsets --to-latest`) BEFORE either service
+  restarted with the Avro consumer wired in. That is the "drain/consume-to-end first" option the
+  M9 Phase 2 brief offers as an alternative to accepting skips or cutting a `v2` topic - chosen
+  here specifically because the pre-existing JSON backlog was substantial (~700-1,300 records
+  across 12 partitions, left by every M4-M8 verification run) and this topic has enough
+  independent consumers that draining once, centrally, was simpler and safer than trusting every
+  consumer's `ErrorHandlingDeserializer` to skip cleanly through it.
+
+```bash
+docker exec kafka1 kafka-consumer-groups --bootstrap-server kafka1:9092,kafka2:9092,kafka3:9092 \
+  --group ledger.v1 --topic payments.payment-status-changed.v1 --reset-offsets --to-latest --execute
+docker exec kafka1 kafka-consumer-groups --bootstrap-server kafka1:9092,kafka2:9092,kafka3:9092 \
+  --group webhook-notifier.planner.v1 --topic payments.payment-status-changed.v1 --reset-offsets --to-latest --execute
+```
+
+Contrast with `ledger.ledger-entry-recorded.v1` (services/ledger/README.md) and
+`webhooks.webhook-delivery-requested.v1` (services/webhook-notifier/README.md), which each took a
+*different* one of the three documented strategies - deliberately, so this phase exercises all
+three rather than defaulting to one.
+
+### Idempotency key survives the format change (M5 - explicitly verified)
+
+M5's dedup key (`payment_attempts.inbound_event_id`) is the **inbound** `payments.payment-requested.v1`
+envelope's `eventId` - a Phase 1 concern, untouched by this phase (`ProcessPaymentRequestUseCase`,
+`PostgresAttemptLogRepository`, and `PaymentRequestedMapper` were not modified). It is unaffected
+by this producer's format change *by construction*, but the live end-to-end run below re-confirms
+it is still intact:
+
+```
+psql psp_connector=> SELECT payment_id, inbound_event_id, provider_event_id FROM payment_attempts
+                      WHERE payment_id='477d6b08-5f17-43a2-8915-62eb388d324c';
+ payment_id                           | inbound_event_id                     | provider_event_id
+ 477d6b08-5f17-43a2-8915-62eb388d324c | 019ff235-363f-76ef-b860-e8e12989cbab | 36d55aaa-8ec2-404c-8916-46eb30ddb9e4
+```
+
+`inbound_event_id` is the Avro-decoded `payments.payment-requested.v1` envelope `eventId`
+(`UUID.fromString(event.getEnvelope().getEventId())`, Phase 1) - present, well-formed, and under
+its unique constraint exactly as before.
+
+### End-to-end proof, live cluster
+
+```
+$ curl -X POST http://localhost:8085/api/payments \
+  -d '{"merchantId":"merchant-m9-phase2-e2e","amount":275.50,"currency":"EUR"}'
+HTTP 201 {"id":"477d6b08-5f17-43a2-8915-62eb388d324c", "status":"CREATED", ...}
+
+psp-connector log:
+  Consumed payment-requested paymentId=477d6b08-... merchantId=merchant-m9-phase2-e2e
+  Provider call paymentId=477d6b08-... outcome=APPROVED providerEventId=36d55aaa-8ec2-404c-8916-46eb30ddb9e4
+  Published payments.payment-status-changed.v1 paymentId=477d6b08-... merchantId=merchant-m9-phase2-e2e
+    status=SUCCEEDED partition=1 offset=107
+```
+
+Raw wire bytes at that offset (`kafka-console-consumer --print-key`, `xxd`):
+
+```
+KEY   = merchant-m9-phase2-e2e                          (plain text merchantId, ADR-0003)
+VALUE (first 16 bytes): 00 00 00 00 02 48 30 31 39 66 66 32 33 35 2d 34
+  00                magic byte
+  00 00 00 02        schema id 2 (payments.payment-status-changed.v1-value)
+  48 30 31 39 ...     Avro binary starts: 0x48 zigzag-decodes to length 36, followed by
+                       "019ff235-4bce-79a4-9818-83fd26cb7185" - envelope.eventId
+```
+
+Downstream (ledger, webhook-notifier) is documented in their own READMEs' M9 Phase 2 sections; the
+balance row and webhook delivery-attempt document produced by this exact run are captured there.

@@ -1,5 +1,6 @@
 package com.example.psp.webhooknotifier.adapters.in.kafka;
 
+import com.example.psp.common.events.avro.WebhookDeliveryRequested;
 import com.example.psp.webhooknotifier.application.ExecuteWebhookDeliveryUseCase;
 import com.example.psp.webhooknotifier.domain.model.RecordCoordinates;
 import com.example.psp.webhooknotifier.domain.model.RetryEnvelope;
@@ -61,15 +62,15 @@ public class WebhookDeliveryExecutorListener {
                 "${webhook-notifier.kafka.retry-15m-topic}"
             },
             containerFactory = "executorKafkaListenerContainerFactory")
-    public void onMessage(ConsumerRecord<String, WebhookDeliveryRequestedEvent> record, Acknowledgment ack) {
+    public void onMessage(ConsumerRecord<String, WebhookDeliveryRequested> record, Acknowledgment ack) {
         RetryEnvelope envelope = RetryHeaderCodec.decode(name -> headerAsString(record, name));
         RecordCoordinates coordinates =
                 new RecordCoordinates(record.topic(), record.partition(), record.offset(), Instant.ofEpochMilli(record.timestamp()));
 
         log.info(
                 "Consumed webhook-delivery-requested paymentId={} merchantId={} topic={} attempt={}",
-                record.value().paymentId(),
-                record.value().merchantId(),
+                record.value().getPaymentId(),
+                record.value().getMerchantId(),
                 record.topic(),
                 envelope.attemptCount());
 
@@ -91,8 +92,8 @@ public class WebhookDeliveryExecutorListener {
                                 log.error(
                                         "Failed to hand off webhook-delivery-requested paymentId={} merchantId={} "
                                                 + "topic={} - NOT acknowledging, record will be redelivered",
-                                        record.value().paymentId(),
-                                        record.value().merchantId(),
+                                        record.value().getPaymentId(),
+                                        record.value().getMerchantId(),
                                         record.topic(),
                                         ex);
                             }

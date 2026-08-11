@@ -1,5 +1,6 @@
 package com.example.psp.webhooknotifier.adapters.in.kafka;
 
+import com.example.psp.common.events.avro.PaymentStatusChanged;
 import com.example.psp.webhooknotifier.application.PlanWebhookDeliveryUseCase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,12 +40,12 @@ public class PaymentStatusChangedListener {
     @KafkaListener(
             topics = "${webhook-notifier.kafka.payment-status-changed-topic}",
             containerFactory = "plannerKafkaListenerContainerFactory")
-    public void onMessage(PaymentStatusChangedEvent event, Acknowledgment ack) {
+    public void onMessage(PaymentStatusChanged event, Acknowledgment ack) {
         log.info(
                 "Consumed payment-status-changed paymentId={} merchantId={} status={}",
-                event.paymentId(),
-                event.merchantId(),
-                event.status());
+                event.getPaymentId(),
+                event.getMerchantId(),
+                event.getStatus());
 
         useCase.execute(mapper.toCommand(event));
 

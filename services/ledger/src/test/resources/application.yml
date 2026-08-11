@@ -40,6 +40,12 @@ spring:
 ledger:
   instance-id: test
   fail-after-produce: false
+  # M9 Phase 2: KafkaAvroDeserializer/KafkaAvroSerializer only resolve this lazily (on first use
+  # that actually needs to fetch/register a schema) - LedgerApplicationTests never publishes or
+  # consumes a real record, so this value only needs to be present, not reachable (same note as
+  # psp-connector's test application.yml, M9 Phase 1).
+  schema-registry:
+    url: http://localhost:8081
   kafka:
     payment-status-changed-topic: payments.payment-status-changed.v1
     ledger-entry-recorded-topic: ledger.ledger-entry-recorded.v1

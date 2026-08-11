@@ -13,6 +13,7 @@ import java.util.concurrent.CompletableFuture;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
@@ -23,6 +24,25 @@ import org.springframework.stereotype.Component;
  * webhook delivery chain) and carries {@link RetryEnvelope} encoded as headers via
  * {@code domain.model.RetryHeaderCodec} - see {@code domain.model.RetryHeaderNames} for exactly
  * which headers and what each means.
+ *
+ * <h2>M9 Phase 2 - two templates, one publisher</h2>
+ *
+ * <p>{@code webhooks.webhook-delivery-requested.v2} and its three retry tiers are now Avro; the
+ * terminal {@code .v2.dlq} deliberately stays JSON (byte-tolerant) - see
+ * {@code config.KafkaProducerConfig}'s javadoc for the full reasoning:
+ * {@code io.confluent.kafka.serializers.KafkaAvroSerializer} cannot serialize the raw {@code byte[]}
+ * {@code DeadLetterPublishingRecoverer} republishes for a genuine poison pill (it needs an Avro
+ * schema for whatever it is handed), whereas Spring Kafka's own {@code JsonSerializer} special-cases
+ * a {@code byte[]} value and writes it through unchanged - the exact mechanism M8's "Poison pill
+ * proof" depends on. This class therefore holds two {@link KafkaTemplate} beans and picks one per
+ * {@link #send}, by destination topic: everything bound for {@link RetryChain#dlqTopic()} goes out
+ * through {@code webhookDeliveryDlqKafkaTemplate} using the hand-written JSON
+ * {@code adapters.out.kafka.WebhookDeliveryRequested} record (unchanged since M8); everything else
+ * goes out through {@code webhookDeliveryAvroKafkaTemplate} using the generated Avro record from
+ * {@link WebhookDeliveryAvroEventFactory}. A DLQ replay ({@code application.ReplayDlqUseCase})
+ * republishes onto {@link RetryChain#baseTopic()}, so it naturally takes the Avro path even though
+ * the record it read came off the JSON DLQ - the same "read tolerant, write governed" shape M9
+ * Phase 1's outbox adapter uses at a different boundary.
  *
  * <h2>Why {@link #publishDelayed} does not block</h2>
  *
@@ -48,18 +68,24 @@ public class KafkaWebhookDeliveryPublisher implements WebhookDeliveryPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(KafkaWebhookDeliveryPublisher.class);
 
-    private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final KafkaTemplate<String, Object> avroKafkaTemplate;
+    private final KafkaTemplate<String, Object> dlqKafkaTemplate;
     private final WebhookDeliveryEventMapper mapper;
+    private final WebhookDeliveryAvroEventFactory avroEventFactory;
     private final TaskScheduler taskScheduler;
     private final RetryChain retryChain;
 
     public KafkaWebhookDeliveryPublisher(
-            KafkaTemplate<String, Object> kafkaTemplate,
+            @Qualifier("webhookDeliveryAvroKafkaTemplate") KafkaTemplate<String, Object> avroKafkaTemplate,
+            @Qualifier("webhookDeliveryDlqKafkaTemplate") KafkaTemplate<String, Object> dlqKafkaTemplate,
             WebhookDeliveryEventMapper mapper,
+            WebhookDeliveryAvroEventFactory avroEventFactory,
             TaskScheduler webhookRetryTaskScheduler,
             RetryChain retryChain) {
-        this.kafkaTemplate = kafkaTemplate;
+        this.avroKafkaTemplate = avroKafkaTemplate;
+        this.dlqKafkaTemplate = dlqKafkaTemplate;
         this.mapper = mapper;
+        this.avroEventFactory = avroEventFactory;
         this.taskScheduler = webhookRetryTaskScheduler;
         this.retryChain = retryChain;
     }
@@ -89,20 +115,27 @@ public class KafkaWebhookDeliveryPublisher implements WebhookDeliveryPublisher {
     }
 
     private CompletableFuture<Void> send(String topic, WebhookDeliveryCommand command, RetryEnvelope envelope) {
-        WebhookDeliveryRequested event = mapper.toEvent(command);
+        boolean dlqBound = topic.equals(retryChain.dlqTopic());
+
+        // M9 Phase 2: the DLQ stays on the hand-written JSON record + the byte-tolerant template;
+        // the base topic and every retry tier go out as the generated Avro record instead - see
+        // this class's javadoc.
+        Object event = dlqBound ? mapper.toEvent(command) : avroEventFactory.toAvro(command);
+        KafkaTemplate<String, Object> template = dlqBound ? dlqKafkaTemplate : avroKafkaTemplate;
+
         ProducerRecord<String, Object> record = new ProducerRecord<>(topic, command.merchantId(), event);
 
         RetryHeaderCodec.encode(envelope)
                 .forEach((name, value) -> record.headers().add(name, value.getBytes(StandardCharsets.UTF_8)));
 
-        if (topic.equals(retryChain.dlqTopic())) {
+        if (dlqBound) {
             // x-failed-at: only meaningful on the terminal DLQ record, per ADR-0006.
             record.headers()
                     .add(RetryHeaderNames.FAILED_AT, Instant.now().toString().getBytes(StandardCharsets.UTF_8));
         }
 
         CompletableFuture<Void> result = new CompletableFuture<>();
-        kafkaTemplate
+        template
                 .send(record)
                 .whenComplete(
                         (sendResult, ex) -> {

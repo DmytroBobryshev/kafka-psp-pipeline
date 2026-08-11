@@ -1,10 +1,14 @@
 package com.example.psp.ledger.config;
 
-import com.example.psp.ledger.adapters.in.kafka.PaymentStatusChangedEvent;
+import com.example.psp.common.events.avro.PaymentStatusChanged;
+import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
+import io.confluent.kafka.serializers.KafkaAvroDeserializer;
+import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,7 +17,6 @@ import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.listener.DefaultAfterRollbackProcessor;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
-import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.kafka.transaction.KafkaTransactionManager;
 import org.springframework.util.backoff.FixedBackOff;
 
@@ -37,8 +40,9 @@ import org.springframework.util.backoff.FixedBackOff;
 public class KafkaConsumerConfig {
 
     @Bean
-    public ConsumerFactory<String, PaymentStatusChangedEvent> paymentStatusChangedConsumerFactory(
-            KafkaProperties kafkaProperties) {
+    public ConsumerFactory<String, PaymentStatusChanged> paymentStatusChangedConsumerFactory(
+            KafkaProperties kafkaProperties,
+            @Value("${ledger.schema-registry.url}") String schemaRegistryUrl) {
         Map<String, Object> props = kafkaProperties.buildConsumerProperties(null);
 
         // --- isolation.level = read_committed -----------------------------------------------------
@@ -87,24 +91,27 @@ public class KafkaConsumerConfig {
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
         props.put(ErrorHandlingDeserializer.KEY_DESERIALIZER_CLASS, StringDeserializer.class);
-        props.put(ErrorHandlingDeserializer.VALUE_DESERIALIZER_CLASS, JsonDeserializer.class);
-        // psp-connector publishes with spring.json.add.type.headers=false (ADR-0002: headers carry
-        // only traceparent/event-id/event-type/aggregate-id, never a Java FQCN), so the target type
-        // is configured here instead of read from a header.
-        props.put(JsonDeserializer.VALUE_DEFAULT_TYPE, PaymentStatusChangedEvent.class.getName());
-        props.put(JsonDeserializer.USE_TYPE_INFO_HEADERS, false);
-        props.put(JsonDeserializer.TRUSTED_PACKAGES, "com.example.psp.*");
+        props.put(ErrorHandlingDeserializer.VALUE_DESERIALIZER_CLASS, KafkaAvroDeserializer.class);
+        // M9 Phase 2: payments.payment-status-changed.v1 carries the Confluent wire format now -
+        // same KafkaAvroDeserializer + specific.avro.reader=true pattern psp-connector's
+        // config.KafkaConsumerConfig established in M9 Phase 1 for payments.payment-requested.v1,
+        // still wrapped in the SAME ErrorHandlingDeserializer (ADR-0006 category C, unchanged) so
+        // a bad record is handed to the AfterRollbackProcessor below rather than looping forever -
+        // more important here than anywhere else, since without the wrapper each failed attempt
+        // would also open and abort a Kafka transaction.
+        props.put(AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, schemaRegistryUrl);
+        props.put(KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, true);
 
         return new DefaultKafkaConsumerFactory<>(props);
     }
 
     @Bean
-    public ConcurrentKafkaListenerContainerFactory<String, PaymentStatusChangedEvent>
+    public ConcurrentKafkaListenerContainerFactory<String, PaymentStatusChanged>
             paymentStatusChangedKafkaListenerContainerFactory(
                     @Qualifier("paymentStatusChangedConsumerFactory")
-                            ConsumerFactory<String, PaymentStatusChangedEvent> consumerFactory,
+                            ConsumerFactory<String, PaymentStatusChanged> consumerFactory,
                     KafkaTransactionManager<String, Object> kafkaTransactionManager) {
-        ConcurrentKafkaListenerContainerFactory<String, PaymentStatusChangedEvent> factory =
+        ConcurrentKafkaListenerContainerFactory<String, PaymentStatusChanged> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);
 

@@ -29,3 +29,9 @@ spring:
     # transactional.id is whichever broker leads the hashed __transaction_state partition, and it
     # is generally not the same broker as any data-partition leader.
     bootstrap-servers: localhost:29092,localhost:29093,localhost:29094
+
+# M9 Phase 2: ledger runs on the HOST (java -jar ...), so it reaches Schema Registry via its
+# published host port - localhost:8081, same convention as psp-connector's equivalent entry.
+ledger:
+  schema-registry:
+    url: http://localhost:8081

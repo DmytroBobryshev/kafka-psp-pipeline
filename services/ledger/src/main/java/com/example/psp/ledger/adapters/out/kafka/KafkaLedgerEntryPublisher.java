@@ -53,7 +53,7 @@ public class KafkaLedgerEntryPublisher implements LedgerEntryPublisher {
     private static final String AGGREGATE_TYPE = "merchant";
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
-    private final LedgerEntryEventMapper eventMapper;
+    private final LedgerEntryAvroEventFactory avroEventFactory;
     private final String topic;
 
     /**
@@ -68,11 +68,11 @@ public class KafkaLedgerEntryPublisher implements LedgerEntryPublisher {
 
     public KafkaLedgerEntryPublisher(
             KafkaTemplate<String, Object> kafkaTemplate,
-            LedgerEntryEventMapper eventMapper,
+            LedgerEntryAvroEventFactory avroEventFactory,
             @Value("${ledger.kafka.ledger-entry-recorded-topic}") String topic,
             @Value("${ledger.fail-after-produce:false}") boolean awaitAppend) {
         this.kafkaTemplate = kafkaTemplate;
-        this.eventMapper = eventMapper;
+        this.avroEventFactory = avroEventFactory;
         this.topic = topic;
         this.awaitAppend = awaitAppend;
     }
@@ -91,7 +91,8 @@ public class KafkaLedgerEntryPublisher implements LedgerEntryPublisher {
                         SOURCE,
                         entry.getTraceId(),
                         entry.getCorrelationId());
-        LedgerEntryRecorded event = eventMapper.toEvent(envelope, entry, balanceAfter);
+        com.example.psp.common.events.avro.LedgerEntryRecorded event =
+                avroEventFactory.toAvro(envelope, entry, balanceAfter);
 
         ProducerRecord<String, Object> record =
                 new ProducerRecord<>(topic, entry.getMerchantId(), event);
@@ -122,8 +123,8 @@ public class KafkaLedgerEntryPublisher implements LedgerEntryPublisher {
                                                 topic,
                                                 entry.getId(),
                                                 entry.getMerchantId(),
-                                                event.amount(),
-                                                event.balanceAfter(),
+                                                event.getAmount(),
+                                                event.getBalanceAfter(),
                                                 metadata.partition(),
                                                 metadata.offset());
                                     }

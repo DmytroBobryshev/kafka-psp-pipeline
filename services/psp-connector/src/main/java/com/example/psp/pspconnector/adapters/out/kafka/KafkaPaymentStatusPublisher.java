@@ -51,15 +51,15 @@ public class KafkaPaymentStatusPublisher implements PaymentStatusPublisher {
     private static final String AGGREGATE_TYPE = "payment";
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
-    private final PaymentStatusEventMapper eventMapper;
+    private final PaymentStatusAvroEventFactory avroEventFactory;
     private final String topic;
 
     public KafkaPaymentStatusPublisher(
             KafkaTemplate<String, Object> kafkaTemplate,
-            PaymentStatusEventMapper eventMapper,
+            PaymentStatusAvroEventFactory avroEventFactory,
             @Value("${psp-connector.kafka.payment-status-changed-topic}") String topic) {
         this.kafkaTemplate = kafkaTemplate;
-        this.eventMapper = eventMapper;
+        this.avroEventFactory = avroEventFactory;
         this.topic = topic;
     }
 
@@ -84,7 +84,7 @@ public class KafkaPaymentStatusPublisher implements PaymentStatusPublisher {
                         SOURCE,
                         attempt.getTraceId(),
                         attempt.getCorrelationId());
-        PaymentStatusChanged event = eventMapper.toEvent(envelope, attempt);
+        com.example.psp.common.events.avro.PaymentStatusChanged event = avroEventFactory.toAvro(envelope, attempt);
 
         // Key = merchantId, NOT paymentId - see this class's javadoc.
         ProducerRecord<String, Object> record =
@@ -112,7 +112,7 @@ public class KafkaPaymentStatusPublisher implements PaymentStatusPublisher {
                                         topic,
                                         attempt.getPaymentId(),
                                         attempt.getMerchantId(),
-                                        event.status(),
+                                        event.getStatus(),
                                         metadata.partition(),
                                         metadata.offset());
                             }

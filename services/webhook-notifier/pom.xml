@@ -55,6 +55,21 @@
       <artifactId>spring-kafka</artifactId>
     </dependency>
 
+    <!-- M9 Phase 2: payments.payment-status-changed.v1 (planner inbound) and
+         webhooks.webhook-delivery-requested.v2 + its 3 retry tiers (executor in/out) are now
+         Avro + Schema Registry. webhooks.webhook-delivery-requested.v2.dlq stays JSON on purpose
+         (DeadLetterPublishingRecoverer must be able to republish raw undeserializable bytes) - see
+         config.KafkaProducerConfig / config.KafkaConsumerConfig and the README's M9 Phase 2
+         section. -->
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.confluent</groupId>
+      <artifactId>kafka-avro-serializer</artifactId>
+    </dependency>
+
     <!-- Lombok + MapStruct (annotation processor order fixed in the parent) -->
     <dependency>
       <groupId>org.projectlombok</groupId>

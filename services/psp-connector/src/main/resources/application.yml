@@ -41,7 +41,15 @@ spring:
 
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      # M9 Phase 2: payments.payment-status-changed.v1 is now Avro + Schema Registry - unlike the
+      # inbound consumer (config.KafkaConsumerConfig, wired in Java for ErrorHandlingDeserializer
+      # + specific.avro.reader), this producer has no error-handling wrapper to configure, so the
+      # whole thing fits in YAML, the same convention this file already used for the JSON
+      # serializer it replaces. KafkaAvroSerializer#serialize registers/looks up the schema
+      # against Schema Registry (subject payments.payment-status-changed.v1-value,
+      # TopicNameStrategy - ADR-0001) and returns the Confluent wire format (magic byte + 4-byte
+      # schema id + Avro binary).
+      value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
       # Same production settings as payment-api's producer (see its application.yml for the full
       # acks/idempotence/batching commentary) - psp-connector is a producer too, of
       # payments.payment-status-changed.v1.
@@ -53,7 +61,16 @@ spring:
         enable.idempotence: true
         max.in.flight.requests.per.connection: 5
         linger.ms: 10
-        spring.json.add.type.headers: false
+        # schema.registry.url - reuses the same environment-specific value the inbound Avro
+        # consumer already reads (psp-connector.schema-registry.url, application-docker-
+        # compose.yml), via Spring's property-placeholder interpolation.
+        schema.registry.url: ${psp-connector.schema-registry.url}
+        # auto.register.schemas=true - this service is this schema's only producer, so letting
+        # the first publish register version 1 is simpler than a manual registration step, and it
+        # is still governed by the subject's compatibility mode (register-schemas.sh sets that
+        # BEFORE any producer runs - same reasoning as payment-api's M9 Phase 1
+        # SchemaRegistryConfig).
+        auto.register.schemas: true
 
 server:
   # payment-api is 8085, AKHQ 8080, Schema Registry 8081, Grafana 3000, Prometheus 9090 - this

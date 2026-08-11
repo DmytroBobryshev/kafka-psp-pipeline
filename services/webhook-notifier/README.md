@@ -81,15 +81,18 @@ flowchart TB
 | Direction | Topic | Key | Partitions | RF | Retention |
 |---|---|---|---|---|---|
 | in (planner) | `payments.payment-status-changed.v1` | `merchantId` | 12 | 3 | 7 d |
-| out (planner) / base (executor) | `webhooks.webhook-delivery-requested.v1` | `merchantId` | 6 | 3 | 3 d |
-| retry tier 1 | `webhooks.webhook-delivery-requested.v1.retry.5s` | `merchantId` | 6 | 3 | 3 d |
-| retry tier 2 | `webhooks.webhook-delivery-requested.v1.retry.1m` | `merchantId` | 6 | 3 | 3 d |
-| retry tier 3 | `webhooks.webhook-delivery-requested.v1.retry.15m` | `merchantId` | 6 | 3 | 3 d |
-| terminal | `webhooks.webhook-delivery-requested.v1.dlq` | `merchantId` | 3 | 3 | 30 d |
+| out (planner) / base (executor) | `webhooks.webhook-delivery-requested.v2` | `merchantId` | 6 | 3 | 3 d |
+| retry tier 1 | `webhooks.webhook-delivery-requested.v2.retry.5s` | `merchantId` | 6 | 3 | 3 d |
+| retry tier 2 | `webhooks.webhook-delivery-requested.v2.retry.1m` | `merchantId` | 6 | 3 | 3 d |
+| retry tier 3 | `webhooks.webhook-delivery-requested.v2.retry.15m` | `merchantId` | 6 | 3 | 3 d |
+| terminal | `webhooks.webhook-delivery-requested.v2.dlq` | `merchantId` | 3 | 3 | 30 d |
 
-All six already exist in the cluster (`infra/compose/create-topics.sh`, sourced from
-[docs/diagrams/topic-map.md](../../docs/diagrams/topic-map.md)) - this service does not create
-or alter them. Consumer groups: `webhook-notifier.planner.v1` (base-topic only) and
+**As of M9 Phase 2** (see that section below): the delivery chain moved from `.v1` to `.v2` topic
+names (Avro, base + 3 retry tiers; the `.dlq` stays JSON) - the `.v1` names throughout the M8
+sections below describe the chain exactly as it was verified at the time, and are left unedited.
+All six current (`.v2`) topics already exist in the cluster (`infra/compose/create-topics.sh`,
+sourced from [docs/diagrams/topic-map.md](../../docs/diagrams/topic-map.md)) - this service does
+not create or alter them. Consumer groups: `webhook-notifier.planner.v1` (base-topic only) and
 `webhook-notifier.executor.v1` (the delivery-command topic plus all three retry tiers). DLQ
 replay uses a THIRD, dedicated group (`webhook-notifier.dlq-replay.v1`) so on-demand reads never
 interact with normal delivery execution.
@@ -417,3 +420,141 @@ acceptance run for the actual observed document.
 | A merchant marked `force-4xx` still gets retried through `.retry.5s` | Check the merchantId actually contains the literal substring `force-4xx` - the match is a plain `String#contains`, not a prefix/suffix rule. |
 | `DLQ replay republished 0 records` on a non-empty DLQ | The dedicated `webhook-notifier.dlq-replay.v1` group already committed past them on a previous call - this is correct (replay is once-only per record), not a bug; a record only reappears if it lands in the DLQ again. |
 | `NoUniqueBeanDefinitionException` for `ConsumerFactory<String, Object>` | `dlqReplayConsumerFactory` and any other `ConsumerFactory<String, Object>` bean are ambiguous without `@Qualifier` - see `KafkaDlqReader`'s constructor. |
+
+## M9 Phase 2 - Avro on the planner, a NEW `.v2` chain for the executor
+
+Two separate moves, for two separate reasons.
+
+**The planner's inbound topic**, `payments.payment-status-changed.v1`, is now Avro - cut in place,
+no version bump, the same multi-consumer cutover psp-connector's and ledger's M9 Phase 2 sections
+document (this service is the *second* independent consumer group -
+`webhook-notifier.planner.v1` - that had to move in lockstep with psp-connector's producer and
+ledger's consumer in the same commit). `adapters.in.kafka.PaymentStatusChangedListener` now takes
+the generated `com.example.psp.common.events.avro.PaymentStatusChanged` record directly; its
+`ErrorHandlingDeserializer`/`KafkaAvroDeserializer` wiring in `config.KafkaConsumerConfig` follows
+the exact same M8 poison-pill-toggle pattern the executor already used, just pointed at a
+different deserializer. See services/psp-connector/README.md's M9 Phase 2 section for the
+drain-to-latest command that ran against this service's `webhook-notifier.planner.v1` group before
+this cutover, and why (a substantial pre-existing JSON backlog, and two independent consumer
+groups on one topic).
+
+**The whole delivery chain** - `webhooks.webhook-delivery-requested.v1` and its three retry tiers -
+moved to a **brand-new `webhooks.webhook-delivery-requested.v2` topic set** instead of cutting v1
+in place. This is the ADR-0001 `v2`-topic route the M9 brief asked to see demonstrated at least
+once in this project, and this chain is where it costs the least: unlike
+`payments.payment-status-changed.v1` (three independent services) this entire chain is produced
+*and* consumed by webhook-notifier alone, so a fresh topic set needs no cross-service dual-write
+coordination - it is a one-service, one-deploy cutover, the cheapest case ADR-0001's mechanism can
+possibly apply to. Concretely:
+
+- `webhooks.webhook-delivery-requested.v2`, `.v2.retry.5s`, `.v2.retry.1m`, `.v2.retry.15m` - Avro,
+  freshly created (`infra/compose/create-topics.sh`), zero stale records by construction.
+- `webhooks.webhook-delivery-requested.v2.dlq` - see "The DLQ stays JSON" below.
+- The **entire `.v1` chain, including `.v1.dlq`, is retired**: still present in the cluster (a
+  substantial pre-existing backlog - offsets in the hundreds per partition from every M8 run - plus
+  M8's deliberately-poisoned proof records), still queryable by hand
+  (`kafka-console-consumer`/AKHQ) for forensic purposes, but no longer produced or consumed by any
+  code path in this service. `webhook-notifier.kafka.*-topic` properties in `application.yml` all
+  point at `.v2` names now; nothing references `.v1` any more except this paragraph and the M8
+  section above, which is left completely unedited - its evidence is still exactly true of the
+  frozen `.v1` topics it describes.
+
+### The DLQ stays JSON, on purpose - and here is the actual mechanism why
+
+This is the constraint the M9 brief flagged explicitly, and it is worth being precise about
+*why*, because the reason is a genuine Spring Kafka internals fact, not just caution:
+
+`DeadLetterPublishingRecoverer` (the container-level recoverer wired to
+`executorKafkaListenerContainerFactory`'s error handler) republishes a poison pill's **original,
+still-undeserializable bytes** - that's the entire point of M8's proof, and it only works because
+Spring Kafka's own `JsonSerializer` special-cases a `byte[]` value and writes it through completely
+unchanged, with no Jackson encoding step at all. `io.confluent.kafka.serializers.KafkaAvroSerializer`
+has no equivalent: it needs an Avro schema for whatever object it is handed, so pointing the
+recoverer at an Avro-configured template would either throw on every poison pill (breaking M8's
+"catches it, publishes to `.dlq`, keeps working" behaviour outright) or - if coerced into treating
+raw bytes as a `bytes`-schema value - register a synthetic schema and Avro-encode a length-prefixed
+wrapper around the bytes, which is not the original bytes any more and would silently invalidate
+the exact claim M8's README section makes ("The DLQ record carries the raw bytes").
+
+So `webhooks.webhook-delivery-requested.v2.dlq` deliberately keeps the M8-era JSON pipeline
+end to end:
+
+- `config.KafkaProducerConfig` builds **two** producer factories/`KafkaTemplate`s:
+  `webhookDeliveryAvroKafkaTemplate` (Avro, `KafkaAvroSerializer`) for the base topic and all three
+  retry tiers, and `webhookDeliveryDlqKafkaTemplate` (unchanged JSON `JsonSerializer`, straight
+  from `spring.kafka.producer.*` in `application.yml`) for the DLQ alone.
+- `adapters.out.kafka.KafkaWebhookDeliveryPublisher#send` picks between them by destination topic:
+  anything bound for `RetryChain#dlqTopic()` builds the hand-written JSON
+  `adapters.out.kafka.WebhookDeliveryRequested` record (via the pre-existing
+  `WebhookDeliveryEventMapper`, untouched) and sends it through the DLQ template; everything else
+  builds the generated Avro record (via the new `WebhookDeliveryAvroEventFactory`) and sends it
+  through the Avro template.
+- `config.KafkaConsumerConfig`'s `executorKafkaListenerContainerFactory` wires
+  `DeadLetterPublishingRecoverer` to `webhookDeliveryDlqKafkaTemplate` explicitly - never the Avro
+  one - so a genuine poison pill on the new `.v2` base/retry topics still republishes its raw bytes
+  correctly.
+- `dlqReplayConsumerFactory` (backing `KafkaDlqReader`) is unchanged: still
+  `ErrorHandlingDeserializer` wrapping `JsonDeserializer`, still targeting the hand-written
+  `adapters.out.kafka.WebhookDeliveryRequested` class, now pointed at `.v2.dlq`. `ReplayDlqUseCase`
+  republishes onto `RetryChain#baseTopic()` (the Avro base topic), so a replayed record correctly
+  takes the Avro path on its way back in even though it was just read off the JSON DLQ - the
+  publisher's per-topic branch handles that automatically, with no special-casing in the replay
+  code itself.
+
+One consequence worth being explicit about: `webhooks.webhook-delivery-requested.v2.dlq` will, over
+time, hold a **mix** of Avro-typed business records (a legitimately exhausted retry or a 4xx
+non-retryable failure - both built from a properly-decoded `WebhookDeliveryCommand`, so they
+serialize through the JSON template as ordinary `WebhookDeliveryRequested` JSON, not Avro bytes)
+and genuinely raw, undeserializable bytes (a real poison pill, recovered by
+`DeadLetterPublishingRecoverer`). Both are JSON-serializer-compatible by construction - the DLQ
+template's `JsonSerializer` passes a `byte[]` through unchanged and Jackson-encodes everything else
+- so this was never actually a format-mixing risk the way the base/retry topics' JSON→Avro cutover
+was; it's the same shape M8 already had (business records and forensic records sharing one DLQ),
+unaffected by this migration.
+
+### Registered subjects
+
+`webhooks.webhook-delivery-requested.v2-value` and the three `-retry.{5s,1m,15m}-value` subjects -
+`TopicNameStrategy`, `BACKWARD` compatibility, set by `infra/compose/register-schemas.sh` before
+any producer runs. `webhooks.webhook-delivery-requested.v2.dlq` deliberately has **no** subject -
+it never goes through `KafkaAvroSerializer`, so nothing ever registers a schema for it.
+
+### End-to-end proof, live cluster
+
+Same request as psp-connector's and ledger's M9 Phase 2 sections (one shared live run):
+
+```
+$ curl -X POST http://localhost:8085/api/payments \
+  -d '{"merchantId":"merchant-m9-phase2-e2e","amount":275.50,"currency":"EUR"}'
+HTTP 201 {"id":"477d6b08-5f17-43a2-8915-62eb388d324c", ...}
+
+webhook-notifier log:
+  Consumed payment-status-changed paymentId=477d6b08-... merchantId=merchant-m9-phase2-e2e status=SUCCEEDED
+  Planning webhook delivery paymentId=477d6b08-... merchantId=merchant-m9-phase2-e2e status=SUCCEEDED
+  Published to webhooks.webhook-delivery-requested.v2 paymentId=477d6b08-... merchantId=merchant-m9-phase2-e2e
+    attempt=1 partition=1 offset=0
+  Consumed webhook-delivery-requested paymentId=477d6b08-... merchantId=merchant-m9-phase2-e2e
+    topic=webhooks.webhook-delivery-requested.v2 attempt=1
+  Simulated merchant received webhook merchantId=merchant-m9-phase2-e2e paymentId=477d6b08-...
+    status=SUCCEEDED -> outcome=SUCCESS
+  Webhook delivered paymentId=477d6b08-... merchantId=merchant-m9-phase2-e2e attempt=1 statusCode=200
+```
+
+The resulting `delivery_attempts` document (MongoDB, `webhook_notifier`):
+
+```json
+{
+  "_id": "6a7b71ff027f9021c48a3312",
+  "merchantId": "merchant-m9-phase2-e2e",
+  "paymentId": "477d6b08-5f17-43a2-8915-62eb388d324c",
+  "attemptNumber": 1,
+  "outcome": "SUCCESS",
+  "statusCode": 200,
+  "sourceTopic": "webhooks.webhook-delivery-requested.v2",
+  "attemptedAt": "2026-08-11T19:03:27.449Z"
+}
+```
+
+`sourceTopic` is the tell: this attempt was executed against the new `v2` base topic, offset 0 -
+the very first record this fresh topic ever carried, and it went end to end (planned, delivered,
+logged) on the first attempt, no retry tier needed.

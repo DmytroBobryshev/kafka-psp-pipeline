@@ -430,7 +430,8 @@ applied here, not a larger Kafka transaction.
 - **`transaction.timeout.ms` is 60 s.** A ledger instance killed mid-transaction pins the Last
   Stable Offset — and therefore downstream `read_committed` consumers — for up to that long.
   Correct behaviour, worth knowing before interpreting a lag spike as a bug.
-- **JSON, not Avro.** Same as every other service until M9.
+- ~~**JSON, not Avro.**~~ Fixed in M9 Phase 2 - both topics are Avro + Schema Registry now; see
+  that section below.
 
 ## Troubleshooting
 
@@ -444,3 +445,101 @@ applied here, not a larger Kafka transaction.
 | Balance disagrees with `COUNT(*)` over `ledger_entries` | Something wrote `merchant_balances` outside `MerchantBalanceJpaRepository#applyDelta`. `entry_count` is maintained by that one statement precisely to make this detectable. |
 | `transaction.state.log.replication.factor` errors in a test | A single embedded broker cannot satisfy RF 3. See `LedgerApplicationTests`'s `brokerProperties`. |
 | Flyway `validate` failure on start | Schema drift against `V1__create_ledger_tables.sql`. The ledger database is owned solely by this service (ADR-0005); nothing else should have touched it. |
+
+## M9 Phase 2 - Avro on both topics, EOS untouched
+
+Both of this service's topics are now Avro + Schema Registry: `payments.payment-status-changed.v1`
+(inbound, consumed) and `ledger.ledger-entry-recorded.v1` (outbound, produced). Both cut in place -
+no `v2` topic - and both keep every M7 guarantee described above exactly as it was, because
+**serializer choice is orthogonal to Kafka transactions**: `KafkaAvroSerializer`/`KafkaAvroDeserializer`
+replace `JsonSerializer`/`JsonDeserializer` as a drop-in, and nothing about `transactional.id`,
+`sendOffsetsToTransaction`, `read_committed`, `awaitAppend`, or the `ledger.fail-after-produce`
+abort hook reads or depends on the wire format. `config.KafkaProducerConfig` and
+`config.KafkaConsumerConfig`'s transaction-manager wiring are unchanged line-for-line from M7,
+verified by `mvn clean verify`'s full ArchUnit/unit suite passing unmodified and by the abort-hook
+code path itself (`KafkaLedgerEntryPublisher.awaitAppend`) not being touched by this migration.
+
+### The Avro construction point
+
+`adapters.out.kafka.LedgerEntryAvroEventFactory` (a plain method, not a MapStruct `@Mapper` - same
+established exception as `payment-api`'s Phase 1 `PaymentAvroEventFactory` and psp-connector's
+Phase 2 `PaymentStatusAvroEventFactory`) builds the generated
+`com.example.psp.common.events.avro.LedgerEntryRecorded` record from the hand-written
+`EventEnvelope`, the just-applied `LedgerEntry`, and the `MerchantBalance` snapshot.
+`KafkaLedgerEntryPublisher` is otherwise unchanged: same key (`merchantId`), same headers, same
+`awaitAppend`/`future.join()` logic for the abort-visibility drill - only the object it hands to
+`kafkaTemplate.send()` changed type.
+
+On the inbound side, `adapters.in.kafka.PaymentStatusChangedListener` now takes the generated
+`com.example.psp.common.events.avro.PaymentStatusChanged` record directly (replacing the
+hand-written `PaymentStatusChangedEvent`), decoded via `KafkaAvroDeserializer` wrapped in the same
+`ErrorHandlingDeserializer` M7 already used for `JsonDeserializer` - still mandatory here (ADR-0006
+category C), and if anything more important than in a non-transactional consumer: without it, a
+bad record would open and abort a Kafka transaction on every single retry, not just fail cleanly.
+
+### Idempotency key survives the format change (M7 - explicitly verified)
+
+M7's dedup key (`ledger_entries.inbound_event_id`, under `uq_ledger_entries_inbound_event_id`) is
+the **inbound** `payments.payment-status-changed.v1` envelope's `eventId` - now decoded from the
+Avro record's plain-`string` `envelope.eventId` field via an explicit
+`UUID.fromString(event.getEnvelope().getEventId())` in `adapters.in.kafka.PaymentStatusChangedMapper`
+(the same pattern psp-connector's `PaymentRequestedMapper` established in Phase 1). Verified live,
+not just by inspection - the exact same value appears at every layer of one real request:
+
+```
+kafka consumer log:  Consumed payment-status-changed eventId=019ff235-4bce-79a4-9818-83fd26cb7185
+                        paymentId=477d6b08-... merchantId=merchant-m9-phase2-e2e status=SUCCEEDED
+application log:     Applied ledger entry id=5c17d701-... inboundEventId=019ff235-4bce-79a4-9818-83fd26cb7185
+                        merchantId=merchant-m9-phase2-e2e CREDIT275.5000 -> balance=275.5000 EUR
+
+postgres=> SELECT id, inbound_event_id, payment_id, direction, amount FROM ledger_entries
+           WHERE merchant_id='merchant-m9-phase2-e2e';
+ id                                   | inbound_event_id                     | payment_id                            | direction | amount
+ 5c17d701-3248-45a7-aebc-eccbe1800738 | 019ff235-4bce-79a4-9818-83fd26cb7185 | 477d6b08-5f17-43a2-8915-62eb388d324c | CREDIT    | 275.5000
+```
+
+The Avro-decoded string, the application log line, and the unique-constrained Postgres column all
+agree on `019ff235-4bce-79a4-9818-83fd26cb7185`, byte-for-byte. That is the round-trip constraint
+(d) of this migration exists to prove: had the string↔UUID conversion silently mangled the value
+(a truncation, a case change, a whitespace difference), this column would either reject the insert
+against a *different* stale row or - worse - simply store a value that never matches anything on
+replay, and dedup would fail silently. It didn't.
+
+### Stale records: no live consumer, so "accept and document" is the honest answer
+
+`ledger.ledger-entry-recorded.v1` has **no consumer in this system today** (analytics,
+realtime-gateway, and the Connect Mongo audit sink are all future modules per
+docs/diagrams/topic-map.md) - confirmed empirically before this migration: zero consumer groups
+were subscribed, while the topic itself already held ~1,468 pre-existing JSON records across its 6
+partitions (left by every M7 verification run through M8). Cutting the topic to Avro in place
+therefore carries **zero live risk** - there is nothing to poison-pill. The honest documentation of
+that fact is itself the decision: a future Avro consumer of this topic will meet the same
+`Unknown magic byte!` backlog Phase 1's `psp-connector` did on `payments.payment-requested.v1`, and
+should expect `ErrorHandlingDeserializer` to skip those ~1,468 old JSON records exactly the way
+Phase 1 documented (ADR-0006 category C) - this is flagged here so whoever builds that consumer
+does not rediscover it as a surprise.
+
+### End-to-end proof, live cluster
+
+Same request as psp-connector's and webhook-notifier's M9 Phase 2 sections (one shared live run
+across all three services):
+
+```
+$ curl -X POST http://localhost:8085/api/payments \
+  -d '{"merchantId":"merchant-m9-phase2-e2e","amount":275.50,"currency":"EUR"}'
+HTTP 201 {"id":"477d6b08-5f17-43a2-8915-62eb388d324c", ...}
+
+ledger=> SELECT merchant_id, currency, balance, entry_count, updated_at FROM merchant_balances
+         WHERE merchant_id='merchant-m9-phase2-e2e';
+ merchant_id            | currency | balance  | entry_count | updated_at
+ merchant-m9-phase2-e2e | EUR      | 275.5000 |           1 | 2026-08-11 19:03:27.648806+00
+```
+
+One payment, one CREDIT entry, balance matches the posted amount exactly - the whole
+consume-Avro/apply-Postgres/produce-Avro loop, inside one Kafka transaction, working end to end.
+
+### Registered subject
+
+`ledger.ledger-entry-recorded.v1-value` - `TopicNameStrategy`, `BACKWARD` compatibility, set by
+`infra/compose/register-schemas.sh` before this service's first publish, same convention as every
+other M9 subject.

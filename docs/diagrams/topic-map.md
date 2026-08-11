@@ -24,6 +24,15 @@ so): `replication.factor=3`, `min.insync.replicas=2`, `cleanup.policy=delete`,
 | `ledger.ledger-entry-recorded.v1` | `merchantId` | 6 | 30 d | delete | ledger | analytics, realtime-gateway, Connect Mongo sink (audit-trail) |
 | `merchants.merchant-config-changed.v1` | `merchantId` | 3 | ∞ (compacted) | compact | payment-api (merchant config API) | psp-connector, webhook-notifier, analytics, ledger — all as `GlobalKTable` |
 
+**Wire format (M9):** `payments.payment-requested.v1` (Phase 1) and, as of Phase 2,
+`payments.payment-status-changed.v1` and `ledger.ledger-entry-recorded.v1` are Avro + Schema
+Registry, cut in place with no topic-version bump (ADR-0001's breaking-change test does not fire -
+field-for-field identical shape, same reasoning phase 1 already established). `refunds.*` and
+`merchants.merchant-config-changed.v1` stay JSON until their respective modules are built. See
+services/payment-api/README.md (Phase 1), services/psp-connector/README.md and
+services/ledger/README.md (Phase 2) for the full decisions, stale-record handling per topic, and
+compatibility-mode registration.
+
 ## Webhook delivery chain
 
 `webhook-notifier` consumes payment/refund events and republishes one **delivery command** per
@@ -32,11 +41,28 @@ so a merchant with a broken endpoint never causes retry topics on the payment pa
 
 | Name | Key | Partitions | Retention | cleanup.policy | Producers | Consumers |
 |---|---|---|---|---|---|---|
-| `webhooks.webhook-delivery-requested.v1` | `merchantId` | 6 | 3 d | delete | webhook-notifier (delivery planner) | webhook-notifier (delivery executor) |
-| `webhooks.webhook-delivery-requested.v1.retry.5s` | `merchantId` | 6 | 3 d | delete | webhook-notifier | webhook-notifier |
-| `webhooks.webhook-delivery-requested.v1.retry.1m` | `merchantId` | 6 | 3 d | delete | webhook-notifier | webhook-notifier |
-| `webhooks.webhook-delivery-requested.v1.retry.15m` | `merchantId` | 6 | 3 d | delete | webhook-notifier | webhook-notifier |
-| `webhooks.webhook-delivery-requested.v1.dlq` | `merchantId` | 3 | 30 d | delete | webhook-notifier | webhook-notifier replay API (M8) → UI DLQ console (M17) |
+| `webhooks.webhook-delivery-requested.v1` | `merchantId` | 6 | 3 d | delete | *retired M9 Phase 2 - see below* | *retired M9 Phase 2* |
+| `webhooks.webhook-delivery-requested.v1.retry.5s` | `merchantId` | 6 | 3 d | delete | *retired M9 Phase 2* | *retired M9 Phase 2* |
+| `webhooks.webhook-delivery-requested.v1.retry.1m` | `merchantId` | 6 | 3 d | delete | *retired M9 Phase 2* | *retired M9 Phase 2* |
+| `webhooks.webhook-delivery-requested.v1.retry.15m` | `merchantId` | 6 | 3 d | delete | *retired M9 Phase 2* | *retired M9 Phase 2* |
+| `webhooks.webhook-delivery-requested.v1.dlq` | `merchantId` | 3 | 30 d | delete | *retired M9 Phase 2* | *retired M9 Phase 2 - holds M8's poisoned-record evidence, left frozen and unread by any service* |
+| `webhooks.webhook-delivery-requested.v2` | `merchantId` | 6 | 3 d | delete | webhook-notifier (delivery planner) | webhook-notifier (delivery executor) |
+| `webhooks.webhook-delivery-requested.v2.retry.5s` | `merchantId` | 6 | 3 d | delete | webhook-notifier | webhook-notifier |
+| `webhooks.webhook-delivery-requested.v2.retry.1m` | `merchantId` | 6 | 3 d | delete | webhook-notifier | webhook-notifier |
+| `webhooks.webhook-delivery-requested.v2.retry.15m` | `merchantId` | 6 | 3 d | delete | webhook-notifier | webhook-notifier |
+| `webhooks.webhook-delivery-requested.v2.dlq` | `merchantId` | 3 | 30 d | delete | webhook-notifier | webhook-notifier replay API (M8) → UI DLQ console (M17) |
+
+**M9 Phase 2:** the delivery chain (base + 3 retry tiers + dlq) is Avro + Schema Registry, on a
+NEW `.v2` topic set - the ADR-0001 versioned-topic route, chosen (over cutting `.v1` in place)
+because this chain is entirely internal to one service (webhook-notifier produces and consumes
+every hop), so a fresh topic set costs zero cross-team dual-write coordination, and it leaves the
+`.v1` chain - including `.v1.dlq`, which holds M8's deliberately-poisoned proof records - completely
+untouched rather than reused. `.v2.dlq` itself stays JSON (byte-tolerant), unchanged from M8:
+`DeadLetterPublishingRecoverer` must be able to republish a genuine poison pill's raw bytes, which
+an Avro serializer cannot do. See services/webhook-notifier/README.md's M9 Phase 2 section.
+`payments.payment-status-changed.v1` (inbound to the planner) and `ledger.ledger-entry-recorded.v1`
+are also Avro as of M9 Phase 2, cut in place (no version bump) - see services/psp-connector/README.md
+and services/ledger/README.md's M9 Phase 2 sections for why.
 
 ## Dead-letter topics for other consumers
 
@@ -100,7 +126,7 @@ compacted config topic. Debezium's Postgres connector needs no schema-history to
 | `psp-connector.v1` | psp-connector | `payments.payment-requested.v1`, `refunds.funds-reserved.v1`, `psp.provider-status-query.v1` |
 | `ledger.v1` | ledger | `payments.payment-status-changed.v1`, `refunds.refund-requested.v1`, `refunds.refund-completed.v1`, `refunds.refund-failed.v1` |
 | `webhook-notifier.planner.v1` | webhook-notifier | `payments.payment-status-changed.v1`, `refunds.refund-completed.v1`, `refunds.refund-failed.v1` |
-| `webhook-notifier.executor.v1` | webhook-notifier | `webhooks.webhook-delivery-requested.v1` + the three retry topics |
+| `webhook-notifier.executor.v1` | webhook-notifier | `webhooks.webhook-delivery-requested.v2` + the three `.v2` retry topics (M9 Phase 2; was `.v1` through M8) |
 | `analytics-streams.v1` | analytics | Streams-managed (`payments.*`, `refunds.*`, `ledger.*`) |
 | `payment-api.replies.v1` | payment-api | `psp.provider-status-reply.v1` |
 | `realtime-gateway.<instanceId>` | realtime-gateway | `payments.*`, `refunds.*` — **unique per instance**; consumer groups load-split, they do not fan out (M12) |

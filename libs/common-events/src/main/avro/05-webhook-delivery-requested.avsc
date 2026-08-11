@@ -1,0 +1,59 @@
+{
+  "type": "record",
+  "name": "WebhookDeliveryRequested",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of webhooks.webhook-delivery-requested.v2 (M9 Phase 2) - and its three retry tiers, which carry the identical schema. Field-for-field identical to the hand-written webhook-notifier adapters.in.kafka.WebhookDeliveryRequestedEvent / adapters.out.kafka.WebhookDeliveryRequested records this schema replaces on the BASE topic and the three .retry.* tiers only. Deliberately no 'envelope' field, unlike every other schema in this file: this is an internal command/work-item topic, not an ADR-0002 business event, and the retry metadata (attempt count, original coordinates, classified failure) travels as Kafka HEADERS instead (domain.model.RetryHeaderNames) so a redelivered record's payload stays byte-for-byte identical on every hop. Cut to a NEW v2 topic (not v1 in place) specifically so this schema and its DLQ constraint could be demonstrated cleanly per ADR-0001's actual versioning mechanism - see services/webhook-notifier/README.md's M9 Phase 2 section. webhooks.webhook-delivery-requested.v2.dlq is deliberately NOT Avro - it stays on the byte-tolerant JsonSerializer/JsonDeserializer pair unchanged from M8, because DeadLetterPublishingRecoverer must be able to republish the raw undeserializable bytes of a genuine poison pill, which KafkaAvroSerializer cannot do.",
+  "fields": [
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "The payment this status change is about (UUID string form)."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "The owning merchant - the record key on every hop of the delivery chain (ADR-0003)."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 4
+      },
+      "doc": "Generates java.math.BigDecimal."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "doc": "ISO-4217 three-letter currency code."
+    },
+    {
+      "name": "status",
+      "type": "string",
+      "doc": "'SUCCEEDED' or 'DECLINED' - both are planned as webhook deliveries."
+    },
+    {
+      "name": "declineReason",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Populated only when status = 'DECLINED', else null."
+    },
+    {
+      "name": "causationEventId",
+      "type": "string",
+      "doc": "The eventId of the payments.payment-status-changed.v1 event that caused this delivery (UUID string form)."
+    },
+    {
+      "name": "traceId",
+      "type": "string",
+      "doc": "W3C trace-id, propagated end to end."
+    },
+    {
+      "name": "correlationId",
+      "type": "string",
+      "doc": "The originating request id."
+    }
+  ]
+}

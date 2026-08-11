@@ -22,14 +22,20 @@ spring:
         session.timeout.ms: 45000
         heartbeat.interval.ms: 3000
 
+# M9 Phase 2: KafkaAvroDeserializer/KafkaAvroSerializer only resolve this lazily - neither
+# WebhookNotifierApplicationTests nor any other context-load test here publishes or consumes a
+# real record, so this value only needs to be present, not reachable (same note as psp-connector's
+# and ledger's test application.yml).
 webhook-notifier:
+  schema-registry:
+    url: http://localhost:8081
   kafka:
     payment-status-changed-topic: payments.payment-status-changed.v1
-    delivery-requested-topic: webhooks.webhook-delivery-requested.v1
-    retry-5s-topic: webhooks.webhook-delivery-requested.v1.retry.5s
-    retry-1m-topic: webhooks.webhook-delivery-requested.v1.retry.1m
-    retry-15m-topic: webhooks.webhook-delivery-requested.v1.retry.15m
-    dlq-topic: webhooks.webhook-delivery-requested.v1.dlq
+    delivery-requested-topic: webhooks.webhook-delivery-requested.v2
+    retry-5s-topic: webhooks.webhook-delivery-requested.v2.retry.5s
+    retry-1m-topic: webhooks.webhook-delivery-requested.v2.retry.1m
+    retry-15m-topic: webhooks.webhook-delivery-requested.v2.retry.15m
+    dlq-topic: webhooks.webhook-delivery-requested.v2.dlq
     planner-group-id: webhook-notifier.planner.test.v1
     executor-group-id: webhook-notifier.executor.test.v1
     deserialization-error-handling-enabled: true

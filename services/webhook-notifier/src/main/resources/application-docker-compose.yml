@@ -13,3 +13,10 @@ spring:
     # Three brokers' HOST-side (EXTERNAL) listeners - same rationale as every other service's
     # equivalent entry (infra/compose/README.md's advertised-listeners section).
     bootstrap-servers: localhost:29092,localhost:29093,localhost:29094
+
+# M9 Phase 2: webhook-notifier runs on the HOST (java -jar ...), so it reaches Schema Registry via
+# its published host port - localhost:8081, same convention as psp-connector's/ledger's
+# equivalent entries.
+webhook-notifier:
+  schema-registry:
+    url: http://localhost:8081

@@ -57,6 +57,16 @@ TOPICS=(
   "webhooks.webhook-delivery-requested.v1.retry.1m|6|3|delete|259200000"
   "webhooks.webhook-delivery-requested.v1.retry.15m|6|3|delete|259200000"
   "webhooks.webhook-delivery-requested.v1.dlq|3|3|delete|2592000000"
+  # M9 Phase 2: the webhook delivery chain cut to a NEW v2 topic set (Avro base + 3 retry tiers +
+  # dlq) rather than migrating v1 in place - see services/webhook-notifier/README.md's M9 Phase 2
+  # section. v1 (above) is retired: left in the cluster holding M8's poisoned-record evidence,
+  # no longer produced or consumed by webhook-notifier. Same partition/RF/retention specs as v1,
+  # per docs/diagrams/topic-map.md's "Change rules" (new topic -> new row, same conventions).
+  "webhooks.webhook-delivery-requested.v2|6|3|delete|259200000"
+  "webhooks.webhook-delivery-requested.v2.retry.5s|6|3|delete|259200000"
+  "webhooks.webhook-delivery-requested.v2.retry.1m|6|3|delete|259200000"
+  "webhooks.webhook-delivery-requested.v2.retry.15m|6|3|delete|259200000"
+  "webhooks.webhook-delivery-requested.v2.dlq|3|3|delete|2592000000"
   "payments.payment-requested.v1.psp-connector.dlq|3|3|delete|2592000000"
   "payments.payment-status-changed.v1.ledger.dlq|3|3|delete|2592000000"
   "psp.provider-status-query.v1|6|3|delete|3600000"

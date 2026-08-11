@@ -1,0 +1,53 @@
+{
+  "type": "record",
+  "name": "PaymentStatusChanged",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of payments.payment-status-changed.v1 (M9 Phase 2). Field-for-field identical to the hand-written psp-connector adapters.out.kafka.PaymentStatusChanged / ledger adapters.in.kafka.PaymentStatusChangedEvent / webhook-notifier adapters.in.kafka.PaymentStatusChangedEvent records this schema replaces - three services (psp-connector produces, ledger and webhook-notifier's planner both consume) move together in this one phase, which is why this is 'the important one' per the M9 Phase 2 brief. Registered under Schema Registry subject 'payments.payment-status-changed.v1-value' (TopicNameStrategy, ADR-0001) - stays v1, cut in place; see services/psp-connector/README.md's M9 Phase 2 section for why this did not need a v2 topic despite having two independent consumer groups, and for the drain-to-latest strategy used to avoid poison-pilling the pre-existing JSON backlog.",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope"
+    },
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "The payment this status change is about; also envelope.aggregateId (ADR-0002) - NOT the record key. See KafkaPaymentStatusPublisher for the key."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "The owning merchant; IS the record key (ADR-0003) - deliberately different from payments.payment-requested.v1's paymentId key, so every status change for one merchant lands on one partition in order (the ledger's single-writer-per-balance invariant, M7)."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 4
+      },
+      "doc": "Generates java.math.BigDecimal (enableDecimalLogicalType=true)."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "doc": "ISO-4217 three-letter currency code."
+    },
+    {
+      "name": "status",
+      "type": "string",
+      "doc": "'SUCCEEDED' or 'DECLINED' - never emitted for a TIMEOUT outcome (ADR-0006 category A is not a business outcome)."
+    },
+    {
+      "name": "providerReference",
+      "type": "string",
+      "doc": "The (simulated) provider's own event id for this attempt (UUID string form) - always present, even on a decline (domain.model.ProviderResult's javadoc). The same value persisted as provider_event_id in psp-connector's dedup table."
+    },
+    {
+      "name": "declineReason",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Populated only when status = 'DECLINED', else null."
+    }
+  ]
+}

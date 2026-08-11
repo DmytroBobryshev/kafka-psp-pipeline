@@ -55,8 +55,26 @@ if [[ "$ready" -ne 1 ]]; then
 fi
 
 # subject | compatibility
+#
+# M9 Phase 2 additions: payments.payment-status-changed.v1-value (psp-connector -> ledger +
+# webhook-notifier's planner - the multi-consumer topic cut in place, drain-to-latest strategy,
+# see services/psp-connector/README.md's M9 Phase 2 section), ledger.ledger-entry-recorded.v1-value
+# (ledger, no live consumer yet - accept-and-document-skip strategy, see
+# services/ledger/README.md's M9 Phase 2 section), and the four subjects for
+# webhooks.webhook-delivery-requested.v2's base topic plus its three retry tiers (the ADR-0001
+# v2-topic route, demonstrated here specifically because this chain is entirely internal to one
+# service and so costs zero cross-team dual-write complexity - see
+# services/webhook-notifier/README.md's M9 Phase 2 section). webhooks.webhook-delivery-requested.
+# v2.dlq intentionally has NO subject here: it stays on the byte-tolerant JsonSerializer, never
+# registers a schema.
 SUBJECTS=(
   "payments.payment-requested.v1-value|BACKWARD"
+  "payments.payment-status-changed.v1-value|BACKWARD"
+  "ledger.ledger-entry-recorded.v1-value|BACKWARD"
+  "webhooks.webhook-delivery-requested.v2-value|BACKWARD"
+  "webhooks.webhook-delivery-requested.v2.retry.5s-value|BACKWARD"
+  "webhooks.webhook-delivery-requested.v2.retry.1m-value|BACKWARD"
+  "webhooks.webhook-delivery-requested.v2.retry.15m-value|BACKWARD"
 )
 
 echo "Setting compatibility for ${#SUBJECTS[@]} subject(s) ..."

@@ -406,6 +406,17 @@ built into psp-connector, and why its replay proof matters here too.
 and webhook-notifier topic, and `psp-connector`'s own outbound publishing all stay JSON. A later
 phase migrates them one at a time, the same way.
 
+**Phase 2 (done, documented elsewhere).** `payments.payment-status-changed.v1`,
+`ledger.ledger-entry-recorded.v1`, and the `webhooks.webhook-delivery-requested.*` delivery chain
+all moved to Avro in a second pass - this service's own code and topic
+(`payments.payment-requested.v1`) are untouched by Phase 2, so the outbox-serialization decision,
+wire format, and evolution proof below are still the complete, current story for *this* topic.
+Phase 2's own decisions - which topics stayed on their `v1` name vs which one cut a `v2` (ADR-0001's
+actual versioned-topic route, exercised for the first time in this project), how each topic's
+pre-existing JSON backlog was handled, and the explicit M5/M7 idempotency-key verification - are
+written up in services/psp-connector/README.md, services/ledger/README.md, and
+services/webhook-notifier/README.md's own "M9 Phase 2" sections, not repeated here.
+
 ### The outbox-serialization decision
 
 M6 already established the shape of the problem: this service never calls Kafka - it writes a

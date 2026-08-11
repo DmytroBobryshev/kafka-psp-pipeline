@@ -1,0 +1,66 @@
+{
+  "type": "record",
+  "name": "LedgerEntryRecorded",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of ledger.ledger-entry-recorded.v1 (M9 Phase 2). Field-for-field identical to the hand-written ledger adapters.out.kafka.LedgerEntryRecorded record this schema replaces. This topic has no consumer yet in this system (analytics/realtime-gateway/the Connect Mongo audit sink are all future modules per docs/diagrams/topic-map.md), so the cutover carries zero live poison-pill risk - see services/ledger/README.md's M9 Phase 2 section. Registered under Schema Registry subject 'ledger.ledger-entry-recorded.v1-value' (TopicNameStrategy, ADR-0001) - stays v1, cut in place.",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope",
+      "doc": "envelope.causationId is the inbound payments.payment-status-changed.v1 eventId - the same value stored in ledger_entries.inbound_event_id (M7's idempotency key)."
+    },
+    {
+      "name": "entryId",
+      "type": "string",
+      "doc": "The ledger entry's own id (ledger_entries.id, UUID string form)."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "The owning merchant; also envelope.aggregateId AND the record key on this topic (ADR-0003) - a coincidence unusual in this system, noted in the hand-written record's javadoc."
+    },
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "The payment that caused the movement (UUID string form)."
+    },
+    {
+      "name": "direction",
+      "type": "string",
+      "doc": "'CREDIT' or 'DEBIT'; amount is always positive."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 4
+      },
+      "doc": "Generates java.math.BigDecimal."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "doc": "ISO-4217 three-letter currency code."
+    },
+    {
+      "name": "balanceAfter",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 4
+      },
+      "doc": "The merchant's balance after this entry was applied - a snapshot of committed Postgres state at publish time (may still land in an aborted Kafka transaction; see README's 'Where Kafka EOS ends')."
+    },
+    {
+      "name": "recordedAt",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "doc": "When this entry was recorded - generates java.time.Instant."
+    }
+  ]
+}

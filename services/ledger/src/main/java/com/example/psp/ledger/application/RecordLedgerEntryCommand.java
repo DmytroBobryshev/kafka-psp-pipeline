@@ -5,9 +5,11 @@ import java.util.UUID;
 
 /**
  * Application-layer input model for {@link RecordLedgerEntryUseCase}. Deliberately separate from
- * {@code adapters.in.kafka.PaymentStatusChangedEvent} - the Kafka adapter maps its wire event onto
- * this command, so the use case never depends on the wire contract (same pattern as
- * {@code psp-connector}'s {@code ProcessPaymentRequestCommand}).
+ * the inbound wire event ({@code com.example.psp.common.events.avro.PaymentStatusChanged} as of
+ * M9 Phase 2; the hand-written JSON-era {@code adapters.in.kafka.PaymentStatusChangedEvent}
+ * before it) - the Kafka adapter maps its wire event onto this command, so the use case never
+ * depends on the wire contract (same pattern as {@code psp-connector}'s
+ * {@code ProcessPaymentRequestCommand}).
  *
  * @param inboundEventId the inbound {@code payments.payment-status-changed.v1} envelope's own
  *                       {@code eventId}. <b>The</b> idempotency key (ADR-0002), and the reason

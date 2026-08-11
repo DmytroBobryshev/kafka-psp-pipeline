@@ -9,7 +9,8 @@ package com.example.psp.pspconnector.domain.model;
  * status event, whereas {@link #APPROVED} and {@link #DECLINED} are both business outcomes
  * (ADR-0006 category B) that always get published. Keeping this enum separate from the event's
  * status vocabulary is what makes that distinction impossible to blur by accident - see
- * {@code adapters.out.kafka.PaymentStatusEventMapper}, the only place the two vocabularies meet.
+ * {@code adapters.out.kafka.PaymentStatusAvroEventFactory} (M9 Phase 2; formerly
+ * {@code PaymentStatusEventMapper} in the JSON era), the only place the two vocabularies meet.
  */
 public enum ProviderOutcome {
     APPROVED,
