@@ -89,6 +89,41 @@ public final class PaymentAttempt {
                 Instant.now());
     }
 
+    /**
+     * Reconstitutes an attempt from persisted state (M12) - the counterpart to {@link #from},
+     * which only ever builds a freshly-processed attempt. Needed because
+     * {@code domain.port.AttemptLogRepository#findLatestByPaymentId} (M12's read path, the first
+     * one this table has ever had - see that method's javadoc) must hand back a real
+     * {@link PaymentAttempt}, and this class has no public constructor or setters for MapStruct's
+     * default bean-mapping strategy to target (same reasoning as {@code payment-api}'s
+     * {@code Payment#reconstitute}).
+     */
+    public static PaymentAttempt reconstitute(
+            UUID id,
+            UUID paymentId,
+            String merchantId,
+            Money amount,
+            UUID providerEventId,
+            ProviderOutcome outcome,
+            long providerLatencyMs,
+            UUID causationEventId,
+            String traceId,
+            String correlationId,
+            Instant processedAt) {
+        return new PaymentAttempt(
+                id,
+                paymentId,
+                merchantId,
+                amount,
+                providerEventId,
+                outcome,
+                providerLatencyMs,
+                causationEventId,
+                traceId,
+                correlationId,
+                processedAt);
+    }
+
     private static String requireNonBlank(String value, String fieldName) {
         Objects.requireNonNull(value, fieldName + " must not be null");
         if (value.isBlank()) {

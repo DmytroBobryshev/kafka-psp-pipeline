@@ -896,3 +896,124 @@ $ curl -s localhost:8089/api/analytics/merchants/acme-001/config
            from the log entirely; after a further delete.retention.ms=60000, so is the tombstone. -->
 
 _To be filled in._
+
+---
+
+# M12 - Request-reply over Kafka (requester)
+
+`GET /api/payments/{paymentId}/provider-status`: a synchronous provider-status check for a
+payment, over `psp.provider-status-query.v1` -> `psp.provider-status-reply.v1`, correlated by
+Kafka header. This service owns the requester side (`ReplyingKafkaTemplate` + the REST endpoint);
+`services/psp-connector/README.md`'s M12 section owns the responder (`@SendTo`, reading its own
+`payment_attempts` table).
+
+## Addressing ADR-0004 head-on
+
+[ADR-0004](../../docs/adr/0004-sync-async-boundary.md) commits this system to "all inter-service
+communication is Kafka events; no service-to-service REST" precisely because a synchronous call
+chain fails as a unit, its latency is the sum of its parts, and the caller must know the callee
+exists. This endpoint blocks a real HTTP thread on a real network round trip to another service
+before it can answer - which is, functionally, exactly the failure mode ADR-0004 exists to avoid.
+
+**It complies with ADR-0004 on the letter**: the wire between the two services is a Kafka topic,
+not an HTTP call - `payment-api` never opens a socket to `psp-connector`, never needs to resolve
+its address, and psp-connector could be scaled to zero and back without either service's code
+changing. **It does not comply with ADR-0004's spirit.** The whole point of the async design is
+that a downstream outage produces consumer lag, not a cascade of failures visible to a caller
+right now. This endpoint reintroduces exactly the coupling that design avoids: if psp-connector is
+down, this call does not degrade gracefully into "eventually consistent" - it blocks for up to the
+configured timeout and then fails, in real time, in front of whoever is waiting on it. ADR-0004
+says this plainly: *"The request-reply path (M12) reimplements, badly, what HTTP gives for free.
+Accepted for its teaching value; it is used exactly once."*
+
+**When this pattern is worth it, and when it is a REST call wearing a costume:**
+
+- **Worth it**: the caller has no working alternative to "ask and wait" - there is no local read
+  model to fall back on, the answer is needed for a decision that cannot be deferred (a human
+  operator staring at a screen, a synchronous API contract this service does not control), and the
+  call is genuinely rare (this is not a hot path - the reply topic's 1-hour retention and this
+  being the only `ReplyingKafkaTemplate` in the whole system both signal "occasional", not "every
+  payment"). Building a `GlobalKTable` projection of `payment_attempts` in payment-api, the "proper
+  async" alternative, would mean duplicating psp-connector's entire attempt history into a second
+  database for a query nobody needs more than occasionally - real cost for a rarely-exercised path.
+- **A REST call wearing a costume**: the moment this pattern gets reached for on a genuinely hot
+  path (checking status on every page load, polling in a loop, anything a `GlobalKTable` or a
+  materialized read model would serve better), it stops being "the rare synchronous exception" and
+  becomes "REST, except slower, with more moving parts, and a Kafka topic doing the job a load
+  balancer already does for free." At that point the honest fix is a real local read model (M10's
+  `GlobalKTable` pattern), not tuning this endpoint's timeout down and pretending it scales.
+
+## Reply-topic mechanics
+
+**Correlation.** `ReplyingKafkaTemplate.sendAndReceive` stamps two headers on the outgoing query
+automatically, before this code ever runs: `KafkaHeaders.REPLY_TOPIC` (the reply container's own
+topic - `psp.provider-status-reply.v1`) and `KafkaHeaders.CORRELATION_ID` (a fresh random id per
+call). The template registers a `CompletableFuture` keyed by that correlation id in its own
+in-memory pending-request map. psp-connector's `@SendTo` responder copies both headers onto the
+reply without inspecting them (see its README's M12 section) - the reply topic name and the
+correlation id never appear as fields in either Avro schema; they are pure transport metadata, by
+design, so the payload schemas stay about the DOMAIN QUESTION ("what's the status of this
+payment?") and never about Kafka plumbing.
+
+**Why the reply topic's partitions matter for a multi-instance requester.** A
+`ReplyingKafkaTemplate`'s future only completes if ITS OWN reply-listener container is assigned
+the partition the reply lands on. `psp.provider-status-reply.v1` has 6 partitions, keyed by
+`paymentId` - "correlation only, no ordering semantics" (docs/diagrams/topic-map.md). If two
+payment-api instances shared one ordinary consumer group, Kafka would split those 6 partitions
+between them; a reply could land on a partition owned by the instance that never sent the matching
+request, while the instance that DID send it - and is holding the HTTP thread blocked on that
+future - never sees it and times out despite a perfectly good reply having been produced.
+`config.ReplyingKafkaConfig` fixes this the same way `realtime-gateway` fixes its own,
+differently-motivated version of the same problem: every instance gets a UNIQUE `group.id`
+(`payment-api.replies.<hostname>.<uuid>`), so every instance's reply container is assigned ALL 6
+partitions and sees every reply the fleet produces - `ReplyingKafkaTemplate.setSharedReplyTopic(true)`
+tells the template this is expected, so replies belonging to another instance are DEBUG-logged and
+discarded instead of WARN-logged as an anomaly. The traded-off cost - every instance consumes
+every reply, discarding most - is cheap for a topic capped at 1 hour of retention answering a
+low-volume, human-triggered check; see `config.ReplyingKafkaConfig`'s javadoc for the more surgical
+`KafkaHeaders.REPLY_PARTITION`-based alternative this module does not build.
+
+**What happens when a reply never arrives.** `ReplyingKafkaTemplate.setDefaultReplyTimeout(Duration.ofSeconds(5))`
+bounds how long `adapters.out.kafka.ProviderStatusRequestGateway` blocks. **5 seconds**, chosen
+because it comfortably exceeds psp-connector's simulated provider's worst-case latency window
+(100 ms-5 s, `psp-connector.provider.max-latency-ms`) plus one full poll/round-trip cycle, while
+still returning control to an interactive caller in a time a human will tolerate for a status
+check - short enough that a genuinely stuck psp-connector instance (down, or wedged) is reported
+back to the caller in seconds, not left hanging indefinitely on a request nobody will ever answer.
+On timeout the future completes exceptionally with a `KafkaReplyTimeoutException`, which the
+gateway translates into `domain.exception.ProviderStatusTimeoutException` - a clean domain
+signal, never a raw Kafka type crossing the hexagon boundary - and the controller maps that to
+**504 Gateway Timeout**, not 500: the server did nothing wrong, a downstream dependency simply did
+not answer in time. A timeout here most commonly means: psp-connector is down or overloaded, the
+query never reached it (a producer-side failure, rare given `acks=all` +
+`enable.idempotence=true`), or the reply was produced but landed on a partition assignment race
+mid-rebalance. Nothing is retried automatically - a stuck request just returns 504, and the
+caller decides whether to ask again.
+
+## Verified round trip (single instance)
+
+Live against the real `infra/compose` cluster, correlated log lines from both processes:
+
+```
+payment-api   Sending provider-status-query paymentId=c30df048-5a28-46bd-a959-0a6f9e5725f7 merchantId=merchant-m12-sse-proof-4
+psp-connector Consumed provider-status-query paymentId=c30df048-... merchantId=merchant-m12-sse-proof-4
+psp-connector Replying provider-status-reply paymentId=c30df048-... found=true status=APPROVED
+payment-api   Received provider-status-reply paymentId=c30df048-... found=true status=APPROVED roundTripMillis=279
+```
+
+```
+$ curl http://localhost:8085/api/payments/c30df048-5a28-46bd-a959-0a6f9e5725f7/provider-status
+HTTP 200
+{"paymentId":"c30df048-5a28-46bd-a959-0a6f9e5725f7","merchantId":"merchant-m12-sse-proof-4",
+ "found":true,"status":"APPROVED","providerReference":"ae97c7d0-96ab-4146-8121-a3c46481b195",
+ "checkedAt":"2026-08-11T22:12:38.356Z","roundTripMillis":279}
+```
+
+**279 ms round trip**, server-measured inside `ProviderStatusRequestGateway` (query sent to reply
+received) - two Kafka hops, one Postgres read, and Avro encode/decode both ways, well inside the
+5 s timeout. `providerReference` matches the value psp-connector's own log recorded when it
+originally processed this payment, confirming the responder read the correct row.
+
+See `services/psp-connector/README.md`'s M12 "Request-reply proof" placeholder for the
+orchestrator-owned fuller verification (latency distribution, a deliberate-outage 504 proof, and
+the multi-instance reply-routing check).

@@ -21,7 +21,11 @@ import org.springframework.kafka.test.context.EmbeddedKafka;
             // produced (config.RefundKafkaConsumerConfig, adapters.out.kafka.KafkaRefundStatusPublisher).
             "refunds.funds-reserved.v1",
             "refunds.refund-completed.v1",
-            "refunds.refund-failed.v1"
+            "refunds.refund-failed.v1",
+            // M12: request-reply responder - consumes the query topic, produces to the reply
+            // topic (via @SendTo, header-routed - see adapters.in.kafka.ProviderStatusQueryListener).
+            "psp.provider-status-query.v1",
+            "psp.provider-status-reply.v1"
         })
 class PspConnectorApplicationTests {
 

@@ -98,6 +98,11 @@ psp-connector:
     funds-reserved-topic: refunds.funds-reserved.v1
     refund-completed-topic: refunds.refund-completed.v1
     refund-failed-topic: refunds.refund-failed.v1
+    # M12: request-reply responder. The reply topic (psp.provider-status-reply.v1) is
+    # deliberately NOT configured anywhere in this service - see
+    # adapters.in.kafka.ProviderStatusQueryListener's javadoc for why header-based correlation
+    # means the responder never needs to know it.
+    provider-status-query-topic: psp.provider-status-query.v1
   # schema-registry.url is environment-specific (M9 Phase 1) - see application-docker-compose.yml.
   # Read by config.KafkaConsumerConfig to build the payments.payment-requested.v1 consumer's
   # KafkaAvroDeserializer. Outbound payments.payment-status-changed.v1 stays JSON (unaffected).

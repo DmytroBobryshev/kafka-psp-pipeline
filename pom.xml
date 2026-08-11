@@ -58,6 +58,7 @@
     <module>services/ledger</module>
     <module>services/webhook-notifier</module>
     <module>services/analytics</module>
+    <module>services/realtime-gateway</module>
   </modules>
 
   <!--

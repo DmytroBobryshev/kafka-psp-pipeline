@@ -95,6 +95,13 @@ SUBJECTS=(
   "refunds.refund-completed.v1-value|BACKWARD"
   "refunds.refund-failed.v1-value|BACKWARD"
   "refunds.reservation-released.v1-value|BACKWARD"
+
+  # M12: request-reply over Kafka (ADR-0004's "synchronous need" carve-out). Born Avro, no JSON
+  # history - same story as refunds.*.v1 above. payment-api's ReplyingKafkaTemplate produces the
+  # query; psp-connector's @SendTo responder produces the reply. See
+  # services/payment-api/README.md and services/psp-connector/README.md's M12 sections.
+  "psp.provider-status-query.v1-value|BACKWARD"
+  "psp.provider-status-reply.v1-value|BACKWARD"
 )
 
 echo "Setting compatibility for ${#SUBJECTS[@]} subject(s) ..."

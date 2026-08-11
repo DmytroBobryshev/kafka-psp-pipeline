@@ -149,6 +149,10 @@ class HexagonalArchitectureTest {
                         // Publisher/Response/Entity/Mapper/Command all end in something else.
                         .or()
                         .haveSimpleNameEndingWith("Refund")
+                        // M12: request-reply. ProviderStatusController/UseCase/Port/Gateway/
+                        // Response/WebMapper/AvroEventFactory all end in something else.
+                        .or()
+                        .haveSimpleNameEndingWith("ProviderStatusResult")
                         .should()
                         .resideInAPackage("..domain..");
 

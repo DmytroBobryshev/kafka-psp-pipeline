@@ -22,10 +22,19 @@ spring:
     # KafkaTemplate construction never connects eagerly (the underlying KafkaProducer connects
     # lazily on first send, which this test never triggers), so this value only matters if that
     # assumption is ever wrong - kept short so a stray send() fails fast instead of hanging.
+    # Overridden at runtime by @EmbeddedKafka's broker address (M12 - see
+    # PaymentApiApplicationTests's javadoc) - this value only matters before that override
+    # applies.
     bootstrap-servers: localhost:29092
     producer:
       properties:
         max.block.ms: 2000
+    # M12: no spring.kafka.consumer.value-serializer override needed here - see main
+    # application.yml's comment on why config.ReplyingKafkaConfig overrides the producer's
+    # value-serializer (and the reply consumer's deserializer) explicitly in Java rather than via
+    # YAML, avoiding a duplicate-key collision with the M3 producer block above.
+    consumer:
+      auto-offset-reset: latest
 
 payment-api:
   kafka:
@@ -34,6 +43,10 @@ payment-api:
     # ProducerFactory/KafkaTemplate are constructed at context load but never send here, so no
     # broker and no Schema Registry are needed for PaymentApiApplicationTests to pass.
     merchant-config-changed-topic: merchants.merchant-config-changed.v1
+    # M12: only PRESENCE matters for query-topic (never sent from in this test); the reply topic
+    # DOES need to exist on the embedded broker - declared in @EmbeddedKafka above.
+    provider-status-query-topic: psp.provider-status-query.v1
+    provider-status-reply-topic: psp.provider-status-reply.v1
   # M9 Phase 1: KafkaAvroSerializer#configure never connects eagerly (lazy on first serialize(),
   # which this context-load test never triggers - same lazy-connection reasoning as
   # bootstrap-servers above), so this value only needs to be present, not reachable.

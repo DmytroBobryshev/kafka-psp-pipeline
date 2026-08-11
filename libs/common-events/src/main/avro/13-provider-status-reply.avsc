@@ -1,0 +1,48 @@
+{
+  "type": "record",
+  "name": "ProviderStatusReply",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of psp.provider-status-reply.v1 (M12 - request-reply over Kafka). Born Avro, no JSON history. Produced by psp-connector's @SendTo responder (adapters.in.kafka.ProviderStatusQueryListener), consumed by payment-api's ReplyingKafkaTemplate reply container, correlation-matched back to the pending REST call by KafkaHeaders.CORRELATION_ID (see services/payment-api/README.md's M12 section). Registered under Schema Registry subject 'psp.provider-status-reply.v1-value' (TopicNameStrategy, ADR-0001), BACKWARD compatibility.",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope",
+      "doc": "envelope.aggregateId = paymentId, envelope.causationId = the inbound ProviderStatusQuery's own eventId."
+    },
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "Also the Kafka record KEY (ADR-0003), echoed from the query - correlation itself is header-based, this is for human/log readability on a raw AKHQ dump."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "Echoed from the query."
+    },
+    {
+      "name": "found",
+      "type": "boolean",
+      "doc": "Whether psp-connector holds ANY payment_attempts row for this paymentId yet - false does not mean the payment failed, it means no provider call has been recorded (e.g. the payments.payment-requested.v1 record has not been consumed yet, or never will be for an unknown paymentId). status/providerReference are meaningless when this is false."
+    },
+    {
+      "name": "status",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "The latest ProviderOutcome name (APPROVED / DECLINED / TIMEOUT) for this payment, or null when found=false."
+    },
+    {
+      "name": "providerReference",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "The (simulated) provider's own reference (UUID string form) for the latest attempt, or null when found=false."
+    },
+    {
+      "name": "checkedAt",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "doc": "When psp-connector performed this lookup - generates java.time.Instant (enableDecimalLogicalType/timestamp handling shared with every other envelope-bearing schema in this module)."
+    }
+  ]
+}

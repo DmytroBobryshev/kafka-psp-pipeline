@@ -1,6 +1,7 @@
 package com.example.psp.pspconnector.domain.port;
 
 import com.example.psp.pspconnector.domain.model.PaymentAttempt;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -58,4 +59,14 @@ public interface AttemptLogRepository {
      * escape to the caller.
      */
     boolean tryRecord(PaymentAttempt attempt);
+
+    /**
+     * M12's read path: the most recent attempt recorded for {@code paymentId}, or empty if
+     * psp-connector has not processed (or never will process) a {@code payments.payment-requested.v1}
+     * record for it yet. Backs {@code application.CheckProviderStatusUseCase}, the responder side
+     * of the {@code psp.provider-status-query.v1} -&gt; {@code psp.provider-status-reply.v1}
+     * request-reply pair (M12) - the first read this table has ever needed (M4-M11 only wrote it;
+     * see this interface's own javadoc and {@link PaymentAttempt}'s for that history).
+     */
+    Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId);
 }

@@ -353,6 +353,13 @@ class ProcessPaymentRequestUseCaseTest {
             recorded.add(attempt);
             return true;
         }
+
+        @Override
+        public java.util.Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId) {
+            return recorded.stream()
+                    .filter(a -> a.getPaymentId().equals(paymentId))
+                    .max(java.util.Comparator.comparing(PaymentAttempt::getProcessedAt));
+        }
     }
 
     /**
@@ -381,6 +388,11 @@ class ProcessPaymentRequestUseCaseTest {
         public boolean tryRecord(PaymentAttempt attempt) {
             tryRecordCalls.incrementAndGet();
             return false;
+        }
+
+        @Override
+        public java.util.Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId) {
+            return java.util.Optional.empty();
         }
     }
 
@@ -411,6 +423,11 @@ class ProcessPaymentRequestUseCaseTest {
         public boolean tryRecord(PaymentAttempt attempt) {
             tryRecordCalls.incrementAndGet();
             return false;
+        }
+
+        @Override
+        public java.util.Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId) {
+            return java.util.Optional.empty();
         }
     }
 

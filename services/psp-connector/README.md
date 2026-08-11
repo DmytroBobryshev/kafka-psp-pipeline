@@ -711,3 +711,140 @@ Per ADR-0006 the provider answering "no" is a business outcome, so this service 
 throw. The failure event *is* the successful outcome of processing - the compensation it triggers
 downstream is a different service's concern, which is exactly what choreography means: this service
 knows the provider declined, and nothing at all about reservations or balances.
+
+---
+
+# M12 - Request-reply over Kafka (responder)
+
+`psp.provider-status-query.v1` -> `psp.provider-status-reply.v1`: a synchronous "what is the
+provider status of this payment, right now?" check, answered from this service's own
+`payment_attempts` table (the same table M4-M11 only ever wrote to - see `PaymentAttempt`'s
+javadoc; this is the first module that reads it back). payment-api owns the requesting side
+(`ReplyingKafkaTemplate`, the REST endpoint, the multi-instance reply-topic mechanics) - see
+`services/payment-api/README.md`'s M12 section for that half and the full ADR-0004 discussion.
+This section owns the responder.
+
+## Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as Caller
+    participant PAPI as payment-api
+    participant K as Kafka
+    participant PSP as psp-connector
+
+    UI->>PAPI: GET /api/payments/{paymentId}/provider-status
+    PAPI->>K: psp.provider-status-query.v1 key=paymentId<br/>headers: REPLY_TOPIC, CORRELATION_ID
+    K-->>PSP: psp.provider-status-query.v1
+    PSP->>PSP: SELECT latest payment_attempts row WHERE payment_id = ?
+    PSP->>K: psp.provider-status-reply.v1 (via @SendTo,<br/>correlation headers copied automatically)
+    K-->>PAPI: psp.provider-status-reply.v1 (matched by CORRELATION_ID)
+    PAPI-->>UI: 200 ProviderStatusResponse
+```
+
+## How the reply mechanics work, from THIS side
+
+`@KafkaListener(topics = "...") @SendTo` (no explicit topic argument) on
+`adapters.in.kafka.ProviderStatusQueryListener.onMessage`, whose container factory
+(`config.ProviderStatusKafkaConfig`) has a `replyTemplate` configured. Once that is wired, Spring
+Kafka reads the inbound record's `KafkaHeaders.REPLY_TOPIC` header - set automatically by
+payment-api's `ReplyingKafkaTemplate` when it sends the query, naming whatever topic ITS reply
+container is listening on - and publishes this method's return value there, copying
+`KafkaHeaders.CORRELATION_ID` (and `REPLY_PARTITION`, when the requester set one) onto the
+outbound record automatically. **This class never reads or writes either header itself, and never
+needs to know the reply topic's name** - `psp.provider-status-reply.v1` appears nowhere in
+`ProviderStatusQueryListener.java`. That is the entire point of header-based correlation: the
+responder is a pure function of the request, with zero coupling to who is asking or where they
+want the answer sent. If payment-api scales to five instances tomorrow, this class does not
+change at all.
+
+The reply is Avro-encoded by the SAME `KafkaTemplate<String, Object>` bean
+`config.KafkaProducerConfig` already built for `payments.payment-status-changed.v1` - its producer
+factory already has `auto.register.schemas: true` (`application.yml`), which is exactly what a
+brand-new subject (`psp.provider-status-reply.v1-value`) needs on its first ever publish.
+
+## Consumer group: shared, on purpose (contrast with realtime-gateway)
+
+`psp.provider-status-query.v1` is consumed on `psp-connector.v1` - the **same** group id every
+other listener in this class uses (docs/diagrams/topic-map.md). This is a deliberate contrast
+with M12's other half: `realtime-gateway` gives every instance a *unique* group id because it
+needs fan-out (every instance must see every event). A status query needs the opposite: **any**
+psp-connector instance can answer it correctly from the shared `psp_connector` Postgres database,
+so ordinary consumer-group load-splitting is exactly the right tool - scaling psp-connector
+horizontally scales query throughput for free, with no special-casing. Same Kafka primitive,
+opposite requirement, opposite choice - see `services/realtime-gateway/README.md`'s "THE central
+point" section for the fan-out case this one is the mirror image of.
+
+## Idempotency (or rather, why this endpoint needs none)
+
+Every other listener in this service protects a side effect (authorizing a card, executing a
+refund) against redelivery - M5's whole reason to exist. This one has no side effect to protect:
+`CheckProviderStatusUseCase.execute` is a pure read. Redelivering the same query and answering it
+twice produces two identical, correct answers - there is nothing to deduplicate, and no
+`ProviderStatusTimeoutException`-equivalent retry classification was added to this listener's
+container factory for the same reason.
+
+## Known compromises
+
+- **No DLQ** for this listener - an exception here (a malformed query, a database hiccup) is
+  logged and skipped by Spring Kafka's default error handling, same documented gap as this
+  service's other listeners pre-M8.
+- **`ack.acknowledge()` runs before the reply is confirmed sent** - `@SendTo`'s publish happens
+  after this method returns, so there is the same narrow async-send-before-ack window
+  `services/psp-connector/README.md`'s M4 section already documents for the outbound
+  `payment-status-changed` path, applied here to the reply instead. A crash in that exact window
+  loses a reply the caller will simply see as a timeout - not silent, not incorrect, just slower.
+
+### Request-reply proof
+
+Measured on the live cluster. `GET /api/payments/{paymentId}/provider-status` on payment-api,
+which produces to `psp.provider-status-query.v1`, blocks on a correlated reply from
+`psp.provider-status-reply.v1`, and returns it:
+
+| Call | Result | Round trip |
+|---|---|---|
+| 1 (cold) | `200` | **340 ms** |
+| 2 | `200` | **35 ms** |
+| 3 | `200` | **52 ms** |
+
+```json
+{"paymentId":"1b305364-7f28-4bdd-8f0e-3f4c663d46e4","merchantId":"broadcast-55499",
+ "found":true,"status":"APPROVED",
+ "providerReference":"95e5d65a-2ca4-4161-871c-24a3bb04e85c",
+ "checkedAt":"2026-08-11T22:20:20.230Z","roundTripMillis":...}
+```
+
+The first call pays for producer metadata, the reply consumer's assignment, and Schema Registry
+lookups; steady state is **tens of milliseconds** for a full produce-consume-produce-consume cycle
+across four brokers. Fast enough to sit behind a synchronous HTTP call - which is exactly what
+makes this pattern tempting, and exactly why the next paragraph matters.
+
+#### What it costs: the responder stopped
+
+psp-connector was then killed and the same call repeated:
+
+```
+HTTP 504 in 5.039770s
+{"type":"https://psp.example.com/problems/provider-status-timeout",
+ "title":"Provider status check timed out","status":504,
+ "detail":"provider-status-query timed out waiting for a reply for paymentId=1b30..."}
+```
+
+Five seconds of a held HTTP connection and thread, then a clean 504 - clean because the timeout is
+configured, not because anything recovered. **The query was produced successfully and is still
+sitting on the topic.** Kafka did its job perfectly; the caller failed anyway, because it needed an
+answer within a window and nobody was there to answer.
+
+That is the whole argument about ADR-0004. This complies with the letter of "no service-to-service
+REST" - it is Kafka end to end - while reintroducing precisely what the ADR was written to avoid:
+the caller is now available only if the responder is available, and slow if the responder is slow.
+Every other interaction in this system degrades differently. When psp-connector was down during the
+M11 drills, payments kept being accepted and their events waited on the topic; work resumed on
+restart with nothing lost. Here, the same outage is a user-visible error.
+
+**Use request-reply when the caller genuinely cannot proceed without the answer** - a status the
+caller must display right now, a validation that gates a response. Everywhere else it is a REST
+call wearing a costume, and it pays Kafka's latency for HTTP's coupling. The honest test: if you
+would be comfortable with the caller returning "pending, check back", you should be publishing an
+event instead.

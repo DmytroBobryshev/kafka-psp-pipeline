@@ -84,6 +84,34 @@ spring:
         # nothing to Avro (M9).
         spring.json.add.type.headers: false
 
+    # M12: request-reply (ADR-0004's synchronous-need carve-out). This is payment-api's FIRST
+    # ever real Kafka consumer since M6 replaced the M3 direct producer with the transactional
+    # outbox above - see config.ReplyingKafkaConfig's javadoc for why request-reply cannot go
+    # through the outbox.
+    #
+    # Note what is DELIBERATELY absent here: a second spring.kafka.producer block. YAML has only
+    # ONE spring.kafka.producer.value-serializer slot, already claimed above by the M3 producer's
+    # JsonSerializer (still built unconditionally by config.KafkaProducerConfig, even though
+    # nothing calls it post-M6 - see that class's javadoc) - a second `producer:` key here would
+    # be a YAML duplicate-key error (fails to even parse), not an override. Instead,
+    # config.ReplyingKafkaConfig builds its own producer property Map in Java, starting from this
+    # same block's acks/retries/batching settings via KafkaProperties.buildProducerProperties(null)
+    # and then explicitly overriding value-serializer to KafkaAvroSerializer plus the
+    # schema-registry properties it needs - the same "override specific keys in Java on top of a
+    # shared YAML base" pattern psp-connector's KafkaConsumerConfig already uses for its
+    # deserializer classes.
+    consumer:
+      # group-id is NOT set here - config.ReplyingKafkaConfig computes a unique one per instance
+      # in Java (see that class's javadoc, "The reply topic's partitions and this service's OWN
+      # broadcast-adjacent problem") rather than reading a static value from this file.
+      #
+      # latest, not earliest (the "every group sets auto.offset.reset=earliest" rule in
+      # docs/diagrams/topic-map.md is a deliberate, documented exception here): a brand-new
+      # group.id - minted fresh on every restart - has no committed offset regardless, and any
+      # reply already on the topic when this process starts belongs to a request some OTHER,
+      # possibly long-gone process sent; replaying it is pure waste, never a correctness need.
+      auto-offset-reset: latest
+
 server:
   # 8081 is Schema Registry and 8080 is AKHQ in infra/compose - keep services off both.
   port: 8085
@@ -103,6 +131,11 @@ payment-api:
     # 3 partitions (docs/diagrams/topic-map.md). DELETE publishes a null value (a tombstone); see
     # domain.port.MerchantConfigPublisher for why that is not routed through the M6 outbox.
     merchant-config-changed-topic: merchants.merchant-config-changed.v1
+    # M12: request-reply. Both topics come straight from docs/diagrams/topic-map.md's "Request-
+    # reply (M12)" table - key=paymentId, 6 partitions, 1h retention (an unconsumed reply is
+    # worthless after the caller's timeout).
+    provider-status-query-topic: psp.provider-status-query.v1
+    provider-status-reply-topic: psp.provider-status-reply.v1
   # schema-registry.url is environment-specific (M9 Phase 1) - see application-docker-compose.yml.
   # Read by config.SchemaRegistryConfig to build the KafkaAvroSerializer that Avro-encodes
   # payments.payment-requested.v1's outbox payload; payment-api runs no other Schema Registry

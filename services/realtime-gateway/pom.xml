@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example.psp</groupId>
+    <artifactId>kafka-psp-pipeline</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>realtime-gateway</artifactId>
+  <packaging>jar</packaging>
+
+  <name>realtime-gateway</name>
+  <description>
+    realtime-gateway (M12): consumes payments.payment-requested.v1, payments.payment-status-changed.v1,
+    and every refunds.*.v1 event, and pushes them to browsers over Server-Sent Events, filtered by
+    paymentId and/or merchantId. THE central point of this module: every instance needs EVERY
+    event (each holds different browser connections), so each instance runs its own unique
+    group.id - a consumer group load-splits partitions, it does not fan out. No database.
+    Hexagonal layout enforced by an ArchUnit test.
+  </description>
+
+  <dependencies>
+    <!-- Internal libs: the generated Avro classes for all 7 consumed topics live in common-events. -->
+    <dependency>
+      <groupId>com.example.psp</groupId>
+      <artifactId>common-events</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.example.psp</groupId>
+      <artifactId>common-web</artifactId>
+    </dependency>
+
+    <!-- Web (SseEmitter lives in spring-webmvc, pulled in transitively) + actuator. No database
+         (module brief, PLAN.md M12) - this service holds no state beyond in-memory SSE
+         subscriptions, which are meaningless to persist (they die with the browser connection). -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- Kafka consumer (this module's headline: a unique-group-id, multi-topic fan-out consumer). -->
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka</artifactId>
+    </dependency>
+
+    <!-- Every topic this service consumes is Avro + Schema Registry (M9). -->
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.confluent</groupId>
+      <artifactId>kafka-avro-serializer</artifactId>
+    </dependency>
+
+    <!-- Lombok (annotation processor order fixed in the parent) -->
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Test -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>realtime-gateway</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

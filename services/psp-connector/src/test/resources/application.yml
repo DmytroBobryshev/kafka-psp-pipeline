@@ -36,6 +36,8 @@ psp-connector:
     funds-reserved-topic: refunds.funds-reserved.v1
     refund-completed-topic: refunds.refund-completed.v1
     refund-failed-topic: refunds.refund-failed.v1
+    # M12: only PRESENCE matters for a context-load test, not reachability.
+    provider-status-query-topic: psp.provider-status-query.v1
   # M9 Phase 1: KafkaAvroDeserializer only resolves this lazily (on first poll() that actually
   # needs to fetch/cache a schema) - PspConnectorApplicationTests never publishes to the topic, so
   # this value only needs to be present, not reachable.

@@ -1,5 +1,6 @@
 package com.example.psp.pspconnector.adapters.out.persistence;
 
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -23,4 +24,12 @@ public interface PaymentAttemptJpaRepository extends JpaRepository<PaymentAttemp
      * {@code uq_payment_attempts_inbound_event_id} (V2 migration).
      */
     boolean existsByInboundEventId(UUID inboundEventId);
+
+    /**
+     * M12's read path: the most recent attempt for a payment, by {@code processed_at} descending.
+     * Hits {@code idx_payment_attempts_payment_id} (V1 migration) - a payment normally has one or
+     * two attempt rows (M5's dedup keeps replays from adding more), so this is a cheap lookup even
+     * without a dedicated {@code (payment_id, processed_at)} composite index.
+     */
+    Optional<PaymentAttemptEntity> findFirstByPaymentIdOrderByProcessedAtDesc(UUID paymentId);
 }

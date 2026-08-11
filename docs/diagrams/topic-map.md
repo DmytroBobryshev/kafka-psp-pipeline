@@ -169,13 +169,18 @@ compacted config topic. Debezium's Postgres connector needs no schema-history to
 | `webhook-notifier.planner.v1` | webhook-notifier | `payments.payment-status-changed.v1`, `refunds.refund-completed.v1`, `refunds.refund-failed.v1` |
 | `webhook-notifier.executor.v1` | webhook-notifier | `webhooks.webhook-delivery-requested.v2` + the three `.v2` retry topics (M9 Phase 2; was `.v1` through M8) |
 | `analytics-streams.v1` | analytics | Streams-managed. **M10 actual:** `payments.payment-status-changed.v1` + `merchants.merchant-config-changed.v1` (the latter via the `GlobalKTable`'s own global thread, which uses no consumer group and commits no offsets — it always reads every partition from the beginning). `refunds.*` / `ledger.*` come with M11/M13. The group id is not configured anywhere: Streams derives it from `application.id`. |
-| `payment-api.replies.v1` | payment-api | `psp.provider-status-reply.v1` |
+| `payment-api.replies.<instanceId>` | payment-api | `psp.provider-status-reply.v1` — **unique per instance** (M12); a shared group would let a reply land on a partition the SENDING instance's `ReplyingKafkaTemplate` never sees, timing out a request that was actually answered — see services/payment-api/README.md's M12 section |
 | `realtime-gateway.<instanceId>` | realtime-gateway | `payments.*`, `refunds.*` — **unique per instance**; consumer groups load-split, they do not fan out (M12) |
 | `connect-mongo-audit-sink` | Kafka Connect | `ledger.ledger-entry-recorded.v1`, `payments.payment-status-changed.v1` |
 
 Every group sets `enable.auto.commit=false` with manual ack, `auto.offset.reset=earliest`,
 `isolation.level=read_committed` (mandatory for consumers of anything the transactional ledger
-produces), and `group.instance.id` for static membership on Kubernetes (M19).
+produces), and `group.instance.id` for static membership on Kubernetes (M19). **Two deliberate
+exceptions to `earliest` (M12):** `realtime-gateway.<instanceId>` and `payment-api.replies.<instanceId>`
+both use `auto.offset.reset=latest` — both mint a brand-new, never-before-seen `group.id` on every
+restart (the point of "unique per instance"), so `earliest` would only ever replay history that
+is either useless (no browser was connected to see it) or provably stale (correlated to a request
+no live process could have sent) — see both services' READMEs.
 
 ## Sizing rationale, in one line each
 

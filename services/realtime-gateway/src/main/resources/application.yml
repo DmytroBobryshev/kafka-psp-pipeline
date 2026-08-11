@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: realtime-gateway
+
+  kafka:
+    # No bootstrap-servers here on purpose - environment-specific, lives in
+    # application-docker-compose.yml (same convention as every other service).
+    consumer:
+      # group-id is NOT set here - config.KafkaConsumerConfig computes a unique one per instance
+      # in Java (see that class's javadoc, "THE central point of this module"), which is exactly
+      # why this key is conspicuously absent from this file, unlike every other service's
+      # application.yml.
+      auto-offset-reset: latest
+      properties:
+        # Modest batch size: this consumer's per-record work (map + fan out to N in-memory
+        # subscriptions, each a non-blocking hand-off - adapters.out.sse.InMemorySseConnectionRegistry)
+        # is cheap and bounded, unlike psp-connector's provider call, so there is no M4-style
+        # rebalance-storm risk here to size defensively against.
+        max.poll.records: 50
+        session.timeout.ms: 45000
+        heartbeat.interval.ms: 3000
+
+server:
+  # payment-api 8085, psp-connector 8086, ledger 8087, webhook-notifier 8088, analytics 8089,
+  # AKHQ 8080, Schema Registry 8081, Grafana 3000, Prometheus 9090 - this service uses 8090
+  # (docs/PLAN.md).
+  port: 8090
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+realtime-gateway:
+  kafka:
+    # Every topic name comes straight from docs/diagrams/topic-map.md's "Business topics" table -
+    # realtime-gateway is a listed consumer of all 7.
+    payment-requested-topic: payments.payment-requested.v1
+    payment-status-changed-topic: payments.payment-status-changed.v1
+    refund-requested-topic: refunds.refund-requested.v1
+    funds-reserved-topic: refunds.funds-reserved.v1
+    refund-completed-topic: refunds.refund-completed.v1
+    refund-failed-topic: refunds.refund-failed.v1
+    reservation-released-topic: refunds.reservation-released.v1
+  # schema-registry.url is environment-specific - see application-docker-compose.yml.
+
+  sse:
+    # Idle-connection timeout, milliseconds - see adapters.in.web.PaymentTimelineController's
+    # javadoc. 5 minutes: long enough that a browser tab left open mid-payment is not dropped,
+    # short enough that a silently-vanished client does not leak a subscription forever.
+    timeout-ms: 300000

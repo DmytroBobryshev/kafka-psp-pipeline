@@ -1,0 +1,23 @@
+{
+  "type": "record",
+  "name": "ProviderStatusQuery",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of psp.provider-status-query.v1 (M12 - request-reply over Kafka). Born Avro, no JSON history (docs/PLAN.md: 'New topics use AVRO from the start'). Produced by payment-api's ReplyingKafkaTemplate (adapters.out.kafka.ProviderStatusRequestGateway) and consumed by psp-connector's @SendTo responder (adapters.in.kafka.ProviderStatusQueryListener). Correlation is NOT a field on this record - it rides Kafka headers (KafkaHeaders.CORRELATION_ID, set automatically by ReplyingKafkaTemplate) precisely so the correlation mechanism works the same regardless of payload shape; see services/payment-api/README.md's M12 section for the full reply-topic mechanics. Registered under Schema Registry subject 'psp.provider-status-query.v1-value' (TopicNameStrategy, ADR-0001), BACKWARD compatibility.",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope",
+      "doc": "envelope.aggregateId = paymentId, envelope.aggregateType = 'payment'. A root envelope - this query is not caused by any other event, it is a direct synchronous ask triggered by an inbound REST call."
+    },
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "Also the Kafka record KEY, plain UTF-8 text, not Avro-encoded (ADR-0003) - the payment whose provider status is being asked about."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "The owning merchant, carried for logging/observability on the responder side - not needed for correlation (that's headers) or for the psp-connector lookup itself (payment_attempts is keyed on paymentId alone)."
+    }
+  ]
+}

@@ -2,6 +2,7 @@ package com.example.psp.pspconnector.adapters.out.persistence;
 
 import com.example.psp.pspconnector.domain.model.PaymentAttempt;
 import com.example.psp.pspconnector.domain.port.AttemptLogRepository;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,5 +72,10 @@ public class PostgresAttemptLogRepository implements AttemptLogRepository {
                     e);
             return false;
         }
+    }
+
+    @Override
+    public Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId) {
+        return jpaRepository.findFirstByPaymentIdOrderByProcessedAtDesc(paymentId).map(mapper::toDomain);
     }
 }
