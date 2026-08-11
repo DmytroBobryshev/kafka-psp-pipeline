@@ -196,6 +196,10 @@ class HexagonalArchitectureTest {
                         .haveSimpleNameEndingWith("PaymentOutcome")
                         .or()
                         .haveSimpleNameEndingWith("MerchantConfigSnapshot")
+                        .or()
+                        .haveSimpleNameEndingWith("AuthorizationLatency")
+                        .or()
+                        .haveSimpleNameEndingWith("PaymentStatusAuditEntry")
                         .should()
                         .resideInAPackage("..domain..")
                         .because("the domain model lives in domain/, whatever else is named after it");

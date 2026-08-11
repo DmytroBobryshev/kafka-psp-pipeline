@@ -9,24 +9,78 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * module is graded on - what internal topics appear and how much RocksDB writes - are both
  * decided by these values.
  *
- * @param kafka          topic names.
- * @param schemaRegistry registry endpoint (environment-specific, see
- *                       {@code application-docker-compose.yml}).
- * @param streams        Kafka Streams runtime configuration.
- * @param windows        windowing and state-store retention.
+ * @param kafka            topic names.
+ * @param schemaRegistry   registry endpoint (environment-specific, see
+ *                         {@code application-docker-compose.yml}).
+ * @param streams          Kafka Streams runtime configuration.
+ * @param windows          windowing and state-store retention.
+ * @param authorizationJoin the M13 stream-stream join's window.
+ * @param batchListener    the M13 batch listener's consumer group and batch size.
  */
 @ConfigurationProperties(prefix = "analytics")
 public record AnalyticsProperties(
-        Kafka kafka, SchemaRegistry schemaRegistry, Streams streams, Windows windows) {
+        Kafka kafka,
+        SchemaRegistry schemaRegistry,
+        Streams streams,
+        Windows windows,
+        AuthorizationJoin authorizationJoin,
+        BatchListener batchListener) {
 
     /**
-     * @param paymentStatusChangedTopic the aggregation input. Keyed by {@code merchantId}
-     *                                  (ADR-0003) - the single fact that keeps a repartition
-     *                                  topic out of this application. Avro since M9 Phase 2.
+     * @param paymentStatusChangedTopic the M10 aggregation input, and one side of the M13 join
+     *                                  (re-keyed to {@code paymentId} first - see
+     *                                  {@code adapters.in.kafka.AnalyticsTopology}). Keyed by
+     *                                  {@code merchantId} (ADR-0003) - the single fact that keeps
+     *                                  a repartition topic out of the M10 half of this
+     *                                  application. Avro since M9 Phase 2.
      * @param merchantConfigChangedTopic the compacted config topic read as a
      *                                  {@code GlobalKTable}. Avro since M10.
+     * @param paymentRequestedTopic     the M13 join's other input. Keyed by {@code paymentId}
+     *                                  already (ADR-0003) - the side that needs NO repartition,
+     *                                  which is what makes the re-keyed
+     *                                  {@code payments.payment-status-changed.v1} the only side
+     *                                  that pays for one. Avro since M9 Phase 1.
      */
-    public record Kafka(String paymentStatusChangedTopic, String merchantConfigChangedTopic) {
+    public record Kafka(
+            String paymentStatusChangedTopic,
+            String merchantConfigChangedTopic,
+            String paymentRequestedTopic) {
+    }
+
+    /**
+     * The M13 stream-stream join's window (see {@code adapters.in.kafka.AnalyticsTopology}'s
+     * class javadoc for the full justification).
+     *
+     * @param window the maximum time a {@code payment-status-changed} record may arrive AFTER its
+     *               matching {@code payment-requested} record and still be joined. psp-connector
+     *               simulates 100ms-5s of provider latency (docs/PLAN.md's M4 brief); 5 minutes is
+     *               ~60x that worst case, generous enough to survive a consumer rebalance or a
+     *               slow catch-up after downtime, tight enough that the join's internal buffer
+     *               stores do not grow without bound.
+     * @param grace  how long after the window closes a late record is still accepted - the same
+     *               30s M10 already uses for the same pipeline, and the same producer-side jitter
+     *               sources (linger.ms, retry backoff on a leader election, clock skew).
+     */
+    public record AuthorizationJoin(java.time.Duration window, java.time.Duration grace) {
+    }
+
+    /**
+     * The M13 batch listener's consumer group and the {@code max.poll.records} lever.
+     *
+     * @param groupId        a dedicated {@code group.id}, independent of
+     *                       {@code streams.applicationId} - a plain {@code @KafkaListener} and a
+     *                       Kafka Streams app are two different consumer groups on the same
+     *                       topic, each with its own committed offsets and its own view of "how
+     *                       far behind am I".
+     * @param maxPollRecords the batch-size lever: how many records one {@code poll()} hands to
+     *                       the listener in a single call, and therefore how many documents one
+     *                       bulk Mongo write covers. Unlike psp-connector's M4
+     *                       {@code max.poll.records=10} (kept small because each record blocks on
+     *                       a slow simulated provider call), this listener does no per-record I/O
+     *                       until the bulk write at the end, so a much larger batch is both safe
+     *                       and the entire point.
+     */
+    public record BatchListener(String groupId, int maxPollRecords) {
     }
 
     /** @param url Confluent Schema Registry base URL; {@code mock://...} in tests. */

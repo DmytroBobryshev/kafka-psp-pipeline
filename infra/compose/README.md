@@ -211,6 +211,100 @@ protocol via the Sarama client library, not JMX) instead of a `jmx_exporter` Jav
   JMX would. That's real signal you'd want in production and will matter more from M15
   (observability) onward. For M2, topic/partition/broker-level visibility was the priority.
 
+## M13 - Kafka Connect MongoDB sink (`mongo-audit-sink`)
+
+A second connector on the same `kafka-connect` worker as M6's Debezium source: `ledger.ledger-entry-recorded.v1`
+(Avro, M9 Phase 2) → MongoDB `audit_trail.audit_trail`, **zero application code** - the whole
+point. `infra/compose/connect/mongodb-audit-sink-connector.json` is the template;
+`register-connector.sh` renders and registers it the same way it already handled the outbox
+connector (see that script's own comments), now via a shared `register_connector()` function so
+both connectors go through identical idempotent-PUT-then-poll-for-RUNNING logic.
+
+### Two plugins the `debezium/connect` image does not ship
+
+`debezium/connect:2.7.3.Final` bundles every `debezium-connector-*` (including
+`debezium-connector-mongodb` - a **source** connector reading MongoDB change streams, the opposite
+direction from what M13 needs) but zero sink connectors and zero Avro converter. Both had to be
+added the same way M9 Phase 1's outbox SMT was: download once, verify, commit the jar(s), mount as
+a read-only plugin directory under `/kafka/connect` (Kafka Connect's plugin scanner treats every
+subdirectory there as one classloader-isolated plugin, identically to every baked-in
+`debezium-connector-*` sibling):
+
+| Plugin directory | Contents | Source |
+|---|---|---|
+| `connect/plugins/mongodb-kafka-connect/` | `mongo-kafka-connect-1.16.0-all.jar` (self-contained, every dependency shaded in) | `org.mongodb.kafka:mongo-kafka-connect:1.16.0` from Maven Central, sha1-verified against the published checksum. 1.16.0, not the current 3.0.1, chosen deliberately - a well-established release with broad Kafka Connect API compatibility, lower risk than the newest major on a worker this old. |
+| `connect/plugins/kafka-connect-avro-converter/` | 30 jars: `kafka-connect-avro-converter`, `kafka-avro-serializer`, `kafka-schema-registry-client` and their transitive deps, including `avro-1.11.3.jar` - the exact `avro.version` the rest of this repo's Maven build already pins | Confluent Hub's `confluentinc-kafka-connect-avro-converter-7.7.1.zip`, matching `SCHEMA_REGISTRY_VERSION=7.7.1` (`.env`) so the converter and the running registry are the same Confluent release - the same "one vendor's tested version matrix" reasoning `infra/compose/README.md`'s "Image choices" table already applies to the broker/registry pair. |
+
+`docker-compose.yml`'s `kafka-connect` service mounts both, read-only, alongside the existing SMT
+mount; a plugin path change needs `docker compose up -d kafka-connect` to be picked up (plugin
+scanning happens once, at worker startup).
+
+### Converter configuration - the part the module brief calls "the usual failure"
+
+`ledger.ledger-entry-recorded.v1` is **Avro**, not plain JSON. Getting the sink's converters wrong
+is silent right up until the first record: the connector registers fine, reports `RUNNING`, and
+only fails once a record actually needs converting.
+
+```json
+"key.converter": "org.apache.kafka.connect.storage.StringConverter",
+"value.converter": "io.confluent.connect.avro.AvroConverter",
+"value.converter.schema.registry.url": "http://schema-registry:8081"
+```
+
+- **Key**: plain `StringConverter` - every key in this system is a plain UTF-8 string (ADR-0003;
+  this topic's key is `merchantId`), never Avro-encoded, so there is no schema to look up for it.
+- **Value**: `io.confluent.connect.avro.AvroConverter`, pointed at the in-network Schema Registry
+  address (`schema-registry:8081` - the Connect worker runs inside `kafka-psp-net`, not on the
+  host, so this is `SCHEMA_REGISTRY_PORT`'s Docker-DNS address, not `localhost:8081`). This is what
+  reads the Confluent wire format (magic byte + 4-byte schema id + Avro binary), fetches the exact
+  schema from the registry, and hands the sink a real, typed `Struct` instead of raw bytes or a
+  JSON-parse failure. Using the default `JsonConverter` here - the single easiest way to get this
+  wrong - fails on the very first record with `SerializationException: Unknown magic byte!`,
+  because a `JsonConverter` tries to interpret Avro's magic byte as the start of a JSON document.
+
+### The failure this caught for real: the pre-M9 JSON backlog
+
+Registering against the live cluster hit exactly the kind of problem this section's title warns
+about - not simulated. `ledger.ledger-entry-recorded.v1` predates its own M9 Phase 2 Avro cutover
+(cut in place, no version bump - services/ledger/README.md), so this long-lived dev cluster's copy
+of the topic still holds thousands of pre-cutover JSON records ahead of the Avro ones, the exact
+backlog `services/analytics/README.md`'s M10 section already documents fighting with
+`LogAndContinueExceptionHandler`. With `errors.tolerance=none` (Kafka Connect's default), the sink
+task died on record 1 of partition 5: `DataException: Failed to deserialize data ... Caused by:
+SerializationException: Unknown magic byte!` - confirmed by reading the raw bytes directly off the
+topic at that offset: plain JSON, no Confluent wire-format prefix.
+
+The fix, in the connector config:
+
+```json
+"errors.tolerance": "all",
+"errors.deadletterqueue.topic.name": "ledger.ledger-entry-recorded.v1.mongo-audit-sink.dlq",
+"errors.deadletterqueue.topic.replication.factor": "3",
+"errors.deadletterqueue.context.headers.enable": "true"
+```
+
+`errors.tolerance=all` makes a conversion failure a per-record skip instead of a task-killing
+error; the dead-letter topic (self-provisioned by Kafka Connect's own `AdminClient`, the same way
+`connect.configs`/`connect.offsets`/`connect.status` are - not created by `create-topics.sh`)
+means the skip is not silent. Same ADR-0006 DLQ naming convention as the rest of this system's
+`<topic>.<consumer-app>.dlq` topics. Measured on the live cluster after registering: **714 legacy
+JSON records routed to the DLQ**, task stayed `RUNNING` throughout, and every genuinely-Avro record
+behind them landed in MongoDB - `register-connector.sh`'s one-automatic-restart-on-FAILED logic
+(see that script's own comments) is what recovered the task after the config fix, no manual
+intervention needed on a re-run.
+
+### Document shape - no application code shaped it
+
+Every field on `LedgerEntryRecorded` (including the nested `envelope`, and `amount`/`balanceAfter`
+as `Decimal128`, and `recordedAt` as a real `ISODate`) arrives in `audit_trail.audit_trail`
+unchanged - the Avro converter's schema-driven `Struct` conversion is what MongoDB's sink connector
+turns into BSON, with no mapper, no DTO, no Java class anywhere in this repository shaping that
+document. `document.id.strategy` is deliberately left at its default,
+`BsonOidStrategy` (a fresh `ObjectId` per record) rather than anything derived from the Kafka key:
+`merchantId` repeats across many ledger entries, so keying the Mongo `_id` on it would make each
+new entry for a merchant silently overwrite the previous "audit" document - exactly backwards for
+an audit trail, which wants one row per event, not last-write-wins per merchant.
+
 ## Persistence
 
 One Postgres container, one Mongo container - each hosting **separate logical
@@ -549,6 +643,13 @@ user can only connect to its own database.
   left documented rather than silently corrected, since the failure mode (nested bind mounts) is
   a genuinely easy mistake to repeat in later modules (M18 Helm charts mount plenty of
   ConfigMaps).
+- **(M13) `mongo-kafka-connect` pinned to 1.16.0, not the current 3.0.1** - a deliberately
+  conservative choice on a Kafka Connect worker this old (`debezium/connect:2.7.3.Final`); not
+  verified against the newest major.
+- **(M13) The DLQ has no replay tooling.** `ledger.ledger-entry-recorded.v1.mongo-audit-sink.dlq`
+  holds every pre-M9 JSON record the sink could not convert (714, measured), with no consumer,
+  no UI, and no cleanup job - the same shape of gap M8's `.v1.dlq` already has for webhook
+  deliveries, just for a topic this module is new to.
 - A **`kind` cluster (`kafka-psp`, 3 nodes)** is already running on this machine from the M1/0.3
   toolchain setup and was left untouched per instructions; it costs some RAM/CPU alongside this
   compose stack. On a memory-constrained laptop, `kind delete cluster` (not run here) would free

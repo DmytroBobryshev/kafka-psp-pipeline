@@ -40,6 +40,10 @@ analytics:
     # GlobalKTable: every instance holds every partition, so the 12-vs-3 partition mismatch that
     # would break a KTable join is simply not a constraint.
     merchant-config-changed-topic: merchants.merchant-config-changed.v1
+    # M13: the stream-stream join's other input. 12 partitions, key=paymentId (ADR-0003) -
+    # already correctly keyed for this join, so it is payment-status-changed's copy that gets
+    # re-keyed and repartitioned, not this one. Avro since M9 Phase 1.
+    payment-requested-topic: payments.payment-requested.v1
 
   # schema-registry.url is environment-specific - see application-docker-compose.yml.
 
@@ -117,3 +121,34 @@ analytics:
     # 24h of slack, i.e. 96x more changelog history than the store it backs. 5 minutes is ample
     # headroom for a restore that starts moments after a crash.
     changelog-additional-retention: 5m
+
+  # M13: the stream-stream join's window - see adapters.in.kafka.AnalyticsTopology's class
+  # javadoc, section 5, for the full justification.
+  authorization-join:
+    # How long AFTER a payment-requested record its matching payment-status-changed record may
+    # arrive and still be joined. psp-connector simulates 100ms-5s of provider latency
+    # (docs/PLAN.md's M4 brief) - 5 minutes is ~60x that worst case: generous enough to survive a
+    # consumer rebalance or a slow catch-up after downtime, tight enough that the join's internal
+    # buffer stores (RocksDB, changelogged - see the topology javadoc) do not grow without bound.
+    # The window is NOT symmetric: AnalyticsTopology also calls .before(Duration.ZERO), so a
+    # status change timestamped BEFORE its own request (clock skew, not a real negative latency)
+    # never joins at all, regardless of this value.
+    window: 5m
+    # Same 30s M10 already uses for the same pipeline (see analytics.windows.grace above) - the
+    # same producer-side jitter sources (linger.ms, retry backoff on a leader election, clock
+    # skew between service instances) apply to both windowed operations.
+    grace: 30s
+
+  # M13: the batch listener - a plain @KafkaListener(batch = true), NOT part of the Kafka Streams
+  # application above, with its own consumer group and its own committed offsets.
+  batch-listener:
+    # Independent of streams.application-id on purpose (see AnalyticsProperties.BatchListener) -
+    # this is a second, unrelated consumer of payments.payment-status-changed.v1.
+    group-id: analytics.status-audit-batch.v1
+    # THE batch-size lever: how many records one poll() hands to the listener, and therefore how
+    # many documents one bulk Mongo write covers. Large on purpose - unlike psp-connector's M4
+    # max.poll.records=10 (kept small because each record blocks on a slow simulated provider
+    # call), this listener does no per-record I/O until the single bulk write at the end, so a
+    # much bigger batch is both safe (nothing here can blow max.poll.interval.ms) and the entire
+    # point: N round trips collapse into one.
+    max-poll-records: 200

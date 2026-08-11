@@ -34,6 +34,7 @@ analytics:
   kafka:
     payment-status-changed-topic: payments.payment-status-changed.v1
     merchant-config-changed-topic: merchants.merchant-config-changed.v1
+    payment-requested-topic: payments.payment-requested.v1
   streams:
     application-id: analytics-streams.test.v1
     state-dir: ${java.io.tmpdir}/kafka-psp/analytics-streams-test
@@ -47,3 +48,13 @@ analytics:
     grace: 30s
     store-retention: 15m
     changelog-additional-retention: 5m
+  authorization-join:
+    window: 5m
+    grace: 30s
+  batch-listener:
+    # A real @KafkaListener, unlike the Streams client (auto-startup=false above) - it DOES
+    # connect to the @EmbeddedKafka broker at context refresh, so this group-id and
+    # payments.payment-status-changed.v1 (already in AnalyticsApplicationTests' @EmbeddedKafka
+    # topic list) both need to be real and consistent for the context to load cleanly.
+    group-id: analytics.status-audit-batch.test.v1
+    max-poll-records: 200

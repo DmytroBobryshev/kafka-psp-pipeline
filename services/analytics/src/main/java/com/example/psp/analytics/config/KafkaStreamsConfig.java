@@ -1,6 +1,7 @@
 package com.example.psp.analytics.config;
 
 import com.example.psp.common.events.avro.MerchantConfigChanged;
+import com.example.psp.common.events.avro.PaymentRequested;
 import com.example.psp.common.events.avro.PaymentStatusChanged;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
@@ -206,6 +207,16 @@ public class KafkaStreamsConfig {
     @Bean
     public SpecificAvroSerde<MerchantConfigChanged> merchantConfigChangedSerde(
             AnalyticsProperties properties) {
+        return avroSerde(properties.schemaRegistry().url());
+    }
+
+    /**
+     * Serde for {@code payments.payment-requested.v1}'s values (Avro since M9 Phase 1) - the M13
+     * join's other source. Same {@code specific.avro.reader=true} reasoning as the two serdes
+     * above.
+     */
+    @Bean
+    public SpecificAvroSerde<PaymentRequested> paymentRequestedSerde(AnalyticsProperties properties) {
         return avroSerde(properties.schemaRegistry().url());
     }
 

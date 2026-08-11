@@ -1,0 +1,27 @@
+{
+  "name": "mongo-audit-sink",
+  "config": {
+    "connector.class": "com.mongodb.kafka.connect.MongoSinkConnector",
+    "tasks.max": "1",
+
+    "topics": "ledger.ledger-entry-recorded.v1",
+
+    "connection.uri": "mongodb://${AUDIT_TRAIL_DB_USER}:${AUDIT_TRAIL_DB_PASSWORD}@mongodb:27017/?authSource=audit_trail",
+    "database": "audit_trail",
+    "collection": "audit_trail",
+
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://schema-registry:8081",
+
+    "document.id.strategy": "com.mongodb.kafka.connect.sink.processor.id.strategy.BsonOidStrategy",
+
+    "errors.tolerance": "all",
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true",
+    "errors.deadletterqueue.topic.name": "ledger.ledger-entry-recorded.v1.mongo-audit-sink.dlq",
+    "errors.deadletterqueue.topic.replication.factor": "3",
+    "errors.deadletterqueue.context.headers.enable": "true"
+  }
+}

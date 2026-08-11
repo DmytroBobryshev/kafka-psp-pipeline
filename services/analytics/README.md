@@ -668,15 +668,293 @@ were offline still see the deletion when they return. Delete the tombstone too e
 absent consumer would restore a key that was meant to be gone. **Deletion on a compacted topic is
 eventual, and the record proving the deletion has its own retention.**
 
+## M13 - stream-stream join, batch listener
+
+M10's `avgPipelineLatencyMillis` measures `now − envelope.occurredAt`: the provider answering →
+analytics processing it. It is **not** authorization latency — the time a payment actually took to
+be decided — because it never reads `payments.payment-requested.v1` at all. M13 builds the join
+that does: `payments.payment-requested.v1` (keyed `paymentId`) × `payments.payment-status-changed.v1`
+(keyed `merchantId`), producing one `AuthorizationLatency` per decided payment
+(`decidedAt − requestedAt`), projected into MongoDB's `authorization_latency` collection
+(`adapters.in.kafka.AnalyticsTopology`, section 5 of its class javadoc has the full reasoning this
+section summarizes).
+
+### Why this needs co-partitioning, and why `GlobalKTable` cannot substitute
+
+A `KStream x KTable`/`GlobalKTable` join (M10's join) only needs ONE side partitioned meaningfully;
+a `GlobalKTable` sidesteps co-partitioning entirely by replicating its whole source to every
+instance. A `KStream x KStream` windowed join has no such escape hatch: **both** sides are streams,
+both get buffered per task in local (changelogged) state for the duration of the join window, and
+for two records to ever meet inside that buffer the same key must land in the same task on both
+sides — i.e. the two streams must be co-partitioned (same partition count, same partitioner, same
+key). There is no "global stream" construct in the DSL, and there could not sensibly be one:
+replicating every task's full join-window buffer of the payment path's highest-volume topic to
+every instance is exactly the catastrophe M10's GlobalKTable section warns a `GlobalKTable`'s
+source must never approach.
+
+`payments.payment-requested.v1` is keyed by `paymentId`; `payments.payment-status-changed.v1` is
+keyed by `merchantId` (deliberately — ADR-0003, so the ledger's single-writer-per-balance invariant
+holds, M7). Two different keys, not just two different partition counts. One side has to be
+re-keyed to `paymentId` before the join can run at all — `payments.payment-status-changed.v1`'s
+copy, via `selectKey`, since `payments.payment-requested.v1` is already correctly keyed and is the
+side the other one has to match.
+
+### The topology, as Streams prints it (live cluster, verbatim)
+
+```
+Topologies:
+   Sub-topology: 0 for global store (will not generate tasks)
+    Source: merchant-config-source-source (topics: [merchants.merchant-config-changed.v1])
+      --> merchant-config-source
+    Processor: merchant-config-source (stores: [merchant-config-store])
+      --> none
+      <-- merchant-config-source-source
+  Sub-topology: 1
+    Source: payment-status-changed-source (topics: [payments.payment-status-changed.v1])
+      --> merchant-config-join, rekey-status-changed-by-payment-id
+    Processor: merchant-config-join (stores: [])
+      --> merchant-metrics-1m-aggregate
+      <-- payment-status-changed-source
+    Processor: merchant-metrics-1m-aggregate (stores: [merchant-metrics-1m])
+      --> merchant-metrics-1m-to-stream
+      <-- merchant-config-join
+    Processor: rekey-status-changed-by-payment-id (stores: [])
+      --> authorization-latency-join-right-repartition-filter
+      <-- payment-status-changed-source
+    Processor: authorization-latency-join-right-repartition-filter (stores: [])
+      --> authorization-latency-join-right-repartition-sink
+      <-- rekey-status-changed-by-payment-id
+    Processor: merchant-metrics-1m-to-stream (stores: [])
+      --> mongo-projection-sink
+      <-- merchant-metrics-1m-aggregate
+    Sink: authorization-latency-join-right-repartition-sink (topic: authorization-latency-join-right-repartition)
+      <-- authorization-latency-join-right-repartition-filter
+    Processor: mongo-projection-sink (stores: [])
+      --> none
+      <-- merchant-metrics-1m-to-stream
+
+  Sub-topology: 2
+    Source: authorization-latency-join-right-repartition-source (topics: [authorization-latency-join-right-repartition])
+      --> authorization-latency-join-other-windowed
+    Source: payment-requested-source (topics: [payments.payment-requested.v1])
+      --> authorization-latency-join-this-windowed
+    Processor: authorization-latency-join-other-windowed (stores: [KSTREAM-JOINOTHER-0000000015-store])
+      --> authorization-latency-join-other-join
+      <-- authorization-latency-join-right-repartition-source
+    Processor: authorization-latency-join-this-windowed (stores: [KSTREAM-JOINTHIS-0000000014-store])
+      --> authorization-latency-join-this-join
+      <-- payment-requested-source
+    Processor: authorization-latency-join-other-join (stores: [KSTREAM-JOINTHIS-0000000014-store])
+      --> authorization-latency-join-merge
+      <-- authorization-latency-join-other-windowed
+    Processor: authorization-latency-join-this-join (stores: [KSTREAM-JOINOTHER-0000000015-store])
+      --> authorization-latency-join-merge
+      <-- authorization-latency-join-this-windowed
+    Processor: authorization-latency-join-merge (stores: [])
+      --> authorization-latency-projection-sink
+      <-- authorization-latency-join-this-join, authorization-latency-join-other-join
+    Processor: authorization-latency-projection-sink (stores: [])
+      --> none
+      <-- authorization-latency-join-merge
+```
+
+Contrast with M10's topology dump above: **three sub-topologies now, not one.** Sub-topology 1 ends
+at the repartition `Sink:` node; sub-topology 2 begins at the repartition topic's own `Source:`
+(plus `payments.payment-requested.v1`'s source, feeding the same sub-topology). That break IS the
+shuffle — exactly the tell the M10 class javadoc and this README's troubleshooting table already
+named ("a second `Sub-topology` on the processing side is the tell"), now observed for real instead
+of predicted. Note also that `payment-status-changed-source` now fans out to **two** children
+(`merchant-config-join` for M10, `rekey-status-changed-by-payment-id` for M13) — the same source
+topic feeding two independent branches of one topology, not two separate subscriptions (Kafka
+Streams rejects registering one topic as a source twice in one `Topology`).
+
+### Internal topics: four now, up from M10's one
+
+Measured on the live cluster after this join ran (`kafka-topics --describe`):
+
+| Name | Partitions | RF | cleanup.policy | retention.ms | Why |
+|---|---|---|---|---|---|
+| `analytics-streams.v1-authorization-latency-join-right-repartition` | 12 | 3 | delete | **-1 (infinite)** | The repartition topic. 12 to match `payments.payment-requested.v1`. Infinite retention is Kafka Streams' own default for a repartition topic — it is not a bug, it is purged by `deleteRecords()` calls after the records are consumed and joined, not by time (topic-map.md predicted exactly this: `retention.ms=-1, purged via deleteRecords`). |
+| `analytics-streams.v1-authorization-latency-join-this-join-store-changelog` | 12 | 3 | delete | 630000 (10m30s) | The `payment-requested` side's join-window buffer, logged. `delete` alone, not `compact,delete` like M10's windowed aggregate — a join buffer's value is "was this key seen in this window", not "the last value for this key forever", so compaction buys nothing. |
+| `analytics-streams.v1-authorization-latency-join-other-join-store-changelog` | 12 | 3 | delete | 630000 (10m30s) | Same, for the re-keyed `payment-status-changed` side. |
+| `analytics-streams.v1-merchant-metrics-1m-changelog` | 12 | 3 | compact,delete | 1200000 (20m) | M10's, **completely unchanged** by this module — the point of the contrast. |
+
+**One repartition topic, two join-buffer changelogs, on top of M10's one aggregation changelog.**
+M10's topology creates exactly one internal topic; M13 adds three more just by joining two
+already-existing business topics differently. That is the concrete, measured cost of a
+stream-stream join versus a `GlobalKTable` join: the `GlobalKTable` join (M10) still creates none
+of its own — the compacted source topic remains its own changelog, unchanged since M10 — while the
+M13 join's TWO input streams both need buffered, changelogged state just to find each other.
+
+Naming note, because it surprised this build: `StreamJoined.withName("authorization-latency-join")`
+alone names the processor nodes and (via a `-right-repartition` suffix on the re-keyed side) the
+repartition topic — it does **not** name the join's internal stores. Without the separate
+`StreamJoined.withStoreName(...)` call, the two changelogs above would be named after Streams'
+auto-incrementing node counter (`KSTREAM-JOINTHIS-0000000014-store-changelog`, observed on this
+exact build before the fix) — exactly the unnamed, build-order-fragile internal topic the M10 class
+javadoc's "every node is named" point warns about, just for a different Streams API than the one
+that point was originally written for.
+
+### The join window
+
+`JoinWindows.ofTimeDifferenceAndGrace(window, grace).before(Duration.ZERO)` —
+`analytics.authorization-join.window = 5m`, `analytics.authorization-join.grace = 30s`
+(`application.yml`):
+
+- **`.before(Duration.ZERO)`**: the status-changed record may never be timestamped *before* its own
+  request. A decision "before" its own request is clock skew between service instances, not a real
+  negative latency, and the join should never manufacture one.
+- **`window = 5m`** (the `.after(...)` bound): psp-connector simulates 100ms–5s of provider latency
+  (docs/PLAN.md's M4 brief). 5 minutes is ~60x that worst case — generous enough to survive a
+  consumer rebalance or a slow catch-up after downtime, tight enough that the join's buffer stores
+  (the two changelogs above) do not grow without bound.
+- **`grace = 30s`**: the same value, and the same reasoning, M10 already uses for the same
+  pipeline's out-of-orderness (producer `linger.ms`, retry backoff on a leader election, clock skew
+  across `psp-connector` instances).
+
+**What happens to a record outside the window.** An unjoined payment is **not** a lost payment.
+Neither source topic is touched by this join — both keep their full 7-day retention
+(docs/diagrams/topic-map.md) and every other consumer (ledger, webhook-notifier, this same
+application's own M10 aggregation) sees every record exactly as before. What is missing is
+narrower: this one derived, analytics-only authorization-latency measurement, for that one payment.
+A late match (status decided more than `window` after the request) is dropped the same way M10's
+grace-period misses are — counted in Streams' `late-record-drop` metric, emitting nothing, silently
+by design. A payment that never gets a status change within the join's buffer retention (still
+pending, or a status event genuinely lost upstream) simply never produces a row. The join is a
+plain **inner** `join`, not `leftJoin`/`outerJoin`, on purpose: a latency with no decision timestamp
+is not a partial answer, it is not an answer, unlike M10's `leftJoin` where a payment with no
+merchant config is still a real, countable payment.
+
+**What the repartition costs, concretely.** An extra network round trip through the broker for
+every status-changed record (produced to the repartition topic, then re-fetched by whichever task
+now owns that `paymentId`'s partition); extra storage (a full copy of every re-keyed record, held
+indefinitely until `deleteRecords()` catches up — see the table above); extra latency (produce +
+refetch, before the join's own window buffering is even reached). None of this exists on the M10
+path. That contrast — one topology, one join costs nothing, the other costs four extra topics and a
+broker round trip per record — is the entire point of building this join.
+
+### Join proof
+
+Measured on the live cluster. One payment driven through the full pipeline - payment-api, outbox,
+Debezium, psp-connector - and the join's output read from MongoDB:
+
+```js
+{ merchantId: 'm13-join-99475',
+  status: 'SUCCEEDED',
+  requestedAt: ISODate('2026-08-11T23:36:06.613Z'),
+  decidedAt:   ISODate('2026-08-11T23:36:09.458Z'),
+  latencyMillis: Long('2845') }
+```
+
+**2,845 ms between the payment being requested and its outcome being decided** - and unlike M10's
+`avgPipelineLatencyMillis`, this number came from two records that had to be brought together, not
+from one record's own timestamps. That is the whole reason a join was necessary.
+
+#### The internal topics, before and after
+
+`kafka-topics --list | grep analytics` on the live cluster, with the `analytics-streams.v1-` prefix
+stripped:
+
+| After M10 | After M13 |
+|---|---|
+| `merchant-metrics-1m-changelog` | `merchant-metrics-1m-changelog` |
+| | `authorization-latency-join-right-repartition` |
+| | `authorization-latency-join-this-join-store-changelog` |
+| | `authorization-latency-join-other-join-store-changelog` |
+
+**One topic became four, and none of that appears in the DSL code.** The repartition topic exists
+because a stream-stream join demands co-partitioning and the two sides are keyed differently -
+`paymentId` on one, `merchantId` on the other, deliberately, per ADR-0003. The two changelogs exist
+because both sides of a windowed join are buffered in local state, and local state needs a durable
+backing.
+
+M10's topology needed none of this, and the reason was specific: it grouped by a key the records
+already had. The moment a key has to change, Kafka must physically move records between partitions,
+and that move is a full round trip out to the broker and back - produce, replicate, re-fetch - plus
+storage for a second copy of every re-keyed record. **The cost that ADR-0003's key choice deferred
+arrives here, and it arrives as infrastructure you did not write.**
+
+Reading a topology's sub-topology count is the quickest way to see this: sub-topologies are split
+*by* repartition topics, so M10's single processing sub-topology meant zero shuffles, and M13's
+three mean one.
+
+### The batch listener
+
+`adapters.in.kafka.PaymentStatusChangedBatchListener`: a plain `@KafkaListener(batch = true)` on
+`payments.payment-status-changed.v1`, entirely separate from the Kafka Streams application above —
+its own consumer group (`analytics.status-audit-batch.v1`, independent of
+`streams.application-id`), its own committed offsets, its own container. It writes every event in
+each batch to MongoDB's `payment_status_audit` collection in **one bulk write per batch**
+(`adapters.out.mongo.MongoPaymentStatusAuditRepository`, ordered `BulkOperations`) instead of one
+round trip per record — turning N Mongo round trips into 1, PLAN.md's M13 brief, applied to the
+Mongo projection write path the way M10's own projection could not be (M10's write happens inside
+the Streams DSL's `foreach`, a different consumption mechanism entirely; a plain `@KafkaListener`
+needed a genuinely separate write path to attach to, which is what this collection is).
+
+**`max.poll.records` is the batch-size lever** (`analytics.batch-listener.max-poll-records = 200`,
+`config.BatchListenerKafkaConfig`): how many records one `poll()` hands to the listener, and
+therefore how many documents one bulk write covers. Deliberately much larger than psp-connector's
+M4 `max.poll.records=10` — that value is small *because* each record blocks on a slow simulated
+provider call; this listener does no per-record I/O until the single bulk write at the end, so a
+large batch is both safe (nothing here can blow `max.poll.interval.ms`) and the entire point.
+
+**The failure-handling difference a single-record listener doesn't have.** Every other
+`@KafkaListener` in this codebase processes one record, so an exception fails exactly that record.
+A batch listener has no such isolation by default — a plain exception fails the **whole batch**,
+and without explicit handling either the whole thing gets redelivered (re-doing work that already
+succeeded) or, worse, a single permanently-bad record in an otherwise-good batch loops forever.
+This module's choice: **`BatchListenerFailedException(message, failedIndex)`**, thrown from
+`PaymentStatusChangedBatchListener` when the Mongo write reports a partial failure. Two things make
+the index meaningful rather than approximate:
+
+1. `MongoPaymentStatusAuditRepository` writes with `BulkMode.ORDERED` — MongoDB stops at the first
+   failing operation in an ordered bulk write and attempts nothing after it, so "index N failed"
+   genuinely means "everything before N succeeded, nothing at or after N was even tried".
+2. Each entry is an **upsert** (`replaceOne(..., FindAndReplaceOptions.options().upsert())`), keyed
+   by `envelope.eventId`, not a plain `insert`. A redelivered batch (rebalance, crash before the
+   offset commit) hits no duplicate-key error on the records it already wrote — those upserts are
+   harmless no-ops — so the only way `saveAll` legitimately fails here is a genuine write error
+   unrelated to redelivery. (Plain `insert` + this same recovery mechanism would be actively wrong:
+   a duplicate-key error on an already-successful record is proof of success, not a failure to
+   retry — translating it into "redeliver from here" would loop forever on a record that already
+   worked.)
+
+`config.BatchListenerKafkaConfig`'s `DefaultErrorHandler` recognizes `BatchListenerFailedException`
+specifically: it commits offsets for every record before the failed index and seeks the consumer
+back to redeliver only from that index onward, instead of redelivering (or getting stuck on) the
+whole batch. `AckMode.BATCH` — one offset commit per successfully-processed batch, matching "one
+bulk write per batch" all the way through the offset-commit path too, not just the Mongo write.
+
+**Compromise, found live, not theoretical.** This dev cluster's `payments.payment-status-changed.v1`
+still carries the same pre-M9 JSON backlog the M10 Streams path already had to handle with
+`LogAndContinueExceptionHandler` (see "No DLQ, deliberately" above) — confirmed by reading raw
+bytes off the topic directly. The batch listener has **no equivalent explicit handling**: its
+consumer factory wraps the Avro deserializer in `ErrorHandlingDeserializer` (ADR-0006 category C,
+the same pattern ledger's and psp-connector's Avro consumers use), which keeps a JSON-era record
+from crashing the consumer loop, but nothing here logs, counts, dead-letters, or otherwise surfaces
+that those records existed — they are silently absent from the batch the listener sees. Verified
+live: the consumer group reached zero lag across all 12 partitions with zero errors logged, and
+`payment_status_audit` holds real, correct documents for the genuinely-Avro records consumed —
+but not a document, a log line, or a metric for every pre-Avro record it skipped past. A real gap,
+left honest rather than hidden: the fix would be the same shape as M10's (an explicit
+log-and-continue policy) or ADR-0006's DLQ pattern, and is not built here.
+
 ## Compromises
 
-- **"Average latency" is pipeline latency, not authorization latency.** It measures
-  `now − envelope.occurredAt`: the provider answering → analytics processing it (broker append,
-  replication, fetch, any lag). Real authorization latency needs `payment-requested` ×
-  `payment-status-changed` — a stream-stream join across a `paymentId`-keyed and a
-  `merchantId`-keyed topic, which is **M13**, and which is the join that will finally force a
-  repartition topic into this application. The field is named `avgPipelineLatencyMillis`
-  everywhere (REST, Mongo, domain) rather than `avgLatencyMillis` so the name cannot mislead.
+- **"Average latency" is pipeline latency, not authorization latency — fixed by M13.** M10's
+  `avgPipelineLatencyMillis` measures `now − envelope.occurredAt`, not `decidedAt − requestedAt`.
+  The M13 section above is the real measure; the field keeps its M10 name (`avgPipelineLatencyMillis`,
+  not `avgLatencyMillis`) everywhere (REST, Mongo, domain) so it still cannot mislead about which
+  number it is.
+- **`authorization_latency` has no interactive-query or REST surface.** Unlike M10's windowed
+  metrics, the M13 join's result is written straight to Mongo (`foreach` → the projection use
+  case) with no `WindowMetricsQueryPort`-equivalent and no `/api/analytics/**` endpoint. It is
+  queryable from `mongosh` today; wiring a `GET /api/analytics/payments/{id}/authorization-latency`
+  is straightforward follow-on work, deliberately not built to keep this module's scope to the
+  three items it was asked to demonstrate.
+- **The batch listener silently drops what it cannot deserialize** — see the M13 section's own
+  "Compromise, found live, not theoretical" for the full account. No DLQ, no log-and-continue
+  policy; a real, documented gap, not a hidden one.
   Because it reads a clock, it is also the one part of the aggregate that does **not** reproduce
   identically on a replay from offset 0; the counters do.
 - **Interactive queries are single-instance.** `application.server` is set and correct, but

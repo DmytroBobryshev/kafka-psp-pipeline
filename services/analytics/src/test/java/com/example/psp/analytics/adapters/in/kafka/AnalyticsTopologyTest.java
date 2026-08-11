@@ -2,14 +2,18 @@ package com.example.psp.analytics.adapters.in.kafka;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.example.psp.analytics.application.ProjectAuthorizationLatencyUseCase;
 import com.example.psp.analytics.application.ProjectWindowMetricsUseCase;
 import com.example.psp.analytics.config.AnalyticsProperties;
 import com.example.psp.analytics.config.StreamsStores;
+import com.example.psp.analytics.domain.model.AuthorizationLatency;
 import com.example.psp.analytics.domain.model.MerchantMetricsWindow;
 import com.example.psp.analytics.domain.model.MerchantWindowMetrics;
+import com.example.psp.analytics.domain.port.AuthorizationLatencyProjectionRepository;
 import com.example.psp.analytics.domain.port.MetricsProjectionRepository;
 import com.example.psp.common.events.avro.EventEnvelope;
 import com.example.psp.common.events.avro.MerchantConfigChanged;
+import com.example.psp.common.events.avro.PaymentRequested;
 import com.example.psp.common.events.avro.PaymentStatusChanged;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
@@ -58,6 +62,7 @@ class AnalyticsTopologyTest {
 
     private static final String PAYMENTS_TOPIC = "payments.payment-status-changed.v1";
     private static final String CONFIG_TOPIC = "merchants.merchant-config-changed.v1";
+    private static final String REQUESTED_TOPIC = "payments.payment-requested.v1";
     private static final String MERCHANT = "acme";
 
     /** 12:00:00Z exactly - a tumbling-window boundary, so window maths is readable. */
@@ -68,7 +73,9 @@ class AnalyticsTopologyTest {
     private TopologyTestDriver driver;
     private TestInputTopic<String, PaymentStatusChanged> payments;
     private TestInputTopic<String, MerchantConfigChanged> merchantConfig;
+    private TestInputTopic<String, PaymentRequested> requested;
     private RecordingProjectionRepository projections;
+    private RecordingAuthorizationLatencyProjectionRepository authorizationLatencies;
 
     @BeforeEach
     void setUp() {
@@ -76,10 +83,11 @@ class AnalyticsTopologyTest {
 
         SpecificAvroSerde<PaymentStatusChanged> paymentSerde = avroSerde(registryUrl);
         SpecificAvroSerde<MerchantConfigChanged> configSerde = avroSerde(registryUrl);
+        SpecificAvroSerde<PaymentRequested> requestedSerde = avroSerde(registryUrl);
 
         AnalyticsProperties properties =
                 new AnalyticsProperties(
-                        new AnalyticsProperties.Kafka(PAYMENTS_TOPIC, CONFIG_TOPIC),
+                        new AnalyticsProperties.Kafka(PAYMENTS_TOPIC, CONFIG_TOPIC, REQUESTED_TOPIC),
                         new AnalyticsProperties.SchemaRegistry(registryUrl),
                         new AnalyticsProperties.Streams(
                                 "analytics-streams.topology-test",
@@ -93,9 +101,13 @@ class AnalyticsTopologyTest {
                                 Duration.ofMinutes(1),
                                 Duration.ofSeconds(30),
                                 Duration.ofMinutes(15),
-                                Duration.ofMinutes(5)));
+                                Duration.ofMinutes(5)),
+                        new AnalyticsProperties.AuthorizationJoin(
+                                Duration.ofMinutes(5), Duration.ofSeconds(30)),
+                        new AnalyticsProperties.BatchListener("analytics.status-audit-batch.test", 200));
 
         projections = new RecordingProjectionRepository();
+        authorizationLatencies = new RecordingAuthorizationLatencyProjectionRepository();
 
         StreamsBuilder builder = new StreamsBuilder();
         AnalyticsTopology.define(
@@ -103,7 +115,9 @@ class AnalyticsTopologyTest {
                 properties,
                 paymentSerde,
                 configSerde,
+                requestedSerde,
                 new ProjectWindowMetricsUseCase(projections),
+                new ProjectAuthorizationLatencyUseCase(authorizationLatencies),
                 Clock.fixed(BASE, ZoneOffset.UTC));
 
         Properties config = new Properties();
@@ -118,6 +132,8 @@ class AnalyticsTopologyTest {
         payments = driver.createInputTopic(PAYMENTS_TOPIC, new StringSerializer(), paymentSerde.serializer());
         merchantConfig =
                 driver.createInputTopic(CONFIG_TOPIC, new StringSerializer(), configSerde.serializer());
+        requested =
+                driver.createInputTopic(REQUESTED_TOPIC, new StringSerializer(), requestedSerde.serializer());
     }
 
     @AfterEach
@@ -238,6 +254,56 @@ class AnalyticsTopologyTest {
     }
 
     // ---------------------------------------------------------------------------------------
+    // M13: the stream-stream join
+    // ---------------------------------------------------------------------------------------
+
+    @Test
+    void joinsARequestAndItsStatusChangeIntoAGenuineAuthorizationLatency() {
+        String paymentId = "pay-m13-happy";
+
+        requested.pipeInput(paymentId, requestedPayment(paymentId, MERCHANT, BASE));
+        // Decided 30s after requested - well inside the 5-minute join window.
+        payments.pipeInput(
+                MERCHANT, paymentWithId(paymentId, MERCHANT, "SUCCEEDED", BASE.plusSeconds(30)));
+
+        AuthorizationLatency latency = authorizationLatencies.latestFor(paymentId);
+        assertThat(latency.merchantId()).isEqualTo(MERCHANT);
+        assertThat(latency.status()).isEqualTo("SUCCEEDED");
+        assertThat(latency.declined()).isFalse();
+        assertThat(latency.requestedAt()).isEqualTo(BASE);
+        assertThat(latency.decidedAt()).isEqualTo(BASE.plusSeconds(30));
+        // The genuine authorization-latency figure: decidedAt - requestedAt, in milliseconds -
+        // NOT the M10 avgPipelineLatencyMillis measure (now - occurredAt).
+        assertThat(latency.latencyMillis()).isEqualTo(30_000L);
+    }
+
+    @Test
+    void aStatusChangeOutsideTheJoinWindowProducesNoLatencyRecord() {
+        String paymentId = "pay-m13-late";
+
+        requested.pipeInput(paymentId, requestedPayment(paymentId, MERCHANT, BASE));
+        // 10 minutes later - past the 5-minute join window (+30s grace) configured in setUp().
+        payments.pipeInput(
+                MERCHANT, paymentWithId(paymentId, MERCHANT, "SUCCEEDED", BASE.plus(Duration.ofMinutes(10))));
+
+        // Not lost - just not joined. The payment-requested and payment-status-changed records
+        // themselves are untouched (this test only asserts the derived, analytics-only latency
+        // view); see the topology's class javadoc, "What happens to a record outside the
+        // window".
+        assertThat(authorizationLatencies.has(paymentId)).isFalse();
+    }
+
+    @Test
+    void aStatusChangeWithNoMatchingRequestProducesNoLatencyRecord() {
+        // Status change for a payment that never had a payment-requested record piped in at all
+        // (e.g. still upstream of this join, or genuinely lost before it) - the inner join simply
+        // never fires for it.
+        payments.pipeInput(MERCHANT, paymentWithId("pay-m13-orphan", MERCHANT, "SUCCEEDED", BASE));
+
+        assertThat(authorizationLatencies.has("pay-m13-orphan")).isFalse();
+    }
+
+    // ---------------------------------------------------------------------------------------
 
     private static <T extends org.apache.avro.specific.SpecificRecord> SpecificAvroSerde<T> avroSerde(
             String registryUrl) {
@@ -255,15 +321,35 @@ class AnalyticsTopologyTest {
     }
 
     private static PaymentStatusChanged payment(String merchantId, String status, Instant occurredAt) {
+        return paymentWithId(UUID.randomUUID().toString(), merchantId, status, occurredAt);
+    }
+
+    /** Same shape as {@link #payment}, with an explicit {@code paymentId} - what the M13 join
+     * matches on. */
+    private static PaymentStatusChanged paymentWithId(
+            String paymentId, String merchantId, String status, Instant occurredAt) {
         return PaymentStatusChanged.newBuilder()
                 .setEnvelope(envelope("payments.payment-status-changed.v1", merchantId, occurredAt))
-                .setPaymentId(UUID.randomUUID().toString())
+                .setPaymentId(paymentId)
                 .setMerchantId(merchantId)
                 .setAmount(new BigDecimal("12.3400"))
                 .setCurrency("EUR")
                 .setStatus(status)
                 .setProviderReference(UUID.randomUUID().toString())
                 .setDeclineReason("DECLINED".equals(status) ? "insufficient_funds" : null)
+                .build();
+    }
+
+    /** {@code payments.payment-requested.v1} - keyed by {@code paymentId} (ADR-0003), the M13
+     * join's other input. */
+    private static PaymentRequested requestedPayment(String paymentId, String merchantId, Instant occurredAt) {
+        return PaymentRequested.newBuilder()
+                .setEnvelope(envelope("payments.payment-requested.v1", paymentId, occurredAt))
+                .setPaymentId(paymentId)
+                .setMerchantId(merchantId)
+                .setAmount(new BigDecimal("12.3400"))
+                .setCurrency("EUR")
+                .setStatus("CREATED")
                 .build();
     }
 
@@ -317,6 +403,31 @@ class AnalyticsTopologyTest {
                     .as("no projection for merchantId=%s windowStart=%s; have %s", merchantId, windowStart, byKey.keySet())
                     .isNotNull();
             return window;
+        }
+    }
+
+    /** In-memory stand-in for the M13 {@code authorization_latency} Mongo projection, keyed
+     * exactly like the real one: {@code paymentId}. */
+    private static final class RecordingAuthorizationLatencyProjectionRepository
+            implements AuthorizationLatencyProjectionRepository {
+
+        private final Map<String, AuthorizationLatency> byPaymentId = new LinkedHashMap<>();
+
+        @Override
+        public void save(AuthorizationLatency latency) {
+            byPaymentId.put(latency.paymentId(), latency);
+        }
+
+        boolean has(String paymentId) {
+            return byPaymentId.containsKey(paymentId);
+        }
+
+        AuthorizationLatency latestFor(String paymentId) {
+            AuthorizationLatency latency = byPaymentId.get(paymentId);
+            assertThat(latency)
+                    .as("no authorization-latency record for paymentId=%s; have %s", paymentId, byPaymentId.keySet())
+                    .isNotNull();
+            return latency;
         }
     }
 }

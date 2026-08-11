@@ -72,7 +72,7 @@
       <artifactId>kafka-streams</artifactId>
     </dependency>
 
-    <!-- M9 wire format: both input topics are Avro + Schema Registry, so every Serde on a source
+    <!-- M9 wire format: every input topic is Avro + Schema Registry, so every Serde on a source
          node is a SpecificAvroSerde. -->
     <dependency>
       <groupId>org.apache.avro</groupId>
@@ -81,6 +81,14 @@
     <dependency>
       <groupId>io.confluent</groupId>
       <artifactId>kafka-streams-avro-serde</artifactId>
+    </dependency>
+    <!-- M13: the batch listener is a plain @KafkaListener, not Kafka Streams - its consumer
+         factory (config.BatchListenerKafkaConfig) needs KafkaAvroDeserializer directly, the same
+         explicit dependency ledger's and psp-connector's Avro consumer factories declare, rather
+         than relying on kafka-streams-avro-serde's transitive copy. -->
+    <dependency>
+      <groupId>io.confluent</groupId>
+      <artifactId>kafka-avro-serializer</artifactId>
     </dependency>
 
     <!-- Lombok + MapStruct (annotation processor order fixed in the parent) -->

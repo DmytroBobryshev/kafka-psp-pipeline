@@ -265,6 +265,7 @@ services:
       kafka2: { condition: service_healthy }
       kafka3: { condition: service_healthy }
       postgres: { condition: service_healthy }
+      mongodb: { condition: service_healthy } # M13: the Mongo sink connector's write target
     ports:
       - "${KAFKA_CONNECT_PORT}:8083" # Connect REST API - register/inspect connectors here
     volumes:
@@ -282,6 +283,30 @@ services:
       # image under /kafka/connect - Kafka Connect plugin scanning happens once at worker
       # startup, so changes here need `docker compose up -d kafka-connect` to take effect.
       - ./connect/plugins/outbox-bytebuffer-smt:/kafka/connect/outbox-bytebuffer-smt:ro
+      # M13: the MongoDB Kafka Connector's sink (org.mongodb.kafka:mongo-kafka-connect, the
+      # official MongoDB-maintained connector - NOT the debezium-connector-mongodb directory
+      # already baked into this image, which is a SOURCE connector reading MongoDB change
+      # streams, the opposite direction from what M13 needs). debezium/connect ships zero
+      # sink connectors, so this one has to be added the same way as the SMT above: download
+      # once (the self-contained "-all" jar, every dependency shaded in, verified against its
+      # published sha1 - see the plugin directory's own history), commit it, mount it read-only.
+      # No confluent-hub CLI is present in this image and none is needed - Kafka Connect's
+      # plugin scanner just needs one classloader-isolated directory per plugin under the path
+      # this image already scans (/kafka/connect, same as every debezium-connector-* sibling).
+      - ./connect/plugins/mongodb-kafka-connect:/kafka/connect/mongodb-kafka-connect:ro
+      # M13: the Avro converter (io.confluent.connect.avro.AvroConverter +
+      # kafka-avro-serializer/kafka-schema-registry-client and their transitive deps -
+      # confluentinc-kafka-connect-avro-converter-7.7.1's full `lib/`, matching
+      # SCHEMA_REGISTRY_VERSION so the converter and the running registry are the same
+      # Confluent release, same reasoning as infra/compose/README.md's broker/registry image
+      # choice). ledger.ledger-entry-recorded.v1 is Confluent-wire-format Avro (M9 Phase 2);
+      # without this converter the sink falls back to Connect's default (JsonConverter) trying
+      # to interpret Avro's magic byte + schema id as JSON and failing on the first record -
+      # the "usual failure" this module's brief warns about. Debezium's image ships Avro (the
+      # library) for its own connectors' internal use but not Kafka Connect's Avro *converter*
+      # plugin, which is a Confluent artifact and has to be added the same way as the sink
+      # itself.
+      - ./connect/plugins/kafka-connect-avro-converter:/kafka/connect/kafka-connect-avro-converter:ro
     environment:
       BOOTSTRAP_SERVERS: kafka1:9092,kafka2:9092,kafka3:9092
       GROUP_ID: kafka-connect-psp
