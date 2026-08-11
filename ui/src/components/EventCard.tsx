@@ -57,7 +57,13 @@ export function EventCard({ event, payment, priorEvents, index }: Props) {
     : undefined;
 
   return (
-    <li className="relative pb-8 pl-10 last:pb-0">
+    // Visible ids are truncated for readability, so the full values are exposed here for the e2e
+    // test to assert the causal chain on. Test hooks, not styling - keep them stable.
+    <li
+      className="relative pb-8 pl-10 last:pb-0"
+      data-event-id={event.eventId}
+      data-causation-id={event.causationId ?? ""}
+    >
       {/* connecting line */}
       <span className="absolute left-[13px] top-3 -bottom-2 w-px bg-slate-200 last:hidden" aria-hidden />
       {/* node */}
@@ -116,7 +122,9 @@ export function EventCard({ event, payment, priorEvents, index }: Props) {
                 )}
               </span>
             ) : (
-              <span className="italic text-slate-300">not exposed by gateway</span>
+              // The gateway forwards causationId, so an absent one means this event genuinely
+              // had no cause - it is the root of the chain, not missing data.
+              <span className="italic text-slate-400">none — root event</span>
             )}
           </dd>
 
