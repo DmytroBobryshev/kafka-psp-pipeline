@@ -1,0 +1,64 @@
+# Test-classpath override of src/main/resources/application.yml. WebhookNotifierApplicationTests
+# only needs the Spring context to load against an @EmbeddedKafka broker - no live MongoDB (see
+# that test class's javadoc and webhook-notifier.mongo.create-ttl-index-on-startup below).
+spring:
+  application:
+    name: webhook-notifier
+  data:
+    mongodb:
+      # Never actually connected to: config.MongoIndexConfig's ApplicationRunner (the only bean
+      # that would perform a real round trip) is disabled below, and Spring Boot's own Mongo
+      # autoconfiguration does not validate connectivity eagerly.
+      uri: mongodb://localhost:27017/webhook_notifier_test
+  kafka:
+    # Overridden at runtime by @EmbeddedKafka's broker address - this value only matters before
+    # that override applies.
+    bootstrap-servers: localhost:9092
+    consumer:
+      auto-offset-reset: earliest
+      properties:
+        max.poll.records: 10
+        max.poll.interval.ms: 300000
+        session.timeout.ms: 45000
+        heartbeat.interval.ms: 3000
+
+webhook-notifier:
+  kafka:
+    payment-status-changed-topic: payments.payment-status-changed.v1
+    delivery-requested-topic: webhooks.webhook-delivery-requested.v1
+    retry-5s-topic: webhooks.webhook-delivery-requested.v1.retry.5s
+    retry-1m-topic: webhooks.webhook-delivery-requested.v1.retry.1m
+    retry-15m-topic: webhooks.webhook-delivery-requested.v1.retry.15m
+    dlq-topic: webhooks.webhook-delivery-requested.v1.dlq
+    planner-group-id: webhook-notifier.planner.test.v1
+    executor-group-id: webhook-notifier.executor.test.v1
+    deserialization-error-handling-enabled: true
+
+  retry:
+    delay-5s-ms: 5000
+    delay-1m-ms: 60000
+    delay-15m-ms: 900000
+
+  dlq-replay:
+    consumer-group: webhook-notifier.dlq-replay.test.v1
+    max-batch-size: 50
+    poll-timeout-ms: 2000
+
+  merchant-client:
+    base-url: http://localhost:8088
+    webhook-path: /simulated-merchant/webhooks/{merchantId}
+    connect-timeout-ms: 2000
+    read-timeout-ms: 3000
+
+  mongo:
+    attempt-log-ttl-seconds: 2592000
+    # See this file's header comment and WebhookNotifierApplicationTests's javadoc.
+    create-ttl-index-on-startup: false
+
+  simulated-merchant:
+    forced-outcome: NONE
+    server-error-rate: 0.0
+    client-error-rate: 0.0
+    timeout-rate: 0.0
+    latency-ms: 0
+    timeout-delay-ms: 100

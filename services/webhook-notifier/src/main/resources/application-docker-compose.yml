@@ -1,0 +1,15 @@
+# M8: run webhook-notifier against the infra/compose stack (infra/compose/README.md, .env).
+# Activate with SPRING_PROFILES_ACTIVE=docker-compose (same convention as every other service).
+spring:
+  data:
+    mongodb:
+      # infra/compose/.env: WEBHOOK_NOTIFIER_DB / WEBHOOK_NOTIFIER_DB_USER / WEBHOOK_NOTIFIER_DB_PASSWORD.
+      # authSource=webhook_notifier because infra/compose/mongo/init/01-init-databases.sh creates
+      # this user scoped to (and only to) the webhook_notifier database - same "physical vs
+      # logical separation" shortcut as Postgres (ADR-0005).
+      uri: mongodb://webhook_notifier:webhook_notifier_pw@localhost:27017/webhook_notifier?authSource=webhook_notifier
+
+  kafka:
+    # Three brokers' HOST-side (EXTERNAL) listeners - same rationale as every other service's
+    # equivalent entry (infra/compose/README.md's advertised-listeners section).
+    bootstrap-servers: localhost:29092,localhost:29093,localhost:29094

@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example.psp</groupId>
+    <artifactId>kafka-psp-pipeline</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>webhook-notifier</artifactId>
+  <packaging>jar</packaging>
+
+  <name>webhook-notifier</name>
+  <description>
+    webhook-notifier (M8): retries, DLQ, poison pills. Consumes payments.payment-status-changed.v1
+    and plans one webhook delivery command per event onto webhooks.webhook-delivery-requested.v1;
+    a second consumer group executes the HTTP callback and routes failures through a hand-rolled,
+    non-blocking retry chain (.retry.5s -> .retry.1m -> .retry.15m -> .dlq) per ADR-0006's error
+    taxonomy. MongoDB delivery-attempt log with a TTL index; a bounded DLQ replay endpoint; a
+    Spring-profile/property-gated ErrorHandlingDeserializer so the M8 poison-pill failure can be
+    demonstrated and then fixed. Hexagonal layout enforced by an ArchUnit test; same conventions
+    as ledger (M7) and psp-connector (M4/M5).
+  </description>
+
+  <dependencies>
+    <!-- Internal libs -->
+    <dependency>
+      <groupId>com.example.psp</groupId>
+      <artifactId>common-events</artifactId>
+    </dependency>
+
+    <!-- Web: the simulated merchant endpoint AND the DLQ replay endpoint both live here -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- MongoDB persistence (ADR-0005: webhook-notifier owns its own database, `webhook_notifier`) -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-mongodb</artifactId>
+    </dependency>
+
+    <!-- Kafka -->
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka</artifactId>
+    </dependency>
+
+    <!-- Lombok + MapStruct (annotation processor order fixed in the parent) -->
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mapstruct</groupId>
+      <artifactId>mapstruct</artifactId>
+    </dependency>
+
+    <!-- Test -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>webhook-notifier</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

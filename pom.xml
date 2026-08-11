@@ -40,6 +40,7 @@
     <module>services/payment-api</module>
     <module>services/psp-connector</module>
     <module>services/ledger</module>
+    <module>services/webhook-notifier</module>
   </modules>
 
   <!--

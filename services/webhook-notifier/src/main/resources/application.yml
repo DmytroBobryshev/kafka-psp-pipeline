@@ -1,0 +1,128 @@
+spring:
+  application:
+    name: webhook-notifier
+
+  kafka:
+    # No bootstrap-servers here on purpose - environment-specific, lives in
+    # application-docker-compose.yml (same convention as every other service).
+
+    # No global group-id: this service runs THREE distinct consumer identities (planner,
+    # executor, and the on-demand DLQ replay reader) from one process, so each is set explicitly
+    # in config.KafkaConsumerConfig from webhook-notifier.kafka.*/webhook-notifier.dlq-replay.*
+    # below, not from spring.kafka.consumer.group-id.
+    consumer:
+      auto-offset-reset: earliest
+      properties:
+        max.poll.records: 10
+        max.poll.interval.ms: 300000
+        session.timeout.ms: 45000
+        heartbeat.interval.ms: 3000
+
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      retries: 2147483647
+      batch-size: 32768
+      compression-type: zstd
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        linger.ms: 10
+        spring.json.add.type.headers: false
+
+  data:
+    mongodb:
+      # auto-index-creation left at Boot's default (false): the M8 TTL index is created
+      # explicitly, with a runtime-configurable duration, by config.MongoIndexConfig - see that
+      # class's javadoc for why a static @Indexed annotation could not do this.
+      auto-index-creation: false
+
+server:
+  # payment-api 8085, psp-connector 8086, ledger 8087, AKHQ 8080, Schema Registry 8081 - this
+  # service uses 8088 (docs/PLAN.md).
+  port: 8088
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+# webhook-notifier custom properties - config.WebhookNotifierProperties /
+# config.SimulatedMerchantProperties. See README.md for the full property reference.
+webhook-notifier:
+  kafka:
+    payment-status-changed-topic: payments.payment-status-changed.v1
+    delivery-requested-topic: webhooks.webhook-delivery-requested.v1
+    retry-5s-topic: webhooks.webhook-delivery-requested.v1.retry.5s
+    retry-1m-topic: webhooks.webhook-delivery-requested.v1.retry.1m
+    retry-15m-topic: webhooks.webhook-delivery-requested.v1.retry.15m
+    dlq-topic: webhooks.webhook-delivery-requested.v1.dlq
+    planner-group-id: webhook-notifier.planner.v1
+    executor-group-id: webhook-notifier.executor.v1
+
+    # THE M8 poison-pill flag. true (default): ErrorHandlingDeserializer wraps every consumer
+    # factory's deserializer, so a record whose bytes cannot be deserialized is routed to the
+    # error handler (and, on the executor, straight to the DLQ) instead of blocking the
+    # partition. Set to false to reproduce the FAILURE first - the orchestrator's "Poison pill
+    # proof" - before flipping it back:
+    #   --webhook-notifier.kafka.deserialization-error-handling-enabled=false
+    deserialization-error-handling-enabled: true
+
+  retry:
+    # Real ADR-0006 values: 5s + 1m + 15m ~= 16 minutes to DLQ. Every field is override-able for
+    # a fast experiment run without touching topic topology, e.g.:
+    #   --webhook-notifier.retry.delay-5s-ms=2000 --webhook-notifier.retry.delay-1m-ms=4000
+    #   --webhook-notifier.retry.delay-15m-ms=6000
+    delay-5s-ms: 5000
+    delay-1m-ms: 60000
+    delay-15m-ms: 900000
+
+  dlq-replay:
+    # Dedicated group.id for adapters.out.kafka.KafkaDlqReader - separate from
+    # webhook-notifier.executor.v1 so replay reads never interact with normal delivery execution.
+    consumer-group: webhook-notifier.dlq-replay.v1
+    # The hard ceiling on one POST /api/webhooks/dlq/replay call, regardless of the caller's
+    # ?maxRecords= query param - see adapters.in.web.DlqReplayController and
+    # adapters.out.kafka.KafkaDlqReader for the guard.
+    max-batch-size: 50
+    poll-timeout-ms: 2000
+
+  merchant-client:
+    # Points at THIS service's own simulated merchant endpoint by default - see
+    # adapters.in.web.SimulatedMerchantController. Point this at a real merchant's registered
+    # webhook host to call a genuine external endpoint, no code change required.
+    base-url: http://localhost:8088
+    webhook-path: /simulated-merchant/webhooks/{merchantId}
+    connect-timeout-ms: 2000
+    # MUST be shorter than webhook-notifier.simulated-merchant.timeout-delay-ms below, or the
+    # TIMEOUT simulation never actually produces a client-side timeout.
+    read-timeout-ms: 3000
+
+  mongo:
+    # TTL for delivery_attempts documents (M8 requirement #6) - 30 days, matching the DLQ topic's
+    # own retention (ADR-0006: "long enough to notice and fix").
+    attempt-log-ttl-seconds: 2592000
+    # Default true: config.MongoIndexConfig creates the TTL index above at startup. Set false
+    # only where no live MongoDB is available (see WebhookNotifierApplicationTests's test
+    # resources application.yml) - this property is read directly via @ConditionalOnProperty,
+    # not bound into config.WebhookNotifierProperties.
+    # create-ttl-index-on-startup: true
+
+  simulated-merchant:
+    # NONE (default): use the rates below. Set to SUCCESS/CLIENT_ERROR/SERVER_ERROR/TIMEOUT to
+    # force every request to that outcome regardless of merchant id - e.g.
+    #   --webhook-notifier.simulated-merchant.forced-outcome=SERVER_ERROR
+    # A merchantId containing force-success/force-4xx/force-5xx/force-timeout forces that
+    # outcome for just that merchant, independently of this setting - see
+    # adapters.in.web.SimulatedMerchantController.
+    forced-outcome: NONE
+    server-error-rate: 0.0
+    client-error-rate: 0.0
+    timeout-rate: 0.0
+    latency-ms: 50
+    timeout-delay-ms: 6000
+
+# No datasource configured here - see application-docker-compose.yml. This service has no
+# relational database (ADR-0005: Mongo only).
