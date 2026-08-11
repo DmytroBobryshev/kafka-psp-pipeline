@@ -73,6 +73,18 @@
       <artifactId>spring-kafka</artifactId>
     </dependency>
 
+    <!-- M9 Phase 1: payment-api never sends to Kafka (M6 outbox), but it DOES now Avro-encode
+         the payments.payment-requested.v1 outbox payload against Schema Registry directly - see
+         adapters.out.outbox.OutboxPaymentEventPublisher and the README M9 section. -->
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.confluent</groupId>
+      <artifactId>kafka-avro-serializer</artifactId>
+    </dependency>
+
     <!-- Lombok + MapStruct (annotation processor order fixed in the parent) -->
     <dependency>
       <groupId>org.projectlombok</groupId>

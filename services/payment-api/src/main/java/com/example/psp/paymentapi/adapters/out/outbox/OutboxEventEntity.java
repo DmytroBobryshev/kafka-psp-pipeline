@@ -9,8 +9,6 @@ import java.util.UUID;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
 
 /**
  * JPA entity for the {@code outbox_event} table (M6; schema owned by
@@ -27,11 +25,13 @@ import org.hibernate.type.SqlTypes;
  * identity should be id-based, not value-based, and a generated {@code toString()} risks
  * triggering lazy-loading on associations).
  *
- * <p>{@code payload} is mapped as a plain {@code String} with {@code @JdbcTypeCode(SqlTypes.JSON)}
- * (Hibernate 6's built-in JSON support) rather than a hand-rolled {@code AttributeConverter}: the
- * column is already valid JSON text (produced by {@link OutboxPaymentEventPublisher} via
- * Jackson), so no parsing/transformation is needed at the JPA boundary - only "store this exact
- * string as jsonb, read it back as this exact string."
+ * <p>{@code payload} is a plain {@code byte[]}, mapped by Hibernate's PostgreSQL dialect straight
+ * to {@code bytea} with no annotation needed (M9 Phase 1 - was {@code String} +
+ * {@code @JdbcTypeCode(SqlTypes.JSON)} through M6). The bytes are the COMPLETE Confluent Avro
+ * wire format - magic byte + 4-byte schema id + Avro binary - produced by
+ * {@link OutboxPaymentEventPublisher} via {@code KafkaAvroSerializer}, not JSON text: see
+ * {@code db/migration/V3__outbox_event_payload_bytes.sql} and the README's M9 section for the
+ * outbox-serialization decision this column embodies.
  */
 @Entity
 @Table(name = "outbox_event")
@@ -52,9 +52,8 @@ public class OutboxEventEntity {
     @Column(name = "event_type", nullable = false, length = 255)
     private String eventType;
 
-    @JdbcTypeCode(SqlTypes.JSON)
     @Column(nullable = false)
-    private String payload;
+    private byte[] payload;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;

@@ -455,3 +455,42 @@ Compare against the same experiment run on the first implementation, above: 100 
 authorizations, 100 status events, and a deduplication counter of **zero**. Same test, same data,
 opposite result - which is exactly why PLAN.md words the acceptance test as a replay rather than a
 unit test. The unit tests passed in both versions; only the replay told the truth.
+
+## M9 Phase 1 - consuming Avro, still producing JSON
+
+`payments.payment-requested.v1` (inbound) is now Avro + Schema Registry; `payments.payment-status-
+changed.v1` (outbound) is unchanged JSON. See `services/payment-api/README.md`'s M9 section for
+the full outbox-serialization decision, wire format, subject/compatibility details, and
+compromises - this is the short consumer-side note.
+
+`PaymentRequestedListener` now takes the generated `com.example.psp.common.events.avro.
+PaymentRequested` record instead of the hand-written `PaymentRequestedEvent` JSON type.
+`config.KafkaConsumerConfig` wraps `io.confluent.kafka.serializers.KafkaAvroDeserializer` in the
+same `ErrorHandlingDeserializer` the JSON path always used (poison-pill safety, ADR-0006 category
+C, unchanged), with `specific.avro.reader=true` so the listener gets the strongly-typed generated
+class rather than a schema-less `GenericRecord` - the task's explicit requirement, and the same
+ergonomics the JSON path already had via `JsonDeserializer`'s typed default class.
+
+**M5 idempotency keeps working unchanged.** The dedup key was always the inbound envelope's
+`eventId` (`ProcessPaymentRequestCommand#causationEventId`), read from `event.getEnvelope().
+getEventId()` on the Avro record instead of `event.envelope().eventId()` on the old JSON record -
+same value, same stability across redelivery, just a different accessor style (`PaymentRequestedMapper`
+now does `UUID.fromString(...)` since the Avro schema represents UUID-shaped fields as plain Avro
+`string`, not a `UUID` type). Verified live: a payment POSTed during M9 verification was
+**consumed, authorized, and its status event published** correctly - see
+`services/payment-api/README.md`'s M9 "Wire format" section for the exact record bytes that
+produced this log line:
+
+```
+Consumed payment-requested paymentId=0c1b7fc8-639f-4e27-8b8b-627310ba3d98 merchantId=merchant-m9-avro-proof-2
+Provider call paymentId=0c1b7fc8-... outcome=APPROVED providerEventId=f7e41a93-78cc-4a9f-8e63-a93345e300fe
+Published payments.payment-status-changed.v1 paymentId=0c1b7fc8-... merchantId=merchant-m9-avro-proof-2 status=SUCCEEDED partition=1 offset=106
+```
+
+The published status event is still plain JSON, unchanged shape - `KafkaPaymentStatusPublisher`
+and `config.KafkaProducerConfig` were not touched.
+
+**Stale on purpose:** the M4 `auto-commit-drill` profile (`AutoCommitDriftListener` /
+`KafkaAutoCommitDriftConfig`) still deserializes this topic as JSON via the retired
+`PaymentRequestedEvent` type. It is off by default and out of M9 Phase 1's scope; running it
+against the live cluster now would poison-pill on every record. See those classes' javadoc.

@@ -28,6 +28,14 @@ import org.springframework.kafka.support.serializer.JsonDeserializer;
  * anything the listener does. Comparing the two commit strategies for real therefore needs a
  * second, real listener wired the other way - not a mock or a thought experiment - which is what
  * {@link com.example.psp.pspconnector.adapters.in.kafka.AutoCommitDriftListener} is.
+ *
+ * <p><b>Stale as of M9 Phase 1:</b> this factory still deserializes
+ * {@code payments.payment-requested.v1} as JSON via {@code PaymentRequestedEvent} - see that
+ * class's javadoc. The topic itself now carries Avro-encoded bytes (Confluent wire format), so
+ * running this drill against the live cluster would poison-pill on every record. Left unchanged
+ * deliberately: it is an M4-era experiment behind a profile that is off by default and out of M9
+ * Phase 1's scope (one topic's production consumer, not every experimental listener that ever
+ * subscribed to it) - a future phase would need to point this at the generated Avro type too.
  */
 @Configuration
 @Profile("auto-commit-drill")

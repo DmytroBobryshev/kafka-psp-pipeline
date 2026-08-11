@@ -68,6 +68,18 @@
       <artifactId>spring-kafka</artifactId>
     </dependency>
 
+    <!-- M9 Phase 1: payments.payment-requested.v1 is now Avro + Schema Registry - the INBOUND
+         side only. Outbound payments.payment-status-changed.v1 stays JSON (spring-kafka's
+         JsonSerializer, config.KafkaProducerConfig, unchanged). -->
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.confluent</groupId>
+      <artifactId>kafka-avro-serializer</artifactId>
+    </dependency>
+
     <!-- Lombok + MapStruct (annotation processor order fixed in the parent) -->
     <dependency>
       <groupId>org.projectlombok</groupId>

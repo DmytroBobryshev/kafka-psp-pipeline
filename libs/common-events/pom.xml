@@ -16,9 +16,13 @@
 
   <name>common-events</name>
   <description>
-    Shared event envelope (ADR-0002). Plain Java, no Spring - imported by every producer and
-    consumer, including services that never touch Spring Web. JSON for now (Maven module gains
-    Avro codegen in M9, per ADR-0002).
+    Shared event envelope (ADR-0002) plus, as of M9 Phase 1, the Avro schemas for
+    payments.payment-requested.v1 (src/main/avro), codegen'd by the Avro Maven plugin into
+    com.example.psp.common.events.avro. The hand-written EventEnvelope/DomainEvent types below
+    are the JSON-era shape and stay in place - every OTHER topic (ledger, webhooks,
+    psp-connector's outbound payment-status-changed) still uses them; only
+    payments.payment-requested.v1 moved to the generated Avro classes. Plain Java, no Spring -
+    imported by every producer and consumer, including services that never touch Spring Web.
   </description>
 
   <dependencies>
@@ -29,6 +33,13 @@
       <scope>provided</scope>
     </dependency>
 
+    <!-- M9 Phase 1: runtime support for the generated Avro classes (SpecificRecordBase, the
+         timestamp-millis/decimal logical type conversions). -->
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+    </dependency>
+
     <!-- Test -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>
@@ -36,4 +47,48 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <!-- M9 Phase 1: compiles src/main/avro/*.avsc into
+           target/generated-sources/avro/com/example/psp/common/events/avro/*.java, added to the
+           compile source root automatically by this plugin - no build-helper-maven-plugin
+           needed. Files are parsed together with ONE shared Schema.Parser in directory-listing
+           order, which is why the schemas are named 01-/02- (EventEnvelope must be parsed before
+           PaymentRequested references it by full name - see 01-event-envelope.avsc's doc). -->
+      <plugin>
+        <groupId>org.apache.avro</groupId>
+        <artifactId>avro-maven-plugin</artifactId>
+        <version>${avro.version}</version>
+        <executions>
+          <execution>
+            <id>generate-avro-sources</id>
+            <phase>generate-sources</phase>
+            <goals>
+              <goal>schema</goal>
+            </goals>
+            <configuration>
+              <sourceDirectory>${project.basedir}/src/main/avro</sourceDirectory>
+              <outputDirectory>${project.build.directory}/generated-sources/avro</outputDirectory>
+              <!-- The schema goal parses every file under sourceDirectory with its OWN
+                   independent Schema.Parser - it does NOT accumulate named types across files by
+                   directory order (confirmed empirically: alphabetical 01-/02- naming alone is
+                   NOT enough). imports explicitly pre-loads the listed file(s) into that shared
+                   context before parsing sourceDirectory, which is what actually makes
+                   02-payment-requested.avsc's reference to EventEnvelope resolve. -->
+              <imports>
+                <import>${project.basedir}/src/main/avro/01-event-envelope.avsc</import>
+              </imports>
+              <!-- Plain java.lang.String fields, not CharSequence/Utf8 - matches every
+                   hand-written record in this codebase. -->
+              <stringType>String</stringType>
+              <!-- Required for the 'amount' field's decimal logical type to generate
+                   java.math.BigDecimal instead of a raw ByteBuffer. -->
+              <enableDecimalLogicalType>true</enableDecimalLogicalType>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 </project>

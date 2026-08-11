@@ -267,6 +267,21 @@ services:
       postgres: { condition: service_healthy }
     ports:
       - "${KAFKA_CONNECT_PORT}:8083" # Connect REST API - register/inspect connectors here
+    volumes:
+      # M9 Phase 1: a tiny one-purpose SMT (source in
+      # infra/compose/connect/plugins/outbox-bytebuffer-smt/src) that works around a real Kafka
+      # Connect gap hit by this stack's outbox-serialization decision (option (a) in
+      # services/payment-api/README.md's M9 section): with the outbox event router's
+      # table.expand.json.payload=false, Debezium represents the outbox_event.payload BYTEA
+      # column as java.nio.HeapByteBuffer, and org.apache.kafka.connect.converters.
+      # ByteArrayConverter#fromConnectData only accepts byte[] - it throws DataException on
+      # anything else. This SMT, chained after the outbox router
+      # (payment-outbox-connector.json's "transforms": "outbox,byteBufferFix"), unwraps
+      # ByteBuffer -> byte[] before ByteArrayConverter ever sees the value. Mounted as its own
+      # plugin directory, matching every debezium-connector-* directory already baked into this
+      # image under /kafka/connect - Kafka Connect plugin scanning happens once at worker
+      # startup, so changes here need `docker compose up -d kafka-connect` to take effect.
+      - ./connect/plugins/outbox-bytebuffer-smt:/kafka/connect/outbox-bytebuffer-smt:ro
     environment:
       BOOTSTRAP_SERVERS: kafka1:9092,kafka2:9092,kafka3:9092
       GROUP_ID: kafka-connect-psp

@@ -1,0 +1,42 @@
+{
+  "type": "record",
+  "name": "PaymentRequested",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of payments.payment-requested.v1 (M9 Phase 1 - the ONLY topic migrated off JSON so far; every other topic in this system stays JSON per docs/PLAN.md's M9 scope). One flat record: envelope sub-record plus domain fields at the top level, per ADR-0002 - there is deliberately no generic 'payload' field. Field-for-field identical to the hand-written payment-api adapters.out.kafka.PaymentRequested / psp-connector adapters.in.kafka.PaymentRequestedEvent records this schema replaces on this one topic. Registered under Schema Registry subject 'payments.payment-requested.v1-value' (ADR-0001's TopicNameStrategy, the Schema Registry default - see services/payment-api/README.md's M9 section).",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope"
+    },
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "Also the Kafka record KEY, as plain UTF-8 text, not Avro-encoded (ADR-0003) - only the value is Avro on this topic."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "The owning merchant; NOT the partition key on this topic (ADR-0003)."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 4
+      },
+      "doc": "Generates java.math.BigDecimal (enableDecimalLogicalType=true on the avro-maven-plugin). precision=19/scale=4 comfortably covers real-world currency amounts with no silent rounding."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "doc": "ISO-4217 three-letter currency code."
+    },
+    {
+      "name": "status",
+      "type": "string",
+      "doc": "PaymentStatus name at request time (payment-api's domain.model.PaymentStatus#name(), e.g. 'CREATED')."
+    }
+  ]
+}

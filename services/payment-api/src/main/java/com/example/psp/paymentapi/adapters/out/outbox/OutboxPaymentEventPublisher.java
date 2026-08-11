@@ -3,13 +3,11 @@ package com.example.psp.paymentapi.adapters.out.outbox;
 import com.example.psp.common.events.EventEnvelope;
 import com.example.psp.paymentapi.domain.model.Payment;
 import com.example.psp.paymentapi.domain.port.PaymentEventPublisher;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import org.springframework.kafka.support.JacksonUtils;
 import org.springframework.stereotype.Component;
 
 /**
@@ -25,22 +23,29 @@ import org.springframework.stereotype.Component;
  * connection. Nothing in this class opens a transaction itself - it just participates in
  * whichever one is already open when it's called.
  *
- * <p>No network call happens here. {@code publishPaymentCreated} returning successfully means
- * only "the outbox row is staged for the current transaction to commit" - actual delivery to
- * {@code payments.payment-requested.v1} happens later, out of process, when Debezium's Kafka
- * Connect connector (infra/compose) reads this table's write-ahead log and the outbox event
- * router SMT republishes each row. See services/payment-api/README.md's M6 section for the full
- * Connect architecture and the delivery-guarantee change that buys.
+ * <p>No Kafka network call happens here, same as through M6. {@code publishPaymentCreated}
+ * returning successfully means only "the outbox row is staged for the current transaction to
+ * commit" - actual delivery to {@code payments.payment-requested.v1} happens later, out of
+ * process, when Debezium's Kafka Connect connector (infra/compose) reads this table's
+ * write-ahead log and the outbox event router SMT republishes each row. See
+ * services/payment-api/README.md's M6 section for the full Connect architecture.
  *
- * <p>Builds the exact same {@link EventEnvelope} shape {@code KafkaPaymentEventPublisher} used to
- * build (same event type, aggregate type, source, trace/correlation-id-from-MDC fallback), then
- * serializes {@link PaymentRequestedOutboxPayload} with
- * {@link JacksonUtils#enhancedObjectMapper()} - the exact {@link ObjectMapper} Spring Kafka's own
- * {@code JsonSerializer} used for the retired direct-publish path - so the JSON text landing in
- * {@code outbox_event.payload} is byte-identical to what {@code KafkaPaymentEventPublisher} used
- * to put on the wire (including the {@code occurredAt} epoch-decimal quirk documented in the
- * README's "Known issues"). That byte-identity is what lets the Debezium outbox event router
- * re-emit this payload unchanged and keep psp-connector's consumer working with zero changes.
+ * <h2>M9 Phase 1 - the outbox-serialization decision</h2>
+ *
+ * <p>{@code payments.payment-requested.v1} is now Avro + Schema Registry (the only topic migrated
+ * so far - every other topic stays JSON). Since payment-api never calls Kafka, something still
+ * has to produce the exact Confluent wire format (1 magic byte + 4-byte schema id + Avro binary)
+ * that a standard Avro consumer expects. This class does it here, directly: it builds the same
+ * {@link EventEnvelope} {@code KafkaPaymentEventPublisher} used to build (same event type,
+ * aggregate type, source, trace/correlation-id-from-MDC fallback), converts it to the generated
+ * Avro record via {@link PaymentAvroEventFactory}, and calls {@link KafkaAvroSerializer#serialize}
+ * - which registers/looks up the schema against Schema Registry and returns the finished wire
+ * bytes - BEFORE ever touching Postgres. Those exact bytes are what gets written to
+ * {@code outbox_event.payload} (now {@code BYTEA}, not {@code JSONB} - see
+ * {@code db/migration/V3__outbox_event_payload_bytes.sql}), and
+ * {@code infra/compose/connect/payment-outbox-connector.json} passes them through unchanged with
+ * {@code ByteArrayConverter}. See the README's M9 section for the alternatives this rejected
+ * (Connect-side {@code AvroConverter} inferring a schema from the JSON payload) and why.
  */
 @Component
 public class OutboxPaymentEventPublisher implements PaymentEventPublisher {
@@ -51,16 +56,16 @@ public class OutboxPaymentEventPublisher implements PaymentEventPublisher {
     private static final String AGGREGATE_TYPE = "payment";
 
     private final OutboxEventJpaRepository outboxEventJpaRepository;
-    private final PaymentOutboxEventMapper eventMapper;
-    private final ObjectMapper objectMapper;
+    private final PaymentAvroEventFactory avroEventFactory;
+    private final KafkaAvroSerializer avroSerializer;
 
     public OutboxPaymentEventPublisher(
-            OutboxEventJpaRepository outboxEventJpaRepository, PaymentOutboxEventMapper eventMapper) {
+            OutboxEventJpaRepository outboxEventJpaRepository,
+            PaymentAvroEventFactory avroEventFactory,
+            KafkaAvroSerializer paymentRequestedAvroSerializer) {
         this.outboxEventJpaRepository = outboxEventJpaRepository;
-        this.eventMapper = eventMapper;
-        // Same ObjectMapper Spring Kafka's JsonSerializer builds internally - see class Javadoc
-        // for why byte-identical serialization here matters.
-        this.objectMapper = JacksonUtils.enhancedObjectMapper();
+        this.avroEventFactory = avroEventFactory;
+        this.avroSerializer = paymentRequestedAvroSerializer;
     }
 
     @Override
@@ -76,36 +81,34 @@ public class OutboxPaymentEventPublisher implements PaymentEventPublisher {
         String paymentId = payment.getId().toString();
         EventEnvelope envelope =
                 EventEnvelope.root(EVENT_TYPE, 1, paymentId, AGGREGATE_TYPE, SOURCE, traceId, correlationId);
-        PaymentRequestedOutboxPayload payload = eventMapper.toPayload(envelope, payment);
 
-        String payloadJson;
-        try {
-            payloadJson = objectMapper.writeValueAsString(payload);
-        } catch (JsonProcessingException e) {
-            // A domain record failing to serialize is a programming error (missing Jackson
-            // module, non-serializable field type), not a runtime/environment failure - same
-            // "let it propagate" stance the rest of this service takes on programming errors.
-            throw new IllegalStateException("Failed to serialize outbox payload for paymentId=" + paymentId, e);
-        }
+        com.example.psp.common.events.avro.PaymentRequested avroEvent = avroEventFactory.toAvro(envelope, payment);
+
+        // The topic name passed here is what KafkaAvroSerializer combines with TopicNameStrategy
+        // to derive the Schema Registry subject: payments.payment-requested.v1-value (ADR-0001).
+        // Returns the complete Confluent wire format - see the class javadoc.
+        byte[] wireBytes = avroSerializer.serialize(EVENT_TYPE, avroEvent);
 
         OutboxEventEntity entity = new OutboxEventEntity();
         // envelope.eventId() doubles as the outbox row id - the Debezium outbox event router's
         // table.field.event.id maps straight to it, so the row's primary key IS the event's
-        // idempotency key (ADR-0002), not a second, independent id.
+        // idempotency key (ADR-0002), not a second, independent id. This is unchanged by M9: it
+        // is the hand-written envelope's id, not anything inside the Avro wire bytes.
         entity.setId(envelope.eventId());
         entity.setAggregateType(AGGREGATE_TYPE);
         entity.setAggregateId(paymentId);
         entity.setEventType(EVENT_TYPE);
-        entity.setPayload(payloadJson);
+        entity.setPayload(wireBytes);
         entity.setCreatedAt(envelope.occurredAt());
 
         outboxEventJpaRepository.save(entity);
 
         log.info(
-                "Staged outbox event outboxId={} eventType={} paymentId={} - relayed to Kafka by"
-                        + " Debezium, not this process",
+                "Staged outbox event outboxId={} eventType={} paymentId={} payloadBytes={} - relayed"
+                        + " to Kafka by Debezium, not this process",
                 entity.getId(),
                 EVENT_TYPE,
-                paymentId);
+                paymentId,
+                wireBytes.length);
     }
 }

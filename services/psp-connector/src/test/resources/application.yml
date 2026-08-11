@@ -32,6 +32,11 @@ psp-connector:
   kafka:
     payment-requested-topic: payments.payment-requested.v1
     payment-status-changed-topic: payments.payment-status-changed.v1
+  # M9 Phase 1: KafkaAvroDeserializer only resolves this lazily (on first poll() that actually
+  # needs to fetch/cache a schema) - PspConnectorApplicationTests never publishes to the topic, so
+  # this value only needs to be present, not reachable.
+  schema-registry:
+    url: http://localhost:8081
   provider:
     min-latency-ms: 0
     max-latency-ms: 1

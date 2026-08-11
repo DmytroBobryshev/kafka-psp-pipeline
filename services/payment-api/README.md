@@ -397,3 +397,267 @@ built into psp-connector, and why its replay proof matters here too.
 | Payment POSTs succeed, `outbox_event` fills up, but nothing ever appears on `payments.payment-requested.v1` | (M6) Either the connector isn't registered/running (`curl localhost:8083/connectors/payment-outbox-connector/status`) or it was registered against an outbox table that already existed before it started - `snapshot.mode=no_data` only relays rows inserted *after* registration; see "Known issues" |
 | Connector `status` shows `connector.state=RUNNING` but `tasks[0].state=FAILED` after fixing the connector config | PUTting a new config does **not** auto-restart an already-FAILED task (a real Kafka Connect gotcha). `register-connector.sh` handles this itself (one automatic restart-and-retry), but a manual `curl -X POST localhost:8083/connectors/payment-outbox-connector/restart?includeTasks=true` is the fix if you're calling the REST API by hand |
 | `docker compose logs kafka-connect` full of `Error while fetching metadata ... __debezium-heartbeat.payment-api=UNKNOWN_TOPIC_OR_PARTITION` | Expected if `heartbeat.interval.ms` is ever re-added to the connector config - the heartbeat topic can't auto-create (`auto.create.topics.enable=false` cluster-wide) and the resulting repeated producer failure was observed to restart the task roughly once a minute during verification. Removed from `payment-outbox-connector.json` for exactly this reason |
+
+## M9 - Schemas & evolution (Phase 1: `payments.payment-requested.v1` only)
+
+**Scope.** M9 migrates topics from JSON to Avro + Schema Registry one at a time. Phase 1 migrates
+**only** `payments.payment-requested.v1` - both sides: this service's outbox path (producer) and
+`psp-connector`'s inbound listener (consumer). `payments.payment-status-changed.v1`, every ledger
+and webhook-notifier topic, and `psp-connector`'s own outbound publishing all stay JSON. A later
+phase migrates them one at a time, the same way.
+
+### The outbox-serialization decision
+
+M6 already established the shape of the problem: this service never calls Kafka - it writes a
+Postgres row and Debezium relays it. For the bytes that land on the topic to be valid Confluent
+Avro (magic byte + schema id + Avro payload), *something* in the pipeline has to produce that
+exact framing, and the outbox's plain-JPA write is the only place that can own it deterministically.
+Three options, in the order the task set them:
+
+**(a) - chosen. payment-api Avro-serializes the event itself; the outbox stores the finished wire
+bytes; Connect passes them through unchanged (`ByteArrayConverter`).**
+`adapters.out.outbox.OutboxPaymentEventPublisher` builds the generated Avro record
+(`PaymentAvroEventFactory`) and calls `KafkaAvroSerializer#serialize(topic, record)` -
+registering/looking up the schema against Schema Registry and returning the complete wire format
+- **before** the Postgres transaction ever starts. Those exact bytes go into
+`outbox_event.payload` (now `BYTEA`, see `db/migration/V3__outbox_event_payload_bytes.sql`), and
+the Debezium connector's `value.converter` is `org.apache.kafka.connect.converters.
+ByteArrayConverter`, which does no interpretation at all - it writes whatever `byte[]` it's
+handed straight to the topic. **Chosen because it is the only option where the service that owns
+the schema (payment-api) is also the thing that produces the wire bytes** - Connect never makes a
+single decision about what those bytes mean.
+
+**(b) - rejected. Keep JSON in the outbox; let Connect's `AvroConverter` serialize.**
+This would mean configuring `value.converter=io.confluent.connect.avro.AvroConverter` and letting
+the outbox event router's `table.expand.json.payload=true` path parse the JSON payload into a
+Connect `Struct`, which `AvroConverter` then encodes. Rejected for three concrete reasons:
+1. The Struct's schema would be **inferred from the JSON's shape** by the outbox router, not
+   sourced from the hand-authored `.avsc` files in `libs/common-events` - there is no guarantee
+   the inferred schema matches (or even resembles) the schema the generated
+   `com.example.psp.common.events.avro.PaymentRequested` Java class expects, so `specific.avro.
+   reader=true` on the consumer side could not be relied on to work.
+2. JSON has no schema of its own to type-check against; `amount` (a `BigDecimal` in the domain
+   model) would decode from JSON as a floating-point number and get inferred as `double`, silently
+   losing decimal precision - exactly the failure mode ADR-0002 calls out generic/inferred
+   payloads for.
+3. Compatibility enforcement (this phase's other requirement) would be checking an
+   **auto-generated** schema against itself release to release, not the schema this codebase
+   actually owns and version-controls.
+
+**(c) - not pursued.** A conceivable third option is a Postgres trigger or a separate polling
+process that reads `outbox_event` rows and Avro-encodes them out-of-band, decoupled from the
+request path. Not pursued: it reintroduces a second moving part with its own lag and failure mode
+for exactly the same amount of work option (a) already does synchronously, for free, inside the
+transaction that's already there.
+
+**Compromise this decision costs:** payment-api's write path now makes a synchronous HTTP call to
+Schema Registry (inside `KafkaAvroSerializer#serialize`, cached after the first lookup) before
+every outbox write. Through M8 this service talked to Postgres only; M9 Phase 1 adds a second
+external dependency to the request path. Accepted because Schema Registry is already a required,
+always-on part of this stack (M2), and the alternative (b) makes correctness *worse*, not better.
+
+### ADR-0001: does JSON -> Avro require a new topic version (`v2`)?
+
+**Answer: no, and this stays `payments.payment-requested.v1` - not `.v2` - but the reasoning needs
+to be explicit, because ADR-0001's rule doesn't cleanly cover this case.**
+
+ADR-0001's breaking-change test is written entirely in terms of the **event's field set and
+semantics**, evaluated by Schema Registry's `BACKWARD` compatibility check: "remove/rename a
+field, change a type, change semantics of an existing field." The Avro schema in
+`libs/common-events/src/main/avro` is **field-for-field identical** to the JSON shape it replaces
+- same names, same nesting (`envelope` sub-record + top-level domain fields), same meaning for
+every field. Nothing was removed, renamed, retyped in a semantic sense, or reinterpreted. Under
+a literal reading of ADR-0001's criteria, there is no breaking change here to trigger a `v2`.
+
+There's a real gap in applying that test, though: **Schema Registry compatibility checking is
+format-specific.** `BACKWARD` compatibility compares two Avro schemas (or two Protobuf schemas);
+it has no concept of "is this Avro schema backward-compatible with the ad-hoc JSON shape that
+preceded it," because before this phase there was no registered schema for this subject at all -
+ADR-0002 says as much: JSON-with-no-registry was explicitly the placeholder, written so "migration
+[to Avro] is a serializer swap rather than a redesign." ADR-0001's versioning rule presupposes a
+Registry-governed schema already exists to be compatible *with*; a wire-format switch from
+"ungoverned JSON" to "the first Avro version" precedes that rule rather than triggering it.
+
+So the honest test isn't "does the compatibility checker reject this" (it's not wired up to ask a
+cross-format question in the first place) but ADR-0001's *underlying goal*: **can producer and
+consumer now deploy independently without one poison-pilling the other?** For a hard cutover on
+one topic name, the answer is no, and this phase has direct, measured evidence of exactly that
+failure mode - see "Compromises" below: once `psp-connector`'s deserializer flipped to Avro, its
+existing consumer group hit ~1,200 `SerializationException: Unknown magic byte!` errors working
+through **old JSON-era backlog records still sitting on this topic from M3-M6 verification runs**,
+each one correctly caught by `ErrorHandlingDeserializer` and skipped (ADR-0006 category C), not
+silently corrupted. That is the precise scenario ADR-0001's `v2`-topic-plus-dual-write mechanism
+exists to prevent structurally.
+
+**Why Phase 1 still doesn't cut a `v2` topic, given that evidence:** this is a single learning
+cluster with exactly one producer (payment-api) and one consumer group (`psp-connector.v1`), both
+changed and deployed together in this one phase - not two independently-released teams, which is
+the scenario ADR-0001's dual-write escape hatch is priced for. The disruption is a one-time,
+deliberate cutover during a migration window, not an ongoing rolling-deploy hazard between
+long-lived independent deployments. A real `v2` topic would additionally require payment-api to
+dual-write JSON *and* Avro for a migration window per ADR-0001's own policy - genuine, disproportionate
+complexity for a system where nothing is consuming this topic except the one service being upgraded
+in lockstep. PLAN.md's M9 brief frames this module as "migrate topics from JSON to Avro... **then**
+evolve" - the format cutover is the one-time baseline; ADR-0001's `v1`/`v2` machinery is what
+governs the schema **evolution** *after* this baseline (see the placeholder below), which is
+exactly the ongoing-independent-deploy scenario it was designed for.
+
+**This is a scale-appropriate simplification, not a refutation of ADR-0001.** A production system
+with independently-deployed producers/consumers across teams would need the real `v2`/dual-write
+path for this exact migration; a single-cluster, single-consumer learning system does not, and the
+old-backlog poison-pill evidence above is presented precisely so this trade-off isn't glossed over.
+
+### Wire format
+
+Every record value on `payments.payment-requested.v1` is now standard Confluent wire-format Avro:
+
+```
+byte 0        magic byte, always 0x00
+bytes 1-4     schema id, 4-byte big-endian signed int (registry-assigned)
+bytes 5..     Avro binary-encoded PaymentRequested record
+```
+
+The record **key** is unchanged and NOT Avro-encoded: plain UTF-8 text, the `paymentId` (ADR-0003).
+Only the value is Avro on this topic.
+
+**A real record**, captured from the live stack (`docker compose exec kafka1 kafka-console-consumer
+--topic payments.payment-requested.v1 --property print.key=true/print.value=true`, output
+inspected with `xxd`) for a payment POSTed as `{"merchantId":"merchant-m9-avro-proof-2",
+"amount":123.45,"currency":"EUR"}`:
+
+```
+KEY   = 0c1b7fc8-639f-4e27-8b8b-627310ba3d98            (plain text paymentId, ADR-0003)
+
+VALUE (first 32 bytes, hex):
+00 00 00 00 01 48 30 31 39 66 66 32 30 64 2d 32
+36 36 30 2d 37 61 31 30 2d 38 61 64 32 2d 33 36
+```
+
+Byte-by-byte:
+- `00` - magic byte.
+- `00 00 00 01` - schema id **1** (matches the registered subject below - confirmed by fetching
+  `GET /subjects/payments.payment-requested.v1-value/versions/latest`, which returns `"id": 1`).
+- `48 30 31 39 66 66 32 30 64 2d ...` - the Avro binary payload starts: `0x48` is a zigzag varint
+  length prefix (`0x48` = 72 -> zigzag-decoded = 36), followed by exactly 36 bytes:
+  `019ff20d-2660-7a10-8ad2-36128ee43a97` - `envelope.eventId` (a UUIDv7 string), the first field in
+  schema order. Continuing through the same record: `eventType` = `"payments.payment-requested.v1"`,
+  `eventVersion` = `1` (single zigzag byte `0x02`), `aggregateId` =
+  `0c1b7fc8-639f-4e27-8b8b-627310ba3d98` (= the record key, as expected), `aggregateType` =
+  `"payment"`, ... down to `amount`, whose 3 raw bytes `12 d6 44` decode as the big-endian
+  two's-complement integer `1234500`, and with the schema's `scale=4` that's **123.4500** -
+  exactly the `123.45` EUR posted. `status` = `"CREATED"` closes the record. Every field
+  cross-checks against the actual POST body and generated envelope - this is not a synthetic
+  example.
+
+### Subject naming strategy and compatibility mode
+
+**Subject:** `payments.payment-requested.v1-value` - `TopicNameStrategy` (Schema Registry's
+default, and the strategy ADR-0001 already names: "subjects derive as `<topic>-value` /
+`<topic>-key` for free"). No `-key` subject exists because the key is plain text, not Avro.
+
+**Compatibility mode: `BACKWARD`, set explicitly** via `infra/compose/register-schemas.sh`
+(`PUT /config/payments.payment-requested.v1-value`), run before any producer registers a schema -
+not left at whatever the registry's out-of-the-box default happens to be, and not implicit. This
+isn't a fresh choice made here: ADR-0001's "Versioning rule" already commits the whole system to
+`BACKWARD` ("Schema Registry compatibility is `BACKWARD` ... enforced in M9") - this script is
+that commitment actually enforced for the one subject this phase created. `BACKWARD` means a new
+schema version must be able to read data written under the previous version, which is what a
+rolling deploy needs (a new consumer schema reading old producer data) and is also the compatibility
+mode ADR-0001's `v1`/`v2` topic-versioning rule assumes: whatever `BACKWARD` accepts (add an
+optional field with a default, widen a doc) evolves the subject in place; whatever `BACKWARD`
+would reject (remove/rename/retype a field) is, by that ADR's definition, the breaking change that
+gets a new topic instead of a fight with the registry.
+
+### Compromises
+
+- **A real Kafka Connect gap, found and fixed.** With `table.expand.json.payload=false` (payload
+  is raw bytes now, not JSON to parse), Debezium represents the `outbox_event.payload` `BYTEA`
+  column as `java.nio.HeapByteBuffer`, and Kafka's own
+  `org.apache.kafka.connect.converters.ByteArrayConverter#fromConnectData` is strictly
+  `instanceof byte[]` - it throws `DataException: ByteArrayConverter is not compatible with
+  objects of type class java.nio.HeapByteBuffer` on anything else. This is a known, empirically-confirmed
+  Kafka Connect limitation, not a bug in this design - no Debezium or Connect config flag changes
+  the representation. Fixed with a tiny one-purpose Single Message Transform,
+  `infra/compose/connect/plugins/outbox-bytebuffer-smt` (`com.example.psp.connect.smt.
+  ByteBufferToBytes`), chained after the outbox router
+  (`"transforms": "outbox,byteBufferFix"`) - it unwraps `ByteBuffer` -> `byte[]` and nothing else.
+  Compiled against the exact `connect-api`/`connect-transforms`/`kafka-clients` jars bundled in the
+  running `debezium/connect:2.7.3.Final` image, mounted read-only as its own plugin directory
+  (`docker-compose.yml`'s `kafka-connect.volumes`), same convention as the built-in
+  `debezium-connector-*` plugin directories already in that image.
+- **Old JSON backlog becomes poison pills, by design of the cutover.** See the ADR-0001 section
+  above - `psp-connector`'s `ErrorHandlingDeserializer` correctly classifies old JSON records
+  (pre-M9 verification runs still on this topic) as non-retryable deserialization failures and
+  skips them (ADR-0006 category C), rather than looping or crashing. Confirmed live: ~1,200 such
+  skips logged working through the backlog before the consumer reached the new Avro records.
+  Expected and harmless on this learning cluster; on a topic with real retention/consumers this is
+  exactly the scenario a `v2` topic exists to avoid.
+- **Not a MapStruct boundary, on purpose.** `adapters.out.outbox.PaymentAvroEventFactory` is a
+  plain method, not a MapStruct `@Mapper` - the one deliberate exception to this codebase's
+  "MapStruct at every boundary" convention. See that class's javadoc for the reasoning (two
+  one-line conversions through a generated `Builder`, not worth an annotation-processed interface).
+- **`psp-connector`'s `auto-commit-drill` profile (M4) was left on the JSON-era shape.** It has its
+  own, separate `ConsumerFactory` (`KafkaAutoCommitDriftConfig`) that was never touched - running
+  that drill against the live (now-Avro) topic would poison-pill immediately. Out of Phase 1 scope
+  (one topic's *production* consumer, not every experimental listener that ever subscribed to it);
+  flagged in that class's javadoc for whoever revives the drill later.
+- **`outbox_event` was truncated**, not migrated in place, by
+  `db/migration/V3__outbox_event_payload_bytes.sql` - existing rows held JSON text under the old
+  M6 shape, which isn't a valid `bytea` value. Fine for a throwaway learning-cluster table with no
+  existing cleanup job (see the M6 section's "Known issues").
+
+### Schema evolution proof
+
+Measured against the live registry, subject `payments.payment-requested.v1-value` (schema id 1,
+`BACKWARD`), using the compatibility endpoint rather than a deploy, so the registry's own verdict
+and message are the evidence:
+
+```bash
+curl -X POST -H 'Content-Type: application/vnd.schemaregistry.v1+json' \
+  --data '{"schema": "...", "schemaType": "AVRO"}' \
+  'localhost:8081/compatibility/subjects/payments.payment-requested.v1-value/versions/latest?verbose=true'
+```
+
+| Change | Verdict under `BACKWARD` | Registry's reason |
+|---|---|---|
+| add optional field (`["null","string"]`, default `null`) | **COMPATIBLE** | - |
+| add required field (`string`, no default) | **REJECTED** | `READER_FIELD_MISSING_DEFAULT_VALUE` - "the field 'settlementCurrency' in the new schema has no default value" |
+| remove field `currency` | **COMPATIBLE** | - |
+| rename `merchantId` -> `merchantIdentifier` | **REJECTED** | `READER_FIELD_MISSING_DEFAULT_VALUE` - "the field 'merchantIdentifier' in the new schema has no default value" |
+
+**The rename rejection is the one worth understanding.** Its error is *identical* to the
+add-required-field case, and that is not a coincidence: Avro has no concept of renaming. It sees a
+field that vanished and a different field that appeared without a default, so a new reader handed
+old data has nothing to put in `merchantIdentifier`. A rename is an add and a remove wearing a
+trench coat. To rename safely you add the new field with a default, dual-write both, migrate
+consumers, then drop the old one - four deploys, not one.
+
+**`BACKWARD` means "new reader can read old data", which is a deployment-order policy, not a
+property of the change.** The same removal flips verdict depending on the mode:
+
+| Change | `BACKWARD` | `FORWARD` | `FULL` |
+|---|---|---|---|
+| remove field `currency` | COMPATIBLE | **REJECTED** | **REJECTED** |
+| add optional field (with default) | COMPATIBLE | COMPATIBLE | COMPATIBLE |
+
+Under `FORWARD` the rejection reads "the field 'currency' **in the old schema** has no default
+value" - note *old*, where the `BACKWARD` failures said *new*. That single word is the whole
+distinction. `BACKWARD` protects consumers you upgrade first: a new reader must cope with old data,
+so it may drop fields but must not demand new ones. `FORWARD` protects producers you upgrade first:
+an old reader must cope with new data, so you may add fields but must not remove ones it still
+requires. `FULL` demands both and is the only mode under which you can deploy producers and
+consumers in any order.
+
+`BACKWARD` is the right default here because consumers in this system are upgraded first, and it is
+also Schema Registry's default - but the reason to keep it should be that ordering policy, not
+inertia.
+
+**The one change that is always safe, in every mode, is adding a field with a default.** That is
+the entire practical takeaway: if you want schema changes that never coordinate a deploy, only ever
+add optional fields.
+
+A caveat this migration surfaced empirically: compatibility checking is *format-specific* and does
+not apply where no schema exists yet. Cutting `payments.payment-requested.v1` from JSON to Avro
+in place left ~1,200 old JSON records on the topic, which the Avro consumer met with
+`Unknown magic byte!` - the registry could not have warned about that, because JSON records carry
+no schema id to check. See the topic-versioning discussion above.

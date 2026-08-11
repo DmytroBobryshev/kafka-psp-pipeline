@@ -30,3 +30,8 @@ spring:
 payment-api:
   kafka:
     payment-requested-topic: payments.payment-requested.v1
+  # M9 Phase 1: KafkaAvroSerializer#configure never connects eagerly (lazy on first serialize(),
+  # which this context-load test never triggers - same lazy-connection reasoning as
+  # bootstrap-servers above), so this value only needs to be present, not reachable.
+  schema-registry:
+    url: http://localhost:8081

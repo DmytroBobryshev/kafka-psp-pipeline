@@ -6,12 +6,19 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
- * Wire shape of {@code payments.payment-requested.v1} as psp-connector deserializes it - the
- * consuming side's mirror of {@code payment-api}'s {@code PaymentRequested} producer record.
- * Field-for-field identical on purpose: both are hand-written JSON-era records of the same
- * ADR-0001/ADR-0002 contract, duplicated per service rather than shared, same as every other
- * concrete event type in this codebase (only {@link EventEnvelope} itself lives in
- * {@code libs/common-events}). Avro codegen in M9 replaces both with one generated class.
+ * JSON-era wire shape of {@code payments.payment-requested.v1} - the consuming side's mirror of
+ * {@code payment-api}'s (also retired) {@code adapters.out.kafka.PaymentRequested} producer
+ * record.
+ *
+ * <p><b>Retired as of M9 Phase 1</b> for the production listener
+ * ({@code PaymentRequestedListener} now consumes the generated
+ * {@code com.example.psp.common.events.avro.PaymentRequested} Avro class instead - see
+ * {@code PaymentRequestedMapper}), same "kept for reference, no {@code @Component}, nothing
+ * wires it in" convention as {@code adapters.out.kafka.KafkaPaymentEventPublisher} (M3) on the
+ * payment-api side. Still used by the {@code auto-commit-drill} profile's
+ * {@code AutoCommitDriftListener}/{@code KafkaAutoCommitDriftConfig} (an M4 experiment, disabled
+ * by default) - see those classes' javadoc for why that drill was left on the JSON-era shape
+ * rather than updated for M9.
  */
 public record PaymentRequestedEvent(
         EventEnvelope envelope,

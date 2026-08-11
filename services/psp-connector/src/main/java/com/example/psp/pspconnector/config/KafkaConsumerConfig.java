@@ -1,11 +1,15 @@
 package com.example.psp.pspconnector.config;
 
-import com.example.psp.pspconnector.adapters.in.kafka.PaymentRequestedEvent;
+import com.example.psp.common.events.avro.PaymentRequested;
 import com.example.psp.pspconnector.domain.exception.ProviderTimeoutException;
+import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
+import io.confluent.kafka.serializers.KafkaAvroDeserializer;
+import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,7 +19,6 @@ import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
-import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.util.backoff.FixedBackOff;
 
 /**
@@ -33,8 +36,9 @@ import org.springframework.util.backoff.FixedBackOff;
 public class KafkaConsumerConfig {
 
     @Bean
-    public ConsumerFactory<String, PaymentRequestedEvent> paymentRequestedConsumerFactory(
-            KafkaProperties kafkaProperties) {
+    public ConsumerFactory<String, PaymentRequested> paymentRequestedConsumerFactory(
+            KafkaProperties kafkaProperties,
+            @Value("${psp-connector.schema-registry.url}") String schemaRegistryUrl) {
         Map<String, Object> props = kafkaProperties.buildConsumerProperties(null);
 
         // --- group.id --------------------------------------------------------------------------
@@ -118,33 +122,36 @@ public class KafkaConsumerConfig {
         // --- Deserializers: ErrorHandlingDeserializer wraps the real ones ------------------------
         // ADR-0006 category C (contract violation / poison pill - bad bytes, wrong schema): "MUST
         // be configured on every consumer factory", handled BEFORE the listener ever runs. Without
-        // this wrapper, a JsonDeserializer failure throws out of poll() itself and the container
-        // cannot even advance past the bad record - the classic poison-pill infinite loop M8's
-        // "prove it" reproduces on purpose. ErrorHandlingDeserializer instead catches the
-        // deserialization exception and hands a DeserializationException to the listener's error
-        // handler (see the container factory below), which Spring Kafka classifies as
+        // this wrapper, a KafkaAvroDeserializer failure throws out of poll() itself and the
+        // container cannot even advance past the bad record - the classic poison-pill infinite
+        // loop M8's "prove it" reproduces on purpose. ErrorHandlingDeserializer instead catches
+        // the deserialization exception and hands a DeserializationException to the listener's
+        // error handler (see the container factory below), which Spring Kafka classifies as
         // non-retryable by default - straight to the recoverer instead of blocking every other
         // record on this partition forever.
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
         props.put(ErrorHandlingDeserializer.KEY_DESERIALIZER_CLASS, StringDeserializer.class);
-        props.put(ErrorHandlingDeserializer.VALUE_DESERIALIZER_CLASS, JsonDeserializer.class);
-        // payment-api publishes with spring.json.add.type.headers=false (ADR-0002: headers carry
-        // only traceparent/event-id/event-type/aggregate-id, never a Java FQCN) - so this side
-        // must be told the target type explicitly instead of reading it from a header.
-        props.put(JsonDeserializer.VALUE_DEFAULT_TYPE, PaymentRequestedEvent.class.getName());
-        props.put(JsonDeserializer.USE_TYPE_INFO_HEADERS, false);
-        props.put(JsonDeserializer.TRUSTED_PACKAGES, "com.example.psp.*");
+        props.put(ErrorHandlingDeserializer.VALUE_DESERIALIZER_CLASS, KafkaAvroDeserializer.class);
+        // M9 Phase 1: payments.payment-requested.v1 carries the Confluent wire format (magic byte
+        // + 4-byte schema id + Avro binary) - KafkaAvroDeserializer reads the schema id, fetches
+        // that exact schema from Schema Registry (caching it), and decodes the binary payload
+        // against it. specific.avro.reader=true is what makes it hand the listener the generated
+        // com.example.psp.common.events.avro.PaymentRequested class (strongly typed, no cast)
+        // instead of a schema-less GenericRecord - the task's explicit requirement, and the same
+        // ergonomics psp-connector already had with JsonDeserializer's typed target class.
+        props.put(AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, schemaRegistryUrl);
+        props.put(KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, true);
 
         return new DefaultKafkaConsumerFactory<>(props);
     }
 
     @Bean
-    public ConcurrentKafkaListenerContainerFactory<String, PaymentRequestedEvent>
+    public ConcurrentKafkaListenerContainerFactory<String, PaymentRequested>
             paymentRequestedKafkaListenerContainerFactory(
                     @Qualifier("paymentRequestedConsumerFactory")
-                            ConsumerFactory<String, PaymentRequestedEvent> paymentRequestedConsumerFactory) {
-        ConcurrentKafkaListenerContainerFactory<String, PaymentRequestedEvent> factory =
+                            ConsumerFactory<String, PaymentRequested> paymentRequestedConsumerFactory) {
+        ConcurrentKafkaListenerContainerFactory<String, PaymentRequested> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(paymentRequestedConsumerFactory);
 

@@ -98,6 +98,10 @@ management:
 payment-api:
   kafka:
     payment-requested-topic: payments.payment-requested.v1
+  # schema-registry.url is environment-specific (M9 Phase 1) - see application-docker-compose.yml.
+  # Read by config.SchemaRegistryConfig to build the KafkaAvroSerializer that Avro-encodes
+  # payments.payment-requested.v1's outbox payload; payment-api runs no other Schema Registry
+  # client, since it never talks to Kafka directly (M6).
 
 # No datasource configured here on purpose - see application-docker-compose.yml. Running this
 # service without an active profile and without a database will fail to start (spring-boot-

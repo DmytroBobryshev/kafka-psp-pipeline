@@ -1,0 +1,62 @@
+{
+  "type": "record",
+  "name": "EventEnvelope",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of the ADR-0002 shared event envelope (M9 Phase 1). Field-for-field identical to the hand-written com.example.psp.common.events.EventEnvelope Java record that every other (still-JSON) topic keeps using. Filename prefix '01-' is deliberate: avro-maven-plugin's schema goal parses every .avsc file under src/main/avro with one shared Schema.Parser, in directory-listing order, so this file - which every event schema in this module references by full name - must be parsed before any file that uses it (see 02-payment-requested.avsc). UUID-shaped fields (eventId, causationId) are plain Avro 'string', not the 'uuid' logical type - the M9 Phase 1 outbox path already converts UUID<->String by hand at the payment-api/psp-connector boundary (see PaymentAvroEventFactory), so a logical-type UUID conversion would add generated-code surface without removing any conversion code.",
+  "fields": [
+    {
+      "name": "eventId",
+      "type": "string",
+      "doc": "UUIDv7 string form, producer-generated. THE idempotency key for consumer dedup (M5) - psp-connector's AttemptLogRepository#existsByInboundEventId is keyed on this field, unchanged from the JSON-era contract."
+    },
+    {
+      "name": "eventType",
+      "type": "string",
+      "doc": "Discriminator, e.g. 'payments.payment-requested.v1' (ADR-0001)."
+    },
+    {
+      "name": "eventVersion",
+      "type": "int",
+      "doc": "Schema/event version for this eventType; starts at 1."
+    },
+    {
+      "name": "aggregateId",
+      "type": "string",
+      "doc": "The entity the event is about (paymentId here). UI grouping key; not necessarily the partition key (ADR-0003)."
+    },
+    {
+      "name": "aggregateType",
+      "type": "string",
+      "doc": "The type of the aggregate identified by aggregateId, e.g. 'payment'."
+    },
+    {
+      "name": "occurredAt",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "doc": "Domain event time (when the fact happened), millisecond precision - generates java.time.Instant. Fixes the JSON-era epoch-decimal wire quirk documented in services/payment-api/README.md's M6 'Known issues' section."
+    },
+    {
+      "name": "source",
+      "type": "string",
+      "doc": "The producing service name, for provenance and DLQ triage."
+    },
+    {
+      "name": "traceId",
+      "type": "string",
+      "doc": "W3C trace-id, propagated end to end (M15)."
+    },
+    {
+      "name": "correlationId",
+      "type": "string",
+      "doc": "The originating request id, assigned at the gateway."
+    },
+    {
+      "name": "causationId",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "eventId of the event that caused this one, or null for a root event."
+    }
+  ]
+}

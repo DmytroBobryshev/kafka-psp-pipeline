@@ -25,3 +25,10 @@ spring:
     # Three brokers' HOST-side (EXTERNAL) listeners - same rationale as payment-api's equivalent
     # entry (infra/compose/README.md's advertised-listeners section).
     bootstrap-servers: localhost:29092,localhost:29093,localhost:29094
+
+# M9 Phase 1: psp-connector runs on the HOST (java -jar ...), so it reaches Schema Registry via
+# its published host port - localhost:8081, per infra/compose/.env's SCHEMA_REGISTRY_PORT - same
+# host/compose-network split as bootstrap-servers above.
+psp-connector:
+  schema-registry:
+    url: http://localhost:8081

@@ -1,5 +1,6 @@
 package com.example.psp.pspconnector.adapters.in.kafka;
 
+import com.example.psp.common.events.avro.PaymentRequested;
 import com.example.psp.pspconnector.application.ProcessPaymentRequestUseCase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +12,10 @@ import org.springframework.stereotype.Component;
 /**
  * M4's first consumer: listens on {@code payments.payment-requested.v1} using the container
  * factory built in {@code config.KafkaConsumerConfig} (manual ack, explicit error handling).
+ * M9 Phase 1: the listener payload is now the generated Avro {@link PaymentRequested} record
+ * (not the hand-written {@code PaymentRequestedEvent} JSON-era type, kept only for the
+ * {@code auto-commit-drill} profile - see that class's javadoc), decoded via
+ * {@code specific.avro.reader=true} in {@code config.KafkaConsumerConfig}.
  *
  * <p>Deliberately thin and exception-agnostic: on success it acks; on failure it does nothing
  * special at all - it simply doesn't reach the {@code ack.acknowledge()} line, because the
@@ -42,11 +47,11 @@ public class PaymentRequestedListener {
     @KafkaListener(
             topics = "${psp-connector.kafka.payment-requested-topic}",
             containerFactory = "paymentRequestedKafkaListenerContainerFactory")
-    public void onMessage(PaymentRequestedEvent event, Acknowledgment ack) {
+    public void onMessage(PaymentRequested event, Acknowledgment ack) {
         log.info(
                 "Consumed payment-requested paymentId={} merchantId={}",
-                event.paymentId(),
-                event.merchantId());
+                event.getPaymentId(),
+                event.getMerchantId());
 
         useCase.execute(mapper.toCommand(event));
 

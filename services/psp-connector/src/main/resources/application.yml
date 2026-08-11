@@ -76,6 +76,9 @@ psp-connector:
   kafka:
     payment-requested-topic: payments.payment-requested.v1
     payment-status-changed-topic: payments.payment-status-changed.v1
+  # schema-registry.url is environment-specific (M9 Phase 1) - see application-docker-compose.yml.
+  # Read by config.KafkaConsumerConfig to build the payments.payment-requested.v1 consumer's
+  # KafkaAvroDeserializer. Outbound payments.payment-status-changed.v1 stays JSON (unaffected).
 
   provider:
     # Steady-state simulation: 100ms-5s latency, ~10% declines, ~5% timeouts (module brief).

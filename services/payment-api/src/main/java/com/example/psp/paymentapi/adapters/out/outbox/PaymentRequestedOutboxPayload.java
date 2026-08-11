@@ -22,6 +22,10 @@ import java.util.UUID;
  * {@code adapters.in.kafka.PaymentRequestedEvent} must keep deserializing successfully - see
  * services/payment-api/README.md's M6 section for the verified consumed-message comparison.
  *
+ * <p><b>Retired as of M9 Phase 1.</b> {@code payments.payment-requested.v1} moved to Avro (see
+ * {@code libs/common-events/src/main/avro} and {@code PaymentAvroEventFactory}); this JSON DTO is
+ * kept only for reference, same convention as {@code adapters.out.kafka.PaymentRequested} (M3).
+ *
  * @param paymentId  also the record key (ADR-0003), same as the retired direct-publish path.
  * @param merchantId the owning merchant; not the partition key on this topic (ADR-0003).
  */
