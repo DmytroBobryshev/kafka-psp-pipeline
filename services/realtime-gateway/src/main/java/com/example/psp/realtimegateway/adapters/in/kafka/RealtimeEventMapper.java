@@ -106,11 +106,21 @@ public class RealtimeEventMapper {
                 envelope.getEventId(),
                 envelope.getEventType(),
                 envelope.getOccurredAt(),
+                // Null for a root event - a payment nobody caused. Every subsequent event in the
+                // chain carries the previous one's eventId here, which is what lets a client draw
+                // the causal chain instead of an arrival-ordered list.
+                str(envelope.getCausationId()),
+                str(envelope.getSource()),
                 paymentId,
                 merchantId,
                 refundId,
                 status,
                 reason,
                 providerReference);
+    }
+
+    /** Avro string fields arrive as {@link CharSequence} (Utf8), not {@code String}. */
+    private static String str(CharSequence value) {
+        return value == null ? null : value.toString();
     }
 }

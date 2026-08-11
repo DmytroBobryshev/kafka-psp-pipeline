@@ -29,6 +29,13 @@ public record RealtimeEvent(
         String eventId,
         String eventType,
         Instant occurredAt,
+        // causationId is the eventId of the event that caused this one (ADR-0002). Forwarding it
+        // is what lets a client draw the causal chain rather than list events in arrival order -
+        // the UI timeline renders "caused by <eventId>" and links the two.
+        String causationId,
+        // Which service emitted this. Without it a timeline shows what happened but not who did
+        // it, which is most of what makes an event-driven system legible from the outside.
+        String source,
         String paymentId,
         String merchantId,
         String refundId,
