@@ -1,0 +1,39 @@
+# Dead-letter topics for the other consumers - docs/diagrams/topic-map.md, "Dead-letter topics
+# for other consumers".
+#
+# Only consumers whose work is NOT reconstructible by replaying the source get one (ADR-0006):
+# `analytics` and `realtime-gateway` deliberately have none, which is why there are exactly two
+# CRs in this file and not five.
+#
+# The `<consumer-app>` segment in the name is present because both base topics have several
+# consumer groups; it is absent on the webhook DLQ because that topic has exactly one (ADR-0001).
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: payments.payment-requested.v1.psp-connector.dlq
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "2592000000"    # 30 d
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: payments.payment-status-changed.v1.ledger.dlq
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "2592000000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"

@@ -1,0 +1,31 @@
+# webhook-notifier (:8088) - 11 bindings, matching init-security.sh's
+# "--- webhook-notifier ---" block.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: webhook-notifier
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource: { type: topic, name: payments.payment-status-changed.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: refunds.refund-completed.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: refunds.refund-failed.v1, patternType: literal }
+        operations: [Read, Describe]
+      # ONE prefixed grant covers the whole M9-Phase-2 delivery chain: the v2 base topic, its
+      # three retry tiers and its DLQ. This service produces AND consumes every hop
+      # (planner -> executor -> retry -> dlq -> replay), which is exactly why the chain lives
+      # under one prefix. Note it does NOT reach the retired .v1 chain: `...v2` as a prefix
+      # cannot match `...v1.dlq`, so M8's frozen evidence stays unreadable by this principal.
+      - resource: { type: topic, name: webhooks.webhook-delivery-requested.v2, patternType: prefix }
+        operations: [Read, Write, Describe]
+      # planner.v1 / executor.v1 / dlq-replay.v1 - three consumer identities in one service.
+      - resource: { type: group, name: webhook-notifier., patternType: prefix }
+        operations: [Read, Describe]

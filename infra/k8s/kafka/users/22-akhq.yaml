@@ -1,0 +1,26 @@
+# AKHQ (UI) - 7 bindings, matching init-security.sh's "--- AKHQ ---" block.
+#
+# Cluster-wide but READ-ONLY BY CONSTRUCTION: no Write, no Create, no Delete anywhere. AKHQ can
+# browse every topic and every group and cannot produce a single record - a better demonstration
+# of what per-principal ACLs buy you than any amount of prose.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: akhq
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      # `*` as a LITERAL name is Kafka's wildcard resource, not a prefix pattern - the same thing
+      # `kafka-acls --topic '*'` produces.
+      - resource: { type: topic, name: "*", patternType: literal }
+        operations: [Read, Describe, DescribeConfigs]
+      - resource: { type: group, name: "*", patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: cluster }
+        operations: [Describe, DescribeConfigs]

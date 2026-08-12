@@ -1,0 +1,146 @@
+# The Kafka cluster itself. Everything in infra/compose/docker-compose.yml's `kafka-common-env`
+# block that is still MEANINGFUL on Kubernetes is carried over here; everything that was only
+# there to work around docker-compose is gone (see the README's "compose vs k8s" section).
+#
+# Cluster name `psp` -> pods `psp-combined-0..2`, bootstrap service `psp-kafka-bootstrap`.
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: psp
+  namespace: kafka
+spec:
+  kafka:
+    # Pinned. Strimzi 1.1.0 ships images for 4.2.0, 4.2.1 and 4.3.0 only; anything else is
+    # rejected by the operator with "Unsupported Kafka.spec.kafka.version". Note this is a real
+    # jump from compose (cp-kafka 7.7.1 == Apache Kafka 3.7) - see the README.
+    version: 4.3.0
+
+    # ------------------------------------------------------------------------------------------
+    # LISTENERS. Compose needed four (INTERNAL/EXTERNAL/BROKER/CONTROLLER) because the
+    # inter-broker and controller channels had to be authenticated by hand with SASL/PLAIN, since
+    # SCRAM credentials live in the metadata log and cannot be used to bootstrap the log itself.
+    #
+    # Here there are TWO. Strimzi runs the inter-broker and controller listeners on mutual TLS
+    # with certificates it issues, rotates and mounts itself - the `broker` PLAIN superuser and
+    # the whole chicken-and-egg discussion it existed to solve simply do not exist on this
+    # cluster. That is the single biggest thing the operator does for you here.
+    # ------------------------------------------------------------------------------------------
+    listeners:
+      # In-cluster clients: the Spring services (phase 2), Connect, Schema Registry, AKHQ.
+      # Bootstrap at psp-kafka-bootstrap.kafka.svc.cluster.local:9092.
+      # The compose analogue is the INTERNAL listener on kafka1:9092.
+      - name: internal
+        port: 9092
+        type: internal
+        tls: false
+        authentication:
+          type: scram-sha-512
+
+      # Host clients: kcat / kafka CLI on the laptop. The compose analogue is EXTERNAL on
+      # localhost:29092-29094 - deliberately the same three host ports.
+      #
+      # `cluster-ip`, not `nodeport`: on macOS the kind node IPs (172.22.0.x) are inside the
+      # Docker VM's network and are NOT routable from the host, so a NodePort would be allocated
+      # and unreachable - dead config that reads as though it worked. A cluster-ip listener gives
+      # one ClusterIP Service per broker, which `kubectl port-forward` can reach, and the
+      # advertisedHost/advertisedPort overrides below make the brokers advertise the forwarded
+      # localhost ports so a client that bootstraps on 29092 can actually follow the metadata to
+      # every partition leader. See scripts/port-forward.sh.
+      - name: external
+        port: 9094
+        type: cluster-ip
+        tls: false
+        authentication:
+          type: scram-sha-512
+        configuration:
+          brokers:
+            - broker: 0
+              advertisedHost: localhost
+              advertisedPort: 29092
+            - broker: 1
+              advertisedHost: localhost
+              advertisedPort: 29093
+            - broker: 2
+              advertisedHost: localhost
+              advertisedPort: 29094
+
+    # ------------------------------------------------------------------------------------------
+    # AUTHORIZATION. `simple` == Kafka's own StandardAuthorizer, the same class compose set with
+    # KAFKA_AUTHORIZER_CLASS_NAME, and Strimzi sets allow.everyone.if.no.acl.found=false for it.
+    # Deny by default survives the move to Kubernetes unchanged.
+    # ------------------------------------------------------------------------------------------
+    authorization:
+      type: simple
+      # Compose had two superusers: `broker` (PLAIN, inter-broker) and `admin`. Only `admin`
+      # survives - `broker` was an artefact of hand-rolled inter-broker SASL. Strimzi adds its own
+      # operator identities (cluster operator, entity operator) to super.users automatically; they
+      # are not listed here because they are mTLS principals the operator mints, not ours.
+      superUsers:
+        - admin
+
+    config:
+      # --- carried over from docker-compose.yml, verbatim in meaning ---
+      auto.create.topics.enable: false        # topics are CRs now; an accidental produce must fail
+      default.replication.factor: 3
+      min.insync.replicas: 2                  # with acks=all: survive one broker, refuse two
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2        # ledger's transactional producer depends on this
+      log.retention.ms: 604800000             # 7 d, overridden per topic by the KafkaTopic CRs
+      log.cleanup.policy: delete
+      compression.type: zstd
+      unclean.leader.election.enable: false   # flipped deliberately in the M19 drill
+      num.partitions: 1                       # only reachable via explicit CreateTopics anyway
+
+      # --- new here, not in compose ---
+      # KRaft controller quorum tuning is Strimzi's business; only the client-visible defaults
+      # above are ours. Nothing sets listeners/advertised.listeners/security.* - Strimzi rejects
+      # those prefixes outright, because they are derived from `listeners` above.
+
+    # NOTE: there is deliberately no `resources:` or `jvmOptions:` block here. In Strimzi 1.x both
+    # moved to the KafkaNodePool and `Kafka.spec.kafka.resources` is not merely ignored - the CRD
+    # rejects it ("strict decoding error: unknown field"). Pod sizing lives in
+    # 10-nodepool-combined.yaml.
+
+    # Give a cold JVM room to open every segment before the kubelet declares it dead. The default
+    # initialDelay of 15s is tight on a laptop where three brokers start simultaneously.
+    livenessProbe:
+      initialDelaySeconds: 60
+      timeoutSeconds: 10
+    readinessProbe:
+      initialDelaySeconds: 30
+      timeoutSeconds: 10
+
+  # --------------------------------------------------------------------------------------------
+  # ENTITY OPERATOR - the two controllers that make KafkaTopic and KafkaUser CRs mean anything.
+  # Without `topicOperator` a KafkaTopic CR is inert YAML; without `userOperator` a KafkaUser CR
+  # never produces a SCRAM credential or an ACL. They run as two containers in one pod alongside
+  # the cluster, NOT in strimzi-system - they are per-cluster, not per-installation.
+  # --------------------------------------------------------------------------------------------
+  entityOperator:
+    topicOperator:
+      # How often it re-reconciles every KafkaTopic against the real cluster. 60s (Strimzi's
+      # default is 120s) so the "edit a topic with the CLI and watch it get reverted"
+      # demonstration in the README finishes inside a coffee break.
+      reconciliationIntervalMs: 60000
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 50m
+        limits:
+          memory: 384Mi
+          cpu: 500m
+    userOperator:
+      reconciliationIntervalMs: 60000
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 50m
+        limits:
+          memory: 384Mi
+          cpu: 500m
+    template:
+      pod:
+        # Both containers are small JVMs; without this they inherit the node's whole page cache
+        # accounting on a memory-tight VM.
+        terminationGracePeriodSeconds: 30

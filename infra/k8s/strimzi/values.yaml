@@ -1,0 +1,32 @@
+# Helm values for the Strimzi cluster operator (chart version is pinned in scripts/up.sh -
+# STRIMZI_VERSION - and must match the chart artifact that is downloaded there).
+#
+# Why Helm and not `kubectl apply -f strimzi-cluster-operator-<v>.yaml`:
+# the flat release YAML hardcodes the placeholder namespace `myproject` and only ever creates
+# RoleBindings in the operator's OWN namespace. Watching a *different* namespace with it means a
+# sed over the bundle plus hand-written RoleBindings in the watched namespace. The chart does that
+# from one value. The chart .tgz is still downloaded from a pinned GitHub release asset, so this is
+# a pinned install, not `helm repo add ... && helm install latest`.
+
+# Watch exactly one namespace. NOT watchAnyNamespace - the operator has no business reconciling
+# CRs it was not given.
+watchNamespaces:
+  - kafka
+
+# Cluster-operator pod sizing. The chart default is already bounded (384Mi / 1000m limit); it is
+# repeated here so every pod this module creates has its resources stated in a file in this repo
+# rather than inherited invisibly. On the 3-node kind cluster the whole Docker VM has ~8 GiB, so
+# nothing is allowed to be unbounded.
+resources:
+  requests:
+    memory: 384Mi
+    cpu: 100m
+  limits:
+    memory: 384Mi
+    cpu: 1000m
+
+logLevel: INFO
+
+# Leader election is on by default with replicas: 1 - harmless, and keeps the deployment
+# identical in shape to a real HA install.
+replicas: 1

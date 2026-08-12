@@ -1,0 +1,9 @@
+# The namespace the Kafka cluster, its topics, its users and their generated Secrets live in.
+# The cluster operator (in `strimzi-system`) is granted RoleBindings into exactly this namespace
+# via the chart's `watchNamespaces` value - see ../strimzi/values.yaml.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kafka
+  labels:
+    app.kubernetes.io/part-of: kafka-psp

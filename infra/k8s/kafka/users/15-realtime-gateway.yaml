@@ -1,0 +1,27 @@
+# realtime-gateway (:8090) - 8 bindings, matching init-security.sh's
+# "--- realtime-gateway ---" block. Read-only BY CONSTRUCTION: it fans events out over SSE and
+# produces nothing at all, and the ACL set says so - there is not one Write in this file.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: realtime-gateway
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource: { type: topic, name: payments.payment-requested.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: payments.payment-status-changed.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: refunds., patternType: prefix }
+        operations: [Read, Describe]
+      # Unique group.id per instance (realtime-gateway.<host>.<suffix>, M12) - prefixed for the
+      # same reason as payment-api's reply group. Consumer groups load-split, they do not fan out,
+      # so every gateway instance needs its own group to see every event.
+      - resource: { type: group, name: realtime-gateway., patternType: prefix }
+        operations: [Read, Describe]

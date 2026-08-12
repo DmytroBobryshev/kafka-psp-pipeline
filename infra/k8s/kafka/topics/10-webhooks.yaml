@@ -1,0 +1,162 @@
+# Webhook delivery chain - docs/diagrams/topic-map.md, "Webhook delivery chain".
+#
+# TWO chains, `.v1` and `.v2`. The `.v1` set is marked *retired M9 Phase 2* in the topic map but
+# is still IN the map, and change rule 4 makes the map the source for these CRs - so it is
+# reproduced here rather than quietly dropped. Be clear about what that means on this cluster:
+# the topics are created EMPTY. The M8 poison-pill records that `.v1.dlq` holds are in the compose
+# cluster's kafka1-data volume, not here; nothing replicates them across.
+#
+# The retry tiers are separate topics, not a redelivery loop: a consumer that blocks on a failing
+# record blocks its whole partition, so the record is moved to a topic whose consumer is allowed
+# to be slow (ADR-0006).
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: webhooks.webhook-delivery-requested.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "259200000"     # 3 d - past that a redelivery is not useful to the merchant
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: webhooks.webhook-delivery-requested.v1.retry.5s
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "259200000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: webhooks.webhook-delivery-requested.v1.retry.1m
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "259200000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: webhooks.webhook-delivery-requested.v1.retry.15m
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "259200000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: webhooks.webhook-delivery-requested.v1.dlq
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 3     # low volume
+  replicas: 3
+  config:
+    retention.ms: "2592000000"    # 30 d - time to notice and fix
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+# --- the live chain (M9 Phase 2, Avro on the base + retry tiers, JSON on the DLQ) ---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: webhooks.webhook-delivery-requested.v2
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "259200000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: webhooks.webhook-delivery-requested.v2.retry.5s
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "259200000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: webhooks.webhook-delivery-requested.v2.retry.1m
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "259200000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: webhooks.webhook-delivery-requested.v2.retry.15m
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "259200000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: webhooks.webhook-delivery-requested.v2.dlq
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "2592000000"    # 30 d
+    cleanup.policy: delete
+    min.insync.replicas: "2"

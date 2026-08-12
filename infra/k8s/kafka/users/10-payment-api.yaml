@@ -1,0 +1,35 @@
+# payment-api (:8085) - 12 bindings, matching init-security.sh's "--- payment-api ---" block.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: payment-api
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      # Merchant config, produced DIRECTLY (M10) - the one topic this service does not reach
+      # through the outbox.
+      - resource: { type: topic, name: merchants.merchant-config-changed.v1, patternType: literal }
+        operations: [Write, Describe]
+      # Request-reply (M12): sends the query, reads the reply.
+      - resource: { type: topic, name: psp.provider-status-query.v1, patternType: literal }
+        operations: [Write, Describe]
+      - resource: { type: topic, name: psp.provider-status-reply.v1, patternType: literal }
+        operations: [Read, Describe]
+      # Granted although since M6 the outbox -> Debezium -> Connect path (User:connect) is what
+      # actually writes these. This is the "allowed" half of PLAN.md's M14 proof - "payment-api
+      # may write payments.requested but not ledger.entries, prove it by trying" - and a denial
+      # demo is only honest if the permitted write genuinely succeeds with the same credential.
+      - resource: { type: topic, name: payments.payment-requested.v1, patternType: literal }
+        operations: [Write, Describe]
+      - resource: { type: topic, name: refunds.refund-requested.v1, patternType: literal }
+        operations: [Write, Describe]
+      # group.id is minted per instance (payment-api.replies.<host>.<suffix>, M12), so a literal
+      # ACL would break on every restart. This is what prefixed resource patterns are for.
+      - resource: { type: group, name: payment-api.replies., patternType: prefix }
+        operations: [Read, Describe]

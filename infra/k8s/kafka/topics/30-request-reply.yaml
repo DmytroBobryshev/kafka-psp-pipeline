@@ -1,0 +1,35 @@
+# Request-reply (M12) - docs/diagrams/topic-map.md, "Request-reply (M12)".
+#
+# 1 h retention on both, and it is intentional: an unconsumed reply is worthless after the
+# caller's ReplyingKafkaTemplate timeout. Keeping it costs disk and invites a consumer to act on
+# an answer to a request nobody is waiting for any more.
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: psp.provider-status-query.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "3600000"       # 1 h
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: psp.provider-status-reply.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "3600000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"

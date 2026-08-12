@@ -1,0 +1,47 @@
+# analytics (:8089), Kafka Streams - 12 bindings, matching init-security.sh's
+# "--- analytics ---" block. This is the principal that carries THE classic ACL gotcha.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: analytics
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource: { type: topic, name: payments.payment-status-changed.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: payments.payment-requested.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: merchants.merchant-config-changed.v1, patternType: literal }
+        operations: [Read, Describe]
+      # THE STREAMS GOTCHA. Streams CREATES its own internal topics (changelogs, repartitions)
+      # through an embedded AdminClient at startup. With deny-by-default and no Create, KafkaStreams
+      # goes to ERROR during StreamThread startup with a TopicAuthorizationException wrapped in a
+      # StreamsException - which reads like a topology bug, not a permissions bug.
+      #
+      # `All` on a PREFIXED topic resource, not a cluster-wide Create: Kafka authorizes CreateTopics
+      # against the Topic resource being created (falling back to Cluster only when there is no
+      # topic-level grant), so a prefix ACL is sufficient AND is genuinely least-privilege - the
+      # prefix is this application's own namespace. `All` rather than an enumerated list because
+      # the internal topic NAMES are derived by Streams from the topology and change as it grows
+      # (M11's saga changelog, M13's repartition topic); enumerating them is a maintenance trap.
+      #
+      # NOTE FOR THE TOPIC OPERATOR: these Streams-created topics have no KafkaTopic CR and must
+      # not get one (topic-map.md: "Never create, rename, or hand-edit these"). Strimzi's Topic
+      # Operator only manages topics it has a CR for, so unmanaged topics are left completely
+      # alone - the two mechanisms coexist without a fight.
+      - resource: { type: topic, name: analytics-streams.v1, patternType: prefix }
+        operations: [All]
+      - resource: { type: group, name: analytics-streams.v1, patternType: prefix }
+        operations: [Read, Describe]
+      # M13's plain @KafkaListener(batch = true) - a separate consumer identity in the same service.
+      - resource: { type: group, name: analytics.status-audit-batch.v1, patternType: prefix }
+        operations: [Read, Describe]
+      # Streams' AdminClient calls describeCluster() during startup and rebalances.
+      - resource: { type: cluster }
+        operations: [Describe]

@@ -1,0 +1,46 @@
+# ledger (:8087) - 21 bindings, matching init-security.sh's "--- ledger ---" block.
+# The only principal in the system with a TransactionalId grant.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: ledger
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      # --- consumes ---
+      - resource: { type: topic, name: payments.payment-status-changed.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: refunds.refund-requested.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: refunds.refund-completed.v1, patternType: literal }
+        operations: [Read, Describe]
+      # BOTH consumed and produced here - the documented saga exception (see ledger's
+      # ReleaseRefundUseCase javadoc), so Read AND Write on one topic.
+      - resource: { type: topic, name: refunds.refund-failed.v1, patternType: literal }
+        operations: [Read, Write, Describe]
+      # --- produces ---
+      - resource: { type: topic, name: ledger.ledger-entry-recorded.v1, patternType: literal }
+        operations: [Write, Describe]
+      - resource: { type: topic, name: refunds.funds-reserved.v1, patternType: literal }
+        operations: [Write, Describe]
+      - resource: { type: topic, name: refunds.reservation-released.v1, patternType: literal }
+        operations: [Write, Describe]
+      - resource: { type: topic, name: payments.payment-status-changed.v1.ledger.dlq, patternType: literal }
+        operations: [Write, Describe]
+      - resource: { type: group, name: ledger.v1, patternType: prefix }
+        operations: [Read, Describe]
+      # THE TRANSACTIONAL GRANT. A transactional producer authorizes against a TransactionalId
+      # resource that has nothing to do with topics: without this, ledger fails at
+      # initTransactions() with TransactionalIdAuthorizationException, long before any topic ACL
+      # is consulted. Prefixed because the suffix is derived per producer instance
+      # (transactional.id = ledger-tx-<instance-id>-<n>). Write on the TransactionalId plus Read
+      # on the consumer group is also exactly what sendOffsetsToTransaction() needs to commit
+      # offsets inside the transaction.
+      - resource: { type: transactionalId, name: ledger-tx-, patternType: prefix }
+        operations: [Write, Describe]

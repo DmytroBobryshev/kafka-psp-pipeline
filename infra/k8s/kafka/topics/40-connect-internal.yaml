@@ -1,0 +1,53 @@
+# Kafka Connect's internal topics - docs/diagrams/topic-map.md, "Kafka Connect internal topics".
+#
+# Connect creates these itself on first start (its AdminClient issues an explicit CreateTopics,
+# which auto.create.topics.enable=false does not block), and the `connect` KafkaUser keeps the
+# Create ACL for exactly that reason. They are declared here anyway because the topic map lists
+# them and because Connect's own defaults are wrong for a 3-broker cluster: it would create them
+# with replication.factor=3 only if told, and `connect.configs` MUST be single-partition and
+# compacted or the worker refuses to start. Declaring them means the constraint is visible in a
+# file instead of buried in a worker property.
+#
+# Phase 1 does not deploy Connect - these are the topics its KafkaConnect CR will find waiting.
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: connect.configs
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 1     # MUST be exactly 1 - Connect requires a single-partition config topic
+  replicas: 3
+  config:
+    cleanup.policy: compact
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: connect.offsets
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 25
+  replicas: 3
+  config:
+    cleanup.policy: compact
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: connect.status
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 5
+  replicas: 3
+  config:
+    cleanup.policy: compact
+    min.insync.replicas: "2"

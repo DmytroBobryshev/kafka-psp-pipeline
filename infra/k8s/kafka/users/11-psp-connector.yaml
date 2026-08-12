@@ -1,0 +1,39 @@
+# psp-connector (:8086) - 18 bindings, matching init-security.sh's "--- psp-connector ---" block.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: psp-connector
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      # --- consumes ---
+      - resource: { type: topic, name: payments.payment-requested.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: refunds.funds-reserved.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: psp.provider-status-query.v1, patternType: literal }
+        operations: [Read, Describe]
+      # --- produces ---
+      - resource: { type: topic, name: payments.payment-status-changed.v1, patternType: literal }
+        operations: [Write, Describe]
+      - resource: { type: topic, name: refunds.refund-completed.v1, patternType: literal }
+        operations: [Write, Describe]
+      - resource: { type: topic, name: refunds.refund-failed.v1, patternType: literal }
+        operations: [Write, Describe]
+      - resource: { type: topic, name: psp.provider-status-reply.v1, patternType: literal }
+        operations: [Write, Describe]
+      # Its DeadLetterPublishingRecoverer target. WRITE ONLY: ADR-0006 is explicit that a DLQ is
+      # not a queue, and this service has no replay consumer of its own.
+      - resource: { type: topic, name: payments.payment-requested.v1.psp-connector.dlq, patternType: literal }
+        operations: [Write, Describe]
+      # Prefixed, not literal `psp-connector.v1`: the duplicates-vs-loss drill overrides group.id
+      # from the command line (--spring.kafka.consumer.group-id=psp-connector.autocommit...) and
+      # those throwaway groups are still this principal's.
+      - resource: { type: group, name: psp-connector, patternType: prefix }
+        operations: [Read, Describe]

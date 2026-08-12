@@ -1,0 +1,11 @@
+# The Strimzi cluster operator gets its OWN namespace, separate from the Kafka cluster it
+# manages. That separation is the point: `kafka` holds the workload and its Secrets, and can be
+# handed to a team; `strimzi-system` holds a cluster-scoped controller and its RBAC, and cannot.
+# The operator is told to watch `kafka` explicitly (helm `watchNamespaces`), so it is NOT a
+# cluster-wide operator - it has namespaced RoleBindings into exactly one namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: strimzi-system
+  labels:
+    app.kubernetes.io/part-of: kafka-psp

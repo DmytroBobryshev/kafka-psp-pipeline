@@ -1,0 +1,162 @@
+# Business topics - docs/diagrams/topic-map.md, "Business topics".
+#
+# THE POINT OF THIS FILE: infra/compose/create-topics.sh is an imperative script - it runs
+# `kafka-topics --create --if-not-exists` and then, because that command silently refuses to alter
+# an existing topic, a second pass of `kafka-configs --alter` for the compaction settings. Nothing
+# in the cluster knows what the script intended, so the script's output is a claim, not a fact.
+#
+# Here the desired state IS the resource. The Topic Operator diffs each CR against the live topic
+# every reconciliationIntervalMs and closes the gap, and `.status.conditions[Ready]` on the CR is
+# the cluster's own answer to "did this apply", not a script's exit code.
+#
+# `metadata.name` doubles as the Kafka topic name. That works for every topic in the map because
+# they are all valid DNS subdomain names (lowercase, dots, dashes). A topic whose name is not -
+# `_schemas`, which Schema Registry creates - needs `spec.topicName` and a different metadata.name;
+# it is not in the topic map, so it has no CR here (Schema Registry creates it itself, and its
+# KafkaUser already carries the Create ACL for it).
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: payments.payment-requested.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp   # REQUIRED - binds the topic to the Kafka CR named `psp`
+spec:
+  partitions: 12   # payment path: psp-connector is the KEDA-scaled service, highest parallelism
+  replicas: 3
+  config:
+    retention.ms: "604800000"     # 7 d
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: payments.payment-status-changed.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: refunds.refund-requested.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: refunds.funds-reserved.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: refunds.refund-completed.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: refunds.refund-failed.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: refunds.reservation-released.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: ledger.ledger-entry-recorded.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "2592000000"    # 30 d - audit trail, longer than the payment path
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+# The compacted config topic. Everything below the cleanup.policy line is the M10 block from
+# topic-map.md, and in compose it could NOT be expressed at creation time: `kafka-topics --create
+# --if-not-exists` never alters an existing topic's configs, so create-topics.sh had to make a
+# second `kafka-configs --alter` pass. Declaratively there is no such thing as a second pass -
+# the operator reconciles the whole config map, create or update, every interval.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: merchants.merchant-config-changed.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 3    # low volume; a GlobalKTable reads every partition anyway
+  replicas: 3
+  config:
+    cleanup.policy: compact
+    min.insync.replicas: "2"
+    # The four "deliberately wrong for a real cluster" values that make the tombstone drill
+    # watchable - full reasoning in docs/diagrams/topic-map.md and payment-api's README.
+    min.cleanable.dirty.ratio: "0.1"    # default 0.5: half the log must be garbage before cleaning
+    delete.retention.ms: "60000"        # default 24 h: how long a tombstone survives its cleaning pass
+    segment.ms: "60000"                 # default 7 d: the cleaner never touches the ACTIVE segment
+    segment.bytes: "1048576"            # default 1 GiB, same reason
+    max.compaction.lag.ms: "60000"

@@ -1,0 +1,27 @@
+# Schema Registry - 9 bindings, matching init-security.sh's "--- Schema Registry ---" block.
+#
+# The registry IS a Kafka application: every schema is a record in the compacted `_schemas` topic,
+# which it creates on first start if missing. That topic has no KafkaTopic CR (its name starts
+# with an underscore, which is not a legal metadata.name, and it is not in docs/diagrams/topic-map.md)
+# - so the Create grant below is genuinely load-bearing here, not belt-and-braces.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: schema-registry
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource: { type: topic, name: _schemas, patternType: literal }
+        operations: [Read, Write, Create, Describe, DescribeConfigs]
+      # Leader election among registry instances runs through the group coordinator, on the group
+      # named by schema.registry.group.id (default: schema-registry).
+      - resource: { type: group, name: schema-registry, patternType: prefix }
+        operations: [Read, Describe]
+      - resource: { type: cluster }
+        operations: [Describe, DescribeConfigs]

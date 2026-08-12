@@ -1,0 +1,59 @@
+# ============================================================================================
+# KafkaUser CRs - the M14 ACL matrix, declared.
+#
+# THIS DIRECTORY IS WHY M14 CAME BEFORE M18. Every principal and every binding below is the same
+# principal and the same binding as infra/compose/kafka-init/init-security.sh - 119 bindings
+# across 10 non-superuser principals, unchanged. What changed is who applies them:
+#
+#   compose:  a bash script runs `kafka-acls --add ...` once, at container start, against a
+#             bootstrap listener that exists purely so the script can authenticate before any
+#             SCRAM credential exists. Nothing re-checks it afterwards. An ACL removed by hand
+#             stays removed until someone re-runs the script and notices.
+#
+#   k8s:      the User Operator watches these CRs and reconciles the live ACL set against them
+#             every 60 s. Remove a binding with kafka-acls and it comes back.
+#
+# The mapping is mechanical, and worth reading side by side once:
+#
+#   kafka-acls --add --allow-principal User:ledger \
+#              --topic ledger.ledger-entry-recorded.v1 \
+#              --resource-pattern-type literal \
+#              --operation Write --operation Describe
+#
+#   ->  - resource: { type: topic, name: ledger.ledger-entry-recorded.v1, patternType: literal }
+#         operations: [Write, Describe]
+#         type: allow                 # the default; `deny` is also available, which kafka-acls
+#                                     # spells --deny-principal
+#
+# PASSWORDS. There is deliberately no password anywhere in these files. In compose every
+# credential came from infra/compose/.env and was chosen by a human, which is why .env is
+# gitignored and why the README has a paragraph about it. Here the User Operator GENERATES a
+# password per user and writes it to a Secret named after the user, in this namespace, with keys
+# `password` and `sasl.jaas.config`. Nobody types it, nobody commits it, and rotating it is
+# `kubectl delete secret <user>` (the operator mints a new one and updates the SCRAM credential).
+# Supplying your own is possible - spec.authentication.password.valueFrom.secretKeyRef - and is
+# deliberately NOT used here; the generated-secret path is the whole point.
+#
+#   kubectl get secret payment-api -n kafka -o jsonpath='{.data.password}' | base64 -d
+#
+# ============================================================================================
+#
+# admin - superuser. Listed in Kafka.spec.kafka.authorization.superUsers, so it bypasses the
+# authorizer entirely and has NO `authorization` block: an ACL for a superuser is dead config that
+# reads as though it were load-bearing. Same reasoning as init-security.sh's closing comment.
+#
+# The `broker` PLAIN principal from compose has NO equivalent here and that is the point: it
+# existed only to authenticate the inter-broker and controller listeners before any SCRAM
+# credential could exist. Strimzi runs both on mTLS with certificates it issues and rotates, so
+# the shared cluster-superuser password that anything on the Docker network could use is simply
+# gone.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: admin
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  authentication:
+    type: scram-sha-512

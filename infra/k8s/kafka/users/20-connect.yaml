@@ -1,0 +1,45 @@
+# Kafka Connect - worker + both connectors under ONE principal. 18 bindings, matching
+# init-security.sh's "--- Kafka Connect ---" block.
+#
+# Not used by anything in phase 1 (Connect is deployed as a KafkaConnect CR in a later phase);
+# the credential and ACLs are created now because they are part of the M14 matrix and because the
+# connect.* topics its worker needs already exist as CRs.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: connect
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      # The worker's own bookkeeping topics. It CREATES these itself on first start via its
+      # AdminClient (auto.create.topics.enable=false does not apply to an explicit CreateTopics
+      # call), so Create is required - and DescribeConfigs because it verifies connect.configs is
+      # actually compacted before it will start.
+      - resource: { type: topic, name: connect., patternType: prefix }
+        operations: [Read, Write, Create, Describe, DescribeConfigs]
+      # Debezium's outbox source connector routes to these two (route.topic.replacement in
+      # payment-outbox-connector.json). THIS is the principal that really writes
+      # payments.payment-requested.v1 in the running system - payment-api's identical grant is
+      # the deliberately-unused proof grant.
+      - resource: { type: topic, name: payments.payment-requested.v1, patternType: literal }
+        operations: [Write, Describe]
+      - resource: { type: topic, name: refunds.refund-requested.v1, patternType: literal }
+        operations: [Write, Describe]
+      # mongo-audit-sink consumes ledger.ledger-entry-recorded.v1 and writes its own
+      # ...v1.mongo-audit-sink.dlq - one prefixed grant covers both.
+      - resource: { type: topic, name: ledger.ledger-entry-recorded.v1, patternType: prefix }
+        operations: [Read, Write, Create, Describe]
+      # The worker's own group, then the sink connector's group (Connect names it
+      # connect-<connector name>).
+      - resource: { type: group, name: kafka-connect-psp, patternType: prefix }
+        operations: [Read, Describe]
+      - resource: { type: group, name: connect-mongo-audit-sink, patternType: prefix }
+        operations: [Read, Describe]
+      - resource: { type: cluster }
+        operations: [Describe]

@@ -1,0 +1,30 @@
+# kafka-exporter (Prometheus) - 3 bindings, matching init-security.sh's
+# "--- kafka-exporter ---" block.
+#
+# Metadata only. Describe on topics and groups is enough for broker/partition/ISR/leader counts
+# and consumer lag. It reads offsets, never message bodies, and the ACL set says exactly that:
+# no Read anywhere.
+#
+# Worth knowing for a later phase: Strimzi can run kafka-exporter itself, as
+# `Kafka.spec.kafkaExporter`, in which case it is an mTLS operator identity and needs no KafkaUser
+# at all. This CR keeps the compose principal alive for parity with M14 and for a standalone
+# exporter deployment.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: kafka-exporter
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource: { type: topic, name: "*", patternType: literal }
+        operations: [Describe]
+      - resource: { type: group, name: "*", patternType: literal }
+        operations: [Describe]
+      - resource: { type: cluster }
+        operations: [Describe]

@@ -1,0 +1,81 @@
+# KafkaNodePool - where "how many nodes, of what shape, with what disk" lives.
+#
+# In Strimzi 1.x node pools are not optional: ZooKeeper is gone, KRaft is the only mode, and
+# `Kafka.spec.kafka.replicas` / `.storage` no longer exist. Replica count, roles, storage, CPU/
+# memory and JVM options moved here; the `Kafka` CR keeps only cluster-wide concerns (version,
+# listeners, authorization, broker config). That split is the reason a rolling change to node
+# sizing does not touch the cluster-level CR at all.
+#
+# ---------------------------------------------------------------------------------------------
+# COMBINED ROLES, and why - the module brief allows either, so here is the justification.
+# ---------------------------------------------------------------------------------------------
+# One pool of 3 nodes, each `controller` AND `broker`. Separate pools (3 controllers + 3 brokers)
+# would be the production answer - a controller that is not also serving fetch traffic cannot be
+# knocked out of the quorum by a broker-side GC pause or a disk-full on a data partition, and the
+# two roles can then be sized and rolled independently.
+#
+# It is the wrong answer HERE for one measurable reason: the whole kind cluster is three
+# containers inside a single Docker VM with ~8 GiB of RAM. Separate roles means six JVMs instead
+# of three. At the 1.5 GiB/pod ceiling below that is 9 GiB of limits before the operators, the
+# entity operator and kube-system are counted - the VM would start OOM-killing, and the module
+# would be teaching "my broker keeps dying" instead of Strimzi.
+#
+# It is also the honest continuation of infra/compose: docker-compose.yml runs
+# `KAFKA_PROCESS_ROLES: broker,controller` on all three brokers. Combined roles keep the k8s
+# topology identical to the compose topology, so the broker-failure drill compares like with like.
+# Splitting the roles is a one-file change (two KafkaNodePools instead of this one) and is the
+# natural M19 follow-up on a machine with more memory.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: combined
+  namespace: kafka
+  labels:
+    # REQUIRED. This is how a node pool is bound to a Kafka cluster - there is no field for it.
+    # A pool with the wrong value here is silently ignored and the Kafka CR never becomes Ready.
+    strimzi.io/cluster: psp
+spec:
+  replicas: 3
+  roles:
+    - controller
+    - broker
+
+  storage:
+    # JBOD with a single volume rather than a bare `persistent-claim`: adding a second disk later
+    # is then an append to this list instead of a storage-type change (which Strimzi refuses -
+    # `storage` is "cannot be updated" for the type itself).
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: 5Gi
+        # kind's default StorageClass is rancher.io/local-path, which is hostPath-backed: the 5Gi
+        # is a claim size, not an enforced quota, and every PVC lands on the node's own disk.
+        # 3 x 5Gi against ~51 GiB free is deliberately modest - this cluster holds drill traffic,
+        # not a 30-day production retention window.
+        class: standard
+        deleteClaim: false
+        # KRaft metadata (the __cluster_metadata log) goes on this volume. With JBOD one volume
+        # must be nominated; `shared` means "this volume also carries the metadata log".
+        kraftMetadata: shared
+
+  # ------------------------------------------------------------------------------------------
+  # Resource sizing. Requests are what the scheduler reserves; limits are what protects the VM.
+  # 3 x 1.5 GiB = 4.5 GiB of ceiling, plus 384 Mi cluster operator and ~640 Mi entity operator,
+  # leaves headroom inside the ~8 GiB VM for kube-system and the drill's client pods.
+  # ------------------------------------------------------------------------------------------
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 250m
+    limits:
+      memory: 1536Mi
+      cpu: 1500m
+
+  jvmOptions:
+    # Set explicitly rather than letting Strimzi derive the heap from the memory limit. Strimzi's
+    # default is 50% of the limit, which would be 768m anyway - but an implicit heap is exactly
+    # the thing that turns "why did the broker get OOMKilled" into an afternoon. -Xms == -Xmx so
+    # the JVM never gives memory back and then has to fault it in again mid-drill.
+    -Xms: 768m
+    -Xmx: 768m
