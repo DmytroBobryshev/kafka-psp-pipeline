@@ -1,0 +1,8 @@
+apiVersion: v2
+name: schema-registry
+description: >-
+  Confluent Schema Registry 7.7.1 - the Avro subject store M9 introduced. Authenticates to the
+  Strimzi cluster as User:schema-registry with the Secret the User Operator generated.
+type: application
+version: 0.1.0
+appVersion: "7.7.1"

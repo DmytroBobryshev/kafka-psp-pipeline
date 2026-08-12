@@ -1,0 +1,63 @@
+# merchant-client.base-url points back at this same Service: the "merchant" whose webhooks this
+# service delivers is the simulated endpoint it also hosts (M8). In compose that was
+# http://localhost:8088 because everything ran on the host JVM; here it is the Kubernetes Service
+# name, which is the smallest possible illustration of what a Service replaced.
+#
+# The DLQ-replay listener is created with autoStartup=false and started on demand by the replay
+# endpoint. The kafkaListeners health indicator knows the difference and does not count a
+# deliberately-stopped container as a failure.
+
+port: 8088
+replicas: 1
+
+# The Strimzi-generated Secret for User:webhook-notifier.
+kafkaUser: "webhook-notifier"
+
+# Contributors added to Spring Boot's `readiness` health group, i.e. to
+# /actuator/health/readiness, i.e. to what kube-proxy uses to decide whether this pod is in the
+# Service's endpoint list. `readinessState` alone is the servlet-level answer M15 proved can be
+# UP while nothing is consuming; the extra names come from libs/common-health.
+readinessInclude: readinessState,kafkaListeners
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 150m
+  limits:
+    memory: 768Mi
+    cpu: 1000m
+
+# Extra environment. Secrets only - anything non-secret belongs in `config` below, where it is
+# readable without `kubectl get secret`.
+env:
+  - name: SPRING_DATA_MONGODB_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: psp-datastore-credentials
+        key: webhook-notifier-db-password
+
+# Rendered into /config/application-k8s.yml (through `tpl`, so Helm expressions work). This is the
+# HIGHEST-precedence Spring config document in the pod.
+config: |
+  spring:
+    data:
+      mongodb:
+        # Discrete properties rather than a single `uri`, because the password has to arrive from a
+        # Secret as its own env var; embedding it in a URI would mean templating a credential into
+        # a ConfigMap.
+        host: {{ .Values.global.mongodb.host }}
+        port: {{ .Values.global.mongodb.port }}
+        database: webhook_notifier
+        authentication-database: webhook_notifier
+        username: webhook_notifier
+  {{- include "psp.kafkaClientConfig" . | nindent 2 }}
+  webhook-notifier:
+    schema-registry:
+      url: {{ .Values.global.schemaRegistryUrl }}
+    merchant-client:
+      base-url: http://webhook-notifier:8088
+  psp:
+    health:
+      kafka:
+        enabled: true
+  {{ include "psp.commonConfig" . }}

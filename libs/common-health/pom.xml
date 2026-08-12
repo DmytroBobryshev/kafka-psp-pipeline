@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example.psp</groupId>
+    <artifactId>kafka-psp-pipeline</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>common-health</artifactId>
+  <packaging>jar</packaging>
+
+  <name>common-health</name>
+  <description>
+    M18 phase 2: health contributors that make a Kubernetes READINESS probe mean something.
+
+    Spring Boot's readinessState is a servlet-container fact - it says "this JVM will accept an
+    HTTP request", which M15 proved can be true while every @KafkaListener container in the
+    process is stopped. This module adds two HealthIndicators that report the actual state of
+    the Kafka machinery, so a readiness group can include them and kube-proxy can pull a pod
+    that has stopped consuming out of its Service endpoints.
+
+    Deliberately its OWN module rather than a few classes inside common-web: psp-connector and
+    webhook-notifier do not depend on common-web, and pulling common-web into them purely to get
+    a health indicator would also have injected common-web's RFC-7807 GlobalExceptionHandler and
+    correlation-id filter into two services that were never reviewed with them - a silent
+    behaviour change smuggled in by a deployment task. Both Spring dependencies below are
+    OPTIONAL, so this jar adds nothing to a service that does not already have them, and every
+    bean is switched off unless the deployment explicitly asks for it (see
+    KafkaHealthAutoConfiguration).
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+      <optional>true</optional>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka</artifactId>
+      <optional>true</optional>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-streams</artifactId>
+      <optional>true</optional>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "psp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psp.selectorLabels" . | nindent 8 }}
+    spec:
+      # Kubernetes injects a docker-link-style env var for every Service in the namespace:
+      # a Service called `schema-registry` becomes SCHEMA_REGISTRY_PORT=tcp://10.96.x.x:8081,
+      # SCHEMA_REGISTRY_PORT_8081_TCP_ADDR=..., and so on. Confluent's images configure themselves
+      # from exactly that prefix, so the Service's own name silently poisons its container's
+      # configuration and it exits 1 after printing "PORT is deprecated". Off for every pod here,
+      # not just that one: the mechanism predates DNS-based discovery, nothing in this chart uses
+      # it, and the failure it causes is extremely hard to read.
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: {{ .Values.image }}
+          args: ["redis-server", "--save", "", "--appendonly", "no"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 15
+            failureThreshold: 4
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "psp.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis

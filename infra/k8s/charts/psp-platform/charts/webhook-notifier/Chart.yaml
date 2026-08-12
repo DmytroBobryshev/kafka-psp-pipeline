@@ -1,0 +1,7 @@
+apiVersion: v2
+name: webhook-notifier
+description: >-
+  M8 - merchant webhook delivery with the non-blocking retry-topic chain and a DLQ, plus the MongoDB attempt log.
+type: application
+version: 0.1.0
+appVersion: "0.1.0-SNAPSHOT"

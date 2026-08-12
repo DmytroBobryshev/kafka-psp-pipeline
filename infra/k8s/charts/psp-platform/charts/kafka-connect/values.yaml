@@ -1,0 +1,53 @@
+# The Connect cluster's Strimzi name. Objects the operator derives from it: the Deployment/pods
+# `psp-connect-connect-*`, the ServiceAccount `psp-connect-connect`, the REST Service
+# `psp-connect-connect-api:8083`, and the config ConfigMap `psp-connect-connect-config`.
+name: psp-connect
+
+# Strimzi's group.id and the three internal topics. All four already exist as phase 1 resources:
+# `connect.configs`, `connect.offsets` and `connect.status` are KafkaTopic CRs
+# (infra/k8s/kafka/topics/40-connect-internal.yaml) with the partition counts Connect expects
+# (1/25/5), and User:connect's ACLs grant the `connect.` topic prefix and the `kafka-connect-psp`
+# group prefix - the group name below is not free to change without changing that KafkaUser.
+groupId: kafka-connect-psp
+configStorageTopic: connect.configs
+offsetStorageTopic: connect.offsets
+statusStorageTopic: connect.status
+
+# The Strimzi-generated Secret for User:connect. Strimzi mounts the `password` key as a file and
+# builds the JAAS line itself, so this is the one place in the chart that references the raw
+# password key rather than sasl.jaas.config - the CR's own authentication block, not an env var
+# the application can read.
+kafkaUser: connect
+
+replicas: 1
+
+resources:
+  requests:
+    memory: 1Gi
+    cpu: 250m
+  limits:
+    memory: 1536Mi
+    cpu: 1500m
+
+jvmOptions:
+  # Explicit rather than derived, for the reason phase 1 gives for the brokers: an implicit heap
+  # is what turns "why was it OOMKilled" into an afternoon. 640 MiB of a 1536 MiB limit leaves
+  # room for Connect's direct buffers and the plugin classloaders.
+  Xms: 640m
+  Xmx: 640m
+
+connectors:
+  # M6. Reads payment-api's outbox_event table from the WAL - not by polling - and the
+  # EventRouter SMT turns each row into a record on the topic named by its aggregate_type.
+  outbox:
+    enabled: true
+    name: payment-outbox-connector
+    slotName: debezium_payment_api_outbox
+    publicationName: dbz_payment_api_outbox_publication
+  # M13. Sinks the ledger's Avro entries into MongoDB's audit_trail database.
+  mongoSink:
+    enabled: true
+    name: mongo-audit-sink
+    topic: ledger.ledger-entry-recorded.v1
+    database: audit_trail
+    collection: audit_trail

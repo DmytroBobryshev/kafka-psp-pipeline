@@ -32,6 +32,13 @@
       <groupId>com.example.psp</groupId>
       <artifactId>common-events</artifactId>
     </dependency>
+    <!-- M18 phase 2: Kafka-aware HealthIndicators (kafkaListeners / kafkaStreams) so the
+         Kubernetes readiness probe reflects the listener containers, not just the servlet.
+         Inert unless psp.health.kafka.enabled=true, which only the k8s ConfigMap sets. -->
+    <dependency>
+      <groupId>com.example.psp</groupId>
+      <artifactId>common-health</artifactId>
+    </dependency>
 
     <!-- M16/ADR-0009: Eureka client - compose profile only, same convention as every other
          service (see payment-api/pom.xml's identical comment). -->

@@ -1,0 +1,96 @@
+# Umbrella values. Everything here is CROSS-CUTTING; per-service settings live in each subchart's
+# own values.yaml, which is where you should look first when changing one service.
+#
+# `global` is the only block Helm propagates into subcharts, so anything a subchart needs to read
+# has to live under it.
+
+global:
+  # ---------------------------------------------------------------------------------------------
+  # Images
+  # ---------------------------------------------------------------------------------------------
+  # There is NO registry in this phase. Images are built on the host and pushed into the kind
+  # nodes with `kind load docker-image` (infra/k8s/scripts/build-images.sh), which copies them
+  # straight into each node's containerd store. Consequences, both deliberate:
+  #
+  #   * imageRepository has no host part - `psp/payment-api`, not `ghcr.io/.../payment-api`.
+  #   * imagePullPolicy MUST be IfNotPresent (or Never). The default for a tag other than
+  #     `latest` is IfNotPresent, but it is written out here because getting it wrong gives you
+  #     ErrImagePull against a registry that does not exist, which reads like a network problem.
+  #
+  # imageTag is deliberately NOT `latest`: build-images.sh derives `<pom version>-<git sha>[-dirty
+  # -<content hash>]` and prints it, and deploy.sh passes the same value here. A rollout is
+  # therefore a real rollout - the Deployment's pod template changes, the ReplicaSet is replaced,
+  # and `kubectl rollout status` means something. With `latest` the pod spec would be byte-identical
+  # across two different builds and Kubernetes would correctly do nothing.
+  imageRepository: psp
+  imageTag: dev
+  imagePullPolicy: IfNotPresent
+
+  # ---------------------------------------------------------------------------------------------
+  # Kafka - the phase 1 cluster, referenced, never redefined
+  # ---------------------------------------------------------------------------------------------
+  kafka:
+    # The `internal` listener from infra/k8s/kafka/20-kafka.yaml. Short name because the chart is
+    # installed into the same namespace; the FQDN form is
+    # psp-kafka-bootstrap.kafka.svc.cluster.local:9092.
+    bootstrapServers: psp-kafka-bootstrap.kafka.svc.cluster.local:9092
+    securityProtocol: SASL_PLAINTEXT
+    saslMechanism: SCRAM-SHA-512
+    # The key inside every Strimzi-generated KafkaUser Secret that holds a ready-made
+    # `org.apache.kafka.common.security.scram.ScramLoginModule required username=... password=...;`
+    # line. The chart mounts THIS, never `password`, so no service ever sees the password as a
+    # value it could log.
+    saslJaasConfigSecretKey: sasl.jaas.config
+
+  # ---------------------------------------------------------------------------------------------
+  # In-cluster addresses of the supporting infrastructure this chart also deploys
+  # ---------------------------------------------------------------------------------------------
+  schemaRegistryUrl: http://schema-registry:8081
+  postgres:
+    host: postgres
+    port: 5432
+  mongodb:
+    host: mongodb
+    port: 27017
+  redis:
+    host: redis
+    port: 6379
+
+  # Name of the Secret holding every Postgres/MongoDB credential. Owned by this chart
+  # (templates/datastore-credentials.yaml), generated once and then reused - see that file.
+  datastoreSecretName: psp-datastore-credentials
+
+  # ---------------------------------------------------------------------------------------------
+  # Probes
+  # ---------------------------------------------------------------------------------------------
+  probes:
+    # Spring Boot starts slowly enough (Flyway, Hibernate, a Kafka admin round-trip) that a
+    # liveness probe alone would kill the pod before it ever came up. The startupProbe holds
+    # liveness AND readiness off until the app answers once, then hands over.
+    startup:
+      periodSeconds: 5
+      failureThreshold: 60 # 5 minutes of budget
+    liveness:
+      periodSeconds: 15
+      timeoutSeconds: 3
+      failureThreshold: 4
+    readiness:
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+
+  # `readOnlyRootFilesystem: true` plus an emptyDir on /tmp. Flip to false here if a service turns
+  # out to need a writable image layer; nothing in this repo does (analytics' RocksDB state dir is
+  # under java.io.tmpdir, i.e. /tmp).
+  readOnlyRootFilesystem: true
+
+# ---------------------------------------------------------------------------------------------
+# Ingress (api-gateway only). The UI is not deployed in this phase - see templates/ingress.yaml.
+# ---------------------------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  # Empty host = match any Host header, which is what you want when the client is
+  # `curl http://localhost/...` through kind's extraPortMappings and there is no DNS anywhere.
+  host: ""
+  annotations: {}

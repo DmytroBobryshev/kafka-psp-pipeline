@@ -1,0 +1,68 @@
+apiVersion: v2
+name: psp-platform
+description: >-
+  M18 phase 2 - the PSP application on Kubernetes: seven Spring services, the datastores they
+  need, Schema Registry, and the Strimzi KafkaConnect/KafkaConnector resources that relay
+  payment-api's transactional outbox. Deploys INTO the `kafka` namespace, alongside (not on top
+  of) the Strimzi Kafka cluster phase 1 created - see infra/k8s/README.md for why one namespace.
+type: application
+
+# The chart version is the deployment's version, independent of the application version.
+version: 0.1.0
+
+# appVersion tracks the Maven reactor version the images are built from (pom.xml <version>).
+appVersion: "0.1.0-SNAPSHOT"
+
+# Subcharts are VENDORED in charts/, not fetched. `repository: ""` on every entry means exactly
+# that: Helm uses the directory that is already there and never contacts a chart repository, so
+# `helm install` works from a clean checkout with no network - the same decision that makes
+# container images arrive via `kind load` instead of a registry. (The entries are listed anyway
+# because `helm lint` treats an undeclared subchart as an error, and a chart that does not lint
+# is a chart nobody runs `helm lint` on.)
+#
+# Each subchart's values live in ITS OWN values.yaml - that is the file to read when you want to
+# know how one service is configured. This chart's values.yaml carries only what is genuinely
+# cross-cutting, under `global`.
+#
+# ORDER MATTERS ONLY THROUGH READINESS, not through this list: Helm applies everything at once and
+# Kubernetes converges. payment-api restarts until Postgres accepts connections, Connect restarts
+# until the brokers do. That is a feature - it is the same mechanism that heals a datastore
+# failing later - but it does mean the first 60 seconds of a fresh install show CrashLoopBackOff
+# on services whose datastore has not finished initialising, and that is not a fault.
+dependencies:
+  - name: postgres
+    version: 0.1.0
+    repository: ""
+  - name: mongodb
+    version: 0.1.0
+    repository: ""
+  - name: redis
+    version: 0.1.0
+    repository: ""
+  - name: schema-registry
+    version: 0.1.0
+    repository: ""
+  - name: kafka-connect
+    version: 0.1.0
+    repository: ""
+  - name: payment-api
+    version: 0.1.0
+    repository: ""
+  - name: psp-connector
+    version: 0.1.0
+    repository: ""
+  - name: ledger
+    version: 0.1.0
+    repository: ""
+  - name: webhook-notifier
+    version: 0.1.0
+    repository: ""
+  - name: analytics
+    version: 0.1.0
+    repository: ""
+  - name: realtime-gateway
+    version: 0.1.0
+    repository: ""
+  - name: api-gateway
+    version: 0.1.0
+    repository: ""

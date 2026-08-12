@@ -1,0 +1,8 @@
+apiVersion: v2
+name: redis
+description: >-
+  Redis for api-gateway's RequestRateLimiter (M16). Nothing else uses it; there is no persistence
+  and losing it costs one rate-limit window.
+type: application
+version: 0.1.0
+appVersion: "7.4"

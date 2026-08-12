@@ -1,0 +1,23 @@
+# 7.7.1 pinned to match the `confluent.version` property in the root pom.xml, so the registry and
+# every service's kafka-avro-serializer are the same Confluent release. That pairing is the whole
+# reason compose pinned it too.
+#
+# NOTE THE VERSION SKEW that phase 1 created and this inherits: Schema Registry 7.7.1 is built
+# against Kafka 3.8 and is talking to a Kafka 4.3 cluster. It works - the registry is an ordinary
+# producer/consumer of the `_schemas` topic and the client/broker protocol is compatible across
+# that range - but it is a skew, and any registry-side oddity should be suspected here first.
+image: confluentinc/cp-schema-registry:7.7.1
+
+# The Strimzi-generated Secret for User:schema-registry (infra/k8s/kafka/users/21-schema-registry.yaml).
+# Its `Create` ACL on `_schemas` is genuinely load-bearing: that topic is the one topic in the
+# system with no KafkaTopic CR (its name starts with `_`, which is not a legal metadata.name), so
+# the registry creates it itself on first start.
+kafkaUser: schema-registry
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 100m
+  limits:
+    memory: 768Mi
+    cpu: 800m

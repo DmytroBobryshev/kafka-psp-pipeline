@@ -1,0 +1,34 @@
+# Hand-written for the same three reasons as the postgres subchart (see its values.yaml): no chart
+# repository in this phase, the interesting part is the per-service init, and none of a production
+# chart's value - replica sets, arbiters, backups - applies to a single dev instance.
+#
+# NOT A REPLICA SET. Consequence worth naming: a standalone mongod has no oplog, so multi-document
+# transactions are unavailable. Nothing here needs them (webhook-notifier writes one attempt-log
+# document at a time, analytics upserts one projection per window, the Connect sink writes one
+# document per record), but "add a replica set" is the first thing to do if that changes.
+image: mongo:7.0
+
+databases:
+  - db: webhook_notifier
+    user: webhook_notifier
+    passwordKey: webhook-notifier-db-password
+  - db: analytics
+    user: analytics
+    passwordKey: analytics-db-password
+  # Owned by no service: the M13 MongoDB sink connector writes it. It still gets its own database
+  # and user so the connector can be scoped to it alone - the same argument the compose init
+  # script makes.
+  - db: audit_trail
+    user: audit_trail
+    passwordKey: audit-trail-db-password
+
+storage:
+  size: 3Gi
+
+resources:
+  requests:
+    memory: 384Mi
+    cpu: 100m
+  limits:
+    memory: 768Mi
+    cpu: 500m

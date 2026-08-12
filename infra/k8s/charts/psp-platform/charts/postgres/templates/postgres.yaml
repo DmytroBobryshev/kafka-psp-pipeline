@@ -1,0 +1,162 @@
+{{/*
+  The init script. The official postgres image runs everything in
+  /docker-entrypoint-initdb.d ONCE, on an empty PGDATA - identical semantics to compose, so this
+  is a direct translation of infra/compose/postgres/init/01-init-databases.sh and
+  02-debezium-replication.sh rather than a new design.
+
+  Passwords come from the environment (envFrom the generated Secret), never from this ConfigMap:
+  a ConfigMap is world-readable to anything with `get configmaps` in the namespace.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+data:
+  01-init-databases.sh: |
+    #!/bin/bash
+    # ADR-0005 "database per service", in its physical-vs-logical form: one server, but one
+    # database and one login role each, so a cross-database query fails exactly as loudly as it
+    # would against three separate servers.
+    set -euo pipefail
+    {{- range .Values.databases }}
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
+      CREATE USER "{{ .user }}" WITH PASSWORD '${{ "{" }}{{ .passwordKey | upper | replace "-" "_" }}}';
+      CREATE DATABASE "{{ .db }}" OWNER "{{ .user }}";
+      REVOKE ALL PRIVILEGES ON DATABASE "{{ .db }}" FROM PUBLIC;
+      GRANT ALL PRIVILEGES ON DATABASE "{{ .db }}" TO "{{ .user }}";
+    {{- if .replication }}
+      ALTER ROLE "{{ .user }}" WITH REPLICATION;
+    {{- end }}
+    EOSQL
+    echo "[init-databases] created database '{{ .db }}' owned by role '{{ .user }}'{{ if .replication }} WITH REPLICATION{{ end }}"
+    {{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.storage.size }}
+  # No storageClassName: kind's default is rancher.io/local-path, which is hostPath-backed. The
+  # size above is therefore a claim, not a quota - the same caveat phase 1 records for the broker
+  # PVCs.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: two Postgres pods cannot share one ReadWriteOnce volume, and a
+  # rolling update would deadlock waiting for a second pod that can never be scheduled.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "psp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psp.selectorLabels" . | nindent 8 }}
+      annotations:
+        psp.example.com/init-checksum: {{ toYaml .Values.databases | sha256sum }}
+    spec:
+      # Kubernetes injects a docker-link-style env var for every Service in the namespace:
+      # a Service called `schema-registry` becomes SCHEMA_REGISTRY_PORT=tcp://10.96.x.x:8081,
+      # SCHEMA_REGISTRY_PORT_8081_TCP_ADDR=..., and so on. Confluent's images configure themselves
+      # from exactly that prefix, so the Service's own name silently poisons its container's
+      # configuration and it exits 1 after printing "PORT is deprecated". Off for every pod here,
+      # not just that one: the mechanism predates DNS-based discovery, nothing in this chart uses
+      # it, and the failure it causes is extremely hard to read.
+      enableServiceLinks: false
+      securityContext:
+        # The alpine image's postgres user. fsGroup makes the local-path volume writable by it.
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+      containers:
+        - name: postgres
+          image: {{ .Values.image }}
+          # wal_level=logical is what makes Debezium possible at all: without it Postgres writes
+          # no row-level change information to the WAL and the connector fails at slot creation.
+          # Same flag infra/compose/docker-compose.yml passes.
+          args: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=4", "-c", "max_wal_senders=4"]
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.datastoreSecretName }}
+                  key: postgres-superuser-password
+            # PGDATA in a SUBDIRECTORY of the mount. Not cosmetic: initdb refuses to run in a
+            # directory that is not empty, and a mounted volume frequently is not.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            {{- range .Values.databases }}
+            - name: {{ .passwordKey | upper | replace "-" "_" }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.global.datastoreSecretName }}
+                  key: {{ .passwordKey }}
+            {{- end }}
+          # pg_isready is the same probe compose used. Liveness and readiness are identical here
+          # because for a single-instance database they genuinely are the same question.
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            periodSeconds: 15
+            failureThreshold: 4
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data
+        - name: init
+          configMap:
+            name: postgres-init
+            defaultMode: 0555
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "psp.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

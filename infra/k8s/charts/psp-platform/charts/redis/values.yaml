@@ -1,0 +1,18 @@
+image: redis:7.4-alpine
+
+# NO PERSISTENCE, ON PURPOSE. `--save ""` disables RDB snapshots and there is no AOF: the only
+# state here is Spring Cloud Gateway's token buckets, which are a few seconds of history. A
+# restart resets every bucket to full, which is a strictly generous failure mode.
+#
+# NO AUTHENTICATION, matching compose, and this is a real gap rather than a decision: anything in
+# the namespace that can reach redis:6379 can flush the rate limiter's state. On this cluster the
+# namespace contains only our own workloads and a NetworkPolicy would be the fix (allow ingress
+# to redis only from pods labelled app.kubernetes.io/name=api-gateway) - noted in
+# infra/k8s/README.md's compromises rather than quietly left out.
+resources:
+  requests:
+    memory: 64Mi
+    cpu: 25m
+  limits:
+    memory: 128Mi
+    cpu: 200m

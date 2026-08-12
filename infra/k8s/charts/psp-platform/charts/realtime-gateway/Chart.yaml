@@ -1,0 +1,7 @@
+apiVersion: v2
+name: realtime-gateway
+description: >-
+  M12 - broadcast consumer pushing payment and refund events to browsers over SSE. Read-only by construction: its KafkaUser has no Write ACL at all.
+type: application
+version: 0.1.0
+appVersion: "0.1.0-SNAPSHOT"

@@ -1,0 +1,137 @@
+{{/*
+  Translation of infra/compose/mongo/init/01-init-databases.sh. The official mongo image runs
+  /docker-entrypoint-initdb.d BEFORE --auth applies to the real listener, which is why mongosh
+  needs no credentials inside this script even though the server ends up auth-enabled.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-init
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+data:
+  01-init-databases.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    mongosh <<EOJS
+    {{- range .Values.databases }}
+    use {{ .db }}
+    db.createUser({ user: "{{ .user }}", pwd: "${{ "{" }}{{ .passwordKey | upper | replace "-" "_" }}}", roles: [{ role: "readWrite", db: "{{ .db }}" }] });
+    db.createCollection("_init");
+    {{- end }}
+    EOJS
+    echo "[init-databases] created: {{ range .Values.databases }}{{ .db }} {{ end }}"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-data
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.storage.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "psp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psp.selectorLabels" . | nindent 8 }}
+      annotations:
+        psp.example.com/init-checksum: {{ toYaml .Values.databases | sha256sum }}
+    spec:
+      # Kubernetes injects a docker-link-style env var for every Service in the namespace:
+      # a Service called `schema-registry` becomes SCHEMA_REGISTRY_PORT=tcp://10.96.x.x:8081,
+      # SCHEMA_REGISTRY_PORT_8081_TCP_ADDR=..., and so on. Confluent's images configure themselves
+      # from exactly that prefix, so the Service's own name silently poisons its container's
+      # configuration and it exits 1 after printing "PORT is deprecated". Off for every pod here,
+      # not just that one: the mechanism predates DNS-based discovery, nothing in this chart uses
+      # it, and the failure it causes is extremely hard to read.
+      enableServiceLinks: false
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      containers:
+        - name: mongodb
+          image: {{ .Values.image }}
+          ports:
+            - name: mongodb
+              containerPort: 27017
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              value: root
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.datastoreSecretName }}
+                  key: mongo-root-password
+            {{- range .Values.databases }}
+            - name: {{ .passwordKey | upper | replace "-" "_" }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.global.datastoreSecretName }}
+                  key: {{ .passwordKey }}
+            {{- end }}
+          startupProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+            periodSeconds: 5
+            failureThreshold: 40
+          livenessProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mongodb-data
+        - name: init
+          configMap:
+            name: mongodb-init
+            defaultMode: 0555
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "psp.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: mongodb

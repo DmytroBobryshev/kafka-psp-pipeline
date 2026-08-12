@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: schema-registry
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "psp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psp.selectorLabels" . | nindent 8 }}
+    spec:
+      # Kubernetes injects a docker-link-style env var for every Service in the namespace:
+      # a Service called `schema-registry` becomes SCHEMA_REGISTRY_PORT=tcp://10.96.x.x:8081,
+      # SCHEMA_REGISTRY_PORT_8081_TCP_ADDR=..., and so on. Confluent's images configure themselves
+      # from exactly that prefix, so the Service's own name silently poisons its container's
+      # configuration and it exits 1 after printing "PORT is deprecated". Off for every pod here,
+      # not just that one: the mechanism predates DNS-based discovery, nothing in this chart uses
+      # it, and the failure it causes is extremely hard to read.
+      enableServiceLinks: false
+      containers:
+        - name: schema-registry
+          image: {{ .Values.image }}
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            - name: SCHEMA_REGISTRY_HOST_NAME
+              # The registry advertises this to other registry instances for leader forwarding.
+              # With one replica it only has to be resolvable; the pod IP always is.
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: SCHEMA_REGISTRY_LISTENERS
+              value: http://0.0.0.0:8081
+            - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
+              value: SASL_PLAINTEXT://{{ .Values.global.kafka.bootstrapServers }}
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL
+              value: {{ .Values.global.kafka.securityProtocol }}
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SASL_MECHANISM
+              value: {{ .Values.global.kafka.saslMechanism }}
+            # Same pattern as every Spring service: the whole JAAS line straight out of the
+            # Strimzi-generated Secret, referenced by name. Nothing copies a password.
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SASL_JAAS_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.kafkaUser }}
+                  key: {{ .Values.global.kafka.saslJaasConfigSecretKey }}
+            - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR
+              value: "3"
+          startupProbe:
+            httpGet:
+              path: /subjects
+              port: http
+            periodSeconds: 5
+            failureThreshold: 40
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 15
+            failureThreshold: 4
+          readinessProbe:
+            # /subjects is a REAL readiness check for this component: answering it requires the
+            # registry to have read the `_schemas` topic to the end, i.e. to have a usable view of
+            # every schema. `/` only proves the HTTP port is open - the same shallow-probe trap
+            # the Spring services' readiness group exists to avoid.
+            httpGet:
+              path: /subjects
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: schema-registry
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "psp.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http

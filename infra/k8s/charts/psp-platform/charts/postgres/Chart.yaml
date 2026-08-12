@@ -1,0 +1,9 @@
+apiVersion: v2
+name: postgres
+description: >-
+  One PostgreSQL 16 instance with the three per-service databases and login roles ADR-0005 asks
+  for, plus the REPLICATION grant Debezium needs. A hand-written manifest set, not the Bitnami
+  chart - see values.yaml.
+type: application
+version: 0.1.0
+appVersion: "16"

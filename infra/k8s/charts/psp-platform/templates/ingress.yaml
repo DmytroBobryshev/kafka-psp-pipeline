@@ -1,0 +1,76 @@
+{{- if .Values.ingress.enabled }}
+{{/*
+  The one route into the cluster from the laptop.
+
+  WHY ONLY api-gateway HAS AN INGRESS. Every other service is reachable only through it: ADR-0004
+  removed service-to-service HTTP, and M16 made api-gateway the single edge with the rate limiter,
+  the CORS policy and payment-api's circuit breaker on it. Publishing payment-api directly would
+  route around all three. `kubectl port-forward` remains available for debugging, which is the
+  right place for a back door - a human typing a command, not a permanent Ingress object.
+
+  HOW THE PACKET GETS HERE on kind, which is not obvious and is the part people get wrong:
+
+    curl http://localhost/api/payments
+      -> the host's port 80
+      -> kind.yaml's extraPortMappings publishes container port 80 of the CONTROL-PLANE node
+      -> ingress-nginx's controller Pod, which is pinned to that node (nodeSelector
+         ingress-ready=true, a label kind.yaml puts on the control plane) and uses hostPort
+      -> this Ingress' rule
+      -> Service api-gateway:8000 -> the pod
+
+  Remove any link in that chain and you get a connection refused that looks like DNS.
+
+  ADDING THE UI (M17, out of scope for this phase): it is a static React bundle behind nginx, so
+  it is one more Deployment + Service plus a second `paths` entry here - `/` to the ui Service,
+  with the `/api` and `/sse` prefixes below matched first (nginx-ingress sorts by prefix length,
+  so ordering in this list does not matter). The only application-side change is the gateway's
+  CORS `allowedOrigins`, currently http://localhost:5173 for the Vite dev server, which would
+  become the ingress origin - or disappear, because same-origin requests need no CORS at all.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: psp-edge
+  labels:
+    app.kubernetes.io/name: psp-edge
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: psp-platform
+  annotations:
+    # realtime-gateway's SSE stream is proxied through the gateway on /api/realtime/**. Without
+    # these three, nginx buffers the response and the browser sees nothing until the stream ends,
+    # and then kills it at the 60 s default read timeout - an SSE endpoint that "works in curl
+    # but not through the ingress" is almost always this.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - {{ if .Values.ingress.host }}host: {{ .Values.ingress.host | quote }}
+      {{ end }}http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 8000
+          - path: /actuator
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 8000
+          - path: /fallback
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 8000
+{{- end }}

@@ -1,0 +1,7 @@
+apiVersion: v2
+name: analytics
+description: >-
+  M10 - Kafka Streams windowed aggregation with RocksDB state stores, interactive queries, and MongoDB projections.
+type: application
+version: 0.1.0
+appVersion: "0.1.0-SNAPSHOT"

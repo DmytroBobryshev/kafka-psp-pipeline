@@ -59,6 +59,10 @@
   <modules>
     <module>libs/common-events</module>
     <module>libs/common-web</module>
+    <!-- M18 phase 2: Kafka-aware HealthIndicators so a Kubernetes readiness probe reflects the
+         listener containers, not just the servlet. Its own module rather than part of
+         common-web - see libs/common-health/pom.xml's <description>. -->
+    <module>libs/common-health</module>
     <module>services/payment-api</module>
     <module>services/psp-connector</module>
     <module>services/ledger</module>
@@ -160,6 +164,11 @@
       <dependency>
         <groupId>com.example.psp</groupId>
         <artifactId>common-web</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.example.psp</groupId>
+        <artifactId>common-health</artifactId>
         <version>${project.version}</version>
       </dependency>
     </dependencies>

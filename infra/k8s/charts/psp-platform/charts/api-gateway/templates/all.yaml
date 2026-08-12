@@ -1,0 +1,10 @@
+{{/*
+  Three objects, rendered by the shared defines in the umbrella chart's
+  templates/_spring-service.tpl. Everything specific to this service lives in ../values.yaml,
+  which is the file to read - and to edit.
+*/}}
+{{ include "psp.configmap" . }}
+---
+{{ include "psp.deployment" . }}
+---
+{{ include "psp.service" . }}

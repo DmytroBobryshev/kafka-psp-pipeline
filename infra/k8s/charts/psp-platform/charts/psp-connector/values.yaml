@@ -1,0 +1,57 @@
+# The service the end-to-end proof turns on: if its listener containers are not running, a payment
+# reaches Kafka and stops there. That is precisely the state M15 showed a shallow /actuator/health
+# reporting as UP, and precisely what readinessInclude below now catches.
+
+port: 8086
+replicas: 1
+
+# The Strimzi-generated Secret for User:psp-connector.
+kafkaUser: "psp-connector"
+
+# Contributors added to Spring Boot's `readiness` health group, i.e. to
+# /actuator/health/readiness, i.e. to what kube-proxy uses to decide whether this pod is in the
+# Service's endpoint list. `readinessState` alone is the servlet-level answer M15 proved can be
+# UP while nothing is consuming; the extra names come from libs/common-health.
+readinessInclude: readinessState,kafkaListeners
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 150m
+  limits:
+    memory: 768Mi
+    cpu: 1000m
+
+# Extra environment. Secrets only - anything non-secret belongs in `config` below, where it is
+# readable without `kubectl get secret`.
+env:
+  - name: SPRING_DATASOURCE_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: psp-datastore-credentials
+        key: psp-connector-db-password
+
+# Rendered into /config/application-k8s.yml (through `tpl`, so Helm expressions work). This is the
+# HIGHEST-precedence Spring config document in the pod.
+config: |
+  spring:
+    datasource:
+      url: jdbc:postgresql://{{ .Values.global.postgres.host }}:{{ .Values.global.postgres.port }}/psp_connector
+      username: psp_connector
+      driver-class-name: org.postgresql.Driver
+    jpa:
+      hibernate:
+        ddl-auto: validate
+      open-in-view: false
+    flyway:
+      enabled: true
+      locations: classpath:db/migration
+  {{- include "psp.kafkaClientConfig" . | nindent 2 }}
+  psp-connector:
+    schema-registry:
+      url: {{ .Values.global.schemaRegistryUrl }}
+  psp:
+    health:
+      kafka:
+        enabled: true
+  {{ include "psp.commonConfig" . }}

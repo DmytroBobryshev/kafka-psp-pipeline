@@ -1,0 +1,7 @@
+apiVersion: v2
+name: ledger
+description: >-
+  M7/M11 - exactly-once consumer. Kafka transactions plus Postgres balances, emitting ledger.ledger-entry-recorded.v1.
+type: application
+version: 0.1.0
+appVersion: "0.1.0-SNAPSHOT"

@@ -1,0 +1,113 @@
+{{- if .Values.connectors.outbox.enabled }}
+{{/*
+  M6 - the transactional outbox relay, and the first hop of the whole pipeline.
+
+  payment-api never produces to Kafka. It writes a row into outbox_event inside the same Postgres
+  transaction as the payment, and this connector reads that table FROM THE WRITE-AHEAD LOG - not
+  by polling - and publishes it. If this connector is not RUNNING, a POST /api/payments returns
+  201, the row is committed, and absolutely nothing else in the system ever happens: no topic, no
+  psp-connector, no ledger entry. That is why it is in the acceptance criteria.
+
+  Field-for-field the same configuration as infra/compose/connect/payment-outbox-connector.json,
+  with three differences and no others:
+    * hostnames are Kubernetes Services (`postgres`) instead of compose service names,
+    * the password is a config-provider reference instead of a shell-substituted ${VAR},
+    * `name` comes from metadata.name - Strimzi derives the connector name from the CR.
+*/}}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: {{ .Values.connectors.outbox.name }}
+  labels:
+    # Binds this connector to that Connect cluster. A wrong value here is silently ignored - the
+    # same trap as strimzi.io/cluster on a KafkaTopic.
+    strimzi.io/cluster: {{ .Values.name }}
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  config:
+    database.hostname: {{ .Values.global.postgres.host }}
+    database.port: {{ .Values.global.postgres.port | quote }}
+    database.user: payment_api
+    database.password: ${strimzienv:PAYMENT_API_DB_PASSWORD}
+    database.dbname: payment_api
+    topic.prefix: payment-api
+
+    # pgoutput is Postgres' built-in logical decoding plugin - no extension to install, which is
+    # why the stock postgres image is enough.
+    plugin.name: pgoutput
+    slot.name: {{ .Values.connectors.outbox.slotName }}
+    publication.name: {{ .Values.connectors.outbox.publicationName }}
+    # `filtered` = create a publication covering only table.include.list. The payment_api role
+    # owns outbox_event, and a role may create a publication for tables it owns, so no extra
+    # grant is needed beyond the REPLICATION attribute the postgres subchart hands out.
+    publication.autocreate.mode: filtered
+    # Do not replay the existing table on first connect - only stream changes from now on.
+    snapshot.mode: no_data
+
+    table.include.list: public.outbox_event
+    tombstones.on.delete: "false"
+
+    # The payload column already holds Confluent Avro wire bytes (M9), so the value passes through
+    # untouched. Any schema-aware converter here would try to re-encode bytes that are already
+    # encoded.
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: org.apache.kafka.connect.converters.ByteArrayConverter
+
+    transforms: outbox,byteBufferFix
+    transforms.outbox.type: io.debezium.transforms.outbox.EventRouter
+    transforms.outbox.table.field.event.id: id
+    transforms.outbox.table.field.event.key: aggregate_id
+    transforms.outbox.table.field.event.payload: payload
+    transforms.outbox.table.expand.json.payload: "false"
+    # aggregate_type=payment -> payments.payment-requested.v1; aggregate_type=refund ->
+    # refunds.refund-requested.v1. The routing rule IS the topic naming convention (ADR-0001).
+    transforms.outbox.route.by.field: aggregate_type
+    transforms.outbox.route.topic.replacement: ${routedByValue}s.${routedByValue}-requested.v1
+    transforms.outbox.table.fields.additional.placement: event_type:header:eventType,trace_parent:header:traceparent
+    # The one-purpose glue SMT built into the Connect image: Debezium represents a BYTEA column as
+    # a HeapByteBuffer and Kafka's ByteArrayConverter accepts only byte[]. See
+    # infra/compose/connect/plugins/outbox-bytebuffer-smt/src/ByteBufferToBytes.java.
+    transforms.byteBufferFix.type: com.example.psp.connect.smt.ByteBufferToBytes
+{{- end }}
+{{- if .Values.connectors.mongoSink.enabled }}
+---
+{{/*
+  M13 - the audit sink. Consumes the ledger's Avro entries and writes one document per record into
+  MongoDB's audit_trail database, which no service owns: it exists so the sink can be scoped to it
+  alone.
+
+  errors.tolerance=all turns a conversion failure into a per-record skip routed to a DLQ topic
+  instead of a task-killing exception - a sink connector is a consumer, and a poison pill in a
+  consumer is ADR-0006's problem, solved the same way.
+*/}}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: {{ .Values.connectors.mongoSink.name }}
+  labels:
+    strimzi.io/cluster: {{ .Values.name }}
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  class: com.mongodb.kafka.connect.MongoSinkConnector
+  tasksMax: 1
+  config:
+    topics: {{ .Values.connectors.mongoSink.topic }}
+    connection.uri: mongodb://audit_trail:${strimzienv:AUDIT_TRAIL_DB_PASSWORD}@{{ .Values.global.mongodb.host }}:{{ .Values.global.mongodb.port }}/?authSource={{ .Values.connectors.mongoSink.database }}
+    database: {{ .Values.connectors.mongoSink.database }}
+    collection: {{ .Values.connectors.mongoSink.collection }}
+
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: io.confluent.connect.avro.AvroConverter
+    value.converter.schema.registry.url: {{ .Values.global.schemaRegistryUrl }}
+
+    document.id.strategy: com.mongodb.kafka.connect.sink.processor.id.strategy.BsonOidStrategy
+
+    errors.tolerance: all
+    errors.log.enable: "true"
+    errors.log.include.messages: "true"
+    errors.deadletterqueue.topic.name: {{ .Values.connectors.mongoSink.topic }}.mongo-audit-sink.dlq
+    errors.deadletterqueue.topic.replication.factor: "3"
+    errors.deadletterqueue.context.headers.enable: "true"
+{{- end }}

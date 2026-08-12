@@ -1,0 +1,42 @@
+# NO kafkaUser: api-gateway is the one service with no Kafka client at all (ADR-0004 - commands
+# enter over HTTP, everything after that is events), so it has no KafkaUser, no Secret reference,
+# and readinessInclude stays at Spring Boot's readinessState. Naming a kafkaListeners contributor
+# it does not have would fail startup, which is the auto-configuration doing its job.
+#
+# ITS READINESS IS GENUINELY SHALLOW, and here that is defensible rather than a compromise: a
+# gateway with a dead downstream should return 503 from the circuit breaker for THAT route, not
+# remove itself from the ingress and take the other five routes down with it.
+#
+# The route table itself is NOT in this ConfigMap - it is application-k8s.yml inside the jar
+# (services/api-gateway/src/main/resources/), because it is a six-element list and a partially
+# specified list in a higher-precedence property source merges per index. See the shared
+# ConfigMap template's comment.
+
+port: 8000
+replicas: 1
+
+# The Strimzi-generated Secret for User:(none).
+kafkaUser: ""
+
+# Contributors added to Spring Boot's `readiness` health group, i.e. to
+# /actuator/health/readiness, i.e. to what kube-proxy uses to decide whether this pod is in the
+# Service's endpoint list. `readinessState` alone is the servlet-level answer M15 proved can be
+# UP while nothing is consuming; the extra names come from libs/common-health.
+readinessInclude: readinessState
+
+resources:
+  requests:
+    memory: 384Mi
+    cpu: 100m
+  limits:
+    memory: 640Mi
+    cpu: 800m
+
+# Extra environment. Secrets only - anything non-secret belongs in `config` below, where it is
+# readable without `kubectl get secret`.
+env: []
+
+# Rendered into /config/application-k8s.yml (through `tpl`, so Helm expressions work). This is the
+# HIGHEST-precedence Spring config document in the pod.
+config: |
+  {{ include "psp.commonConfig" . }}

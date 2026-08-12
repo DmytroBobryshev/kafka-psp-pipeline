@@ -1,0 +1,7 @@
+apiVersion: v2
+name: api-gateway
+description: >-
+  M16 - the single HTTP edge. Under the k8s profile it routes to Kubernetes Services by DNS with no registry anywhere (ADR-0009).
+type: application
+version: 0.1.0
+appVersion: "0.1.0-SNAPSHOT"

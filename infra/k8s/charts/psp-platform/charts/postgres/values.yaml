@@ -1,0 +1,48 @@
+# WHY A HAND-WRITTEN SUBCHART RATHER THAN bitnami/postgresql
+#
+#  1. There is no chart repository in this phase, on purpose - the same reason images are
+#     `kind load`ed. Adding one dependency means adding `helm dependency update` and a network
+#     fetch to a flow whose whole point is that it works from a clean checkout.
+#  2. The interesting part is not "run Postgres", it is the initialisation: three databases, three
+#     roles, a REVOKE per database, and ALTER ROLE ... WITH REPLICATION for the outbox connector.
+#     Those are 30 lines translated from infra/compose/postgres/init/*.sh, and a third-party chart
+#     would carry them anyway, as an opaque `initdbScripts` value inside 4000 lines of templates.
+#  3. Single replica, no HA, no backups, no PgBouncer. A production chart's entire value is the
+#     things this deployment deliberately does not have.
+#
+# The compose stack is the reference; this is the same shape with Kubernetes objects.
+
+image: postgres:16-alpine
+
+# Matches infra/compose/.env's PAYMENT_API_DB / LEDGER_DB / PSP_CONNECTOR_DB, and therefore the
+# jdbc URLs in each service's application-k8s.yml.
+databases:
+  - db: payment_api
+    user: payment_api
+    passwordKey: payment-api-db-password
+    # M6: Debezium reads the outbox table via LOGICAL REPLICATION (the WAL), which requires the
+    # connecting role to hold REPLICATION. Granted to the SAME per-service role that owns the
+    # schema rather than to a new shared superuser - exactly as
+    # infra/compose/postgres/init/02-debezium-replication.sh argues at length: a REPLICATION role
+    # can stream the WAL of any database it can CONNECT to, and this one can only connect to its
+    # own.
+    replication: true
+  - db: ledger
+    user: ledger
+    passwordKey: ledger-db-password
+    replication: false
+  - db: psp_connector
+    user: psp_connector
+    passwordKey: psp-connector-db-password
+    replication: false
+
+storage:
+  size: 3Gi
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 512Mi
+    cpu: 500m

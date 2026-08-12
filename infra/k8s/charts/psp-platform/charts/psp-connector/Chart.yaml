@@ -1,0 +1,7 @@
+apiVersion: v2
+name: psp-connector
+description: >-
+  M4/M5/M11 - consumes payments.payment-requested.v1, calls the simulated provider, emits payments.payment-status-changed.v1 and the refund saga's outcome events.
+type: application
+version: 0.1.0
+appVersion: "0.1.0-SNAPSHOT"

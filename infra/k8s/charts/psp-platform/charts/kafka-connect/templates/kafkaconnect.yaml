@@ -1,0 +1,105 @@
+{{/*
+  The Connect worker, as a Strimzi CR rather than a Deployment.
+
+  What the operator does with this that infra/compose's `kafka-connect` service did by hand:
+  builds the worker properties file (including a `sasl.jaas.config` assembled from the mounted
+  Secret, so no password appears in any env var), creates the Deployment and the REST Service,
+  wires liveness/readiness probes to Connect's own /health endpoint, and - because of the
+  `use-connector-resources` annotation below - runs a controller that reconciles KafkaConnector
+  CRs against that REST API.
+
+  That last part is the real change. In compose, connectors were registered by
+  infra/compose/register-connector.sh POSTing JSON at :8083, once, imperatively; a connector
+  deleted with a curl stayed deleted, and the JSON on disk and the connector in the worker could
+  drift silently. Here a KafkaConnector is a Kubernetes object with a status, the operator puts it
+  back, and `kubectl get kafkaconnector` is the source of truth - the same shift phase 1 made for
+  topics and ACLs.
+*/}}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: {{ .Values.name }}
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+  annotations:
+    # Without this the operator manages the worker but IGNORES every KafkaConnector CR, and the
+    # connectors sit there Ready-less with nothing in the operator log explaining why. It is the
+    # single most common Strimzi Connect mistake.
+    strimzi.io/use-connector-resources: "true"
+spec:
+  version: 4.3.0
+  replicas: {{ .Values.replicas }}
+
+  # Built by infra/k8s/scripts/build-images.sh and loaded with `kind load` - see
+  # infra/k8s/connect/Dockerfile for why this is spec.image and not spec.build.
+  image: "{{ .Values.global.imageRepository }}/kafka-connect:{{ .Values.global.imageTag }}"
+
+  bootstrapServers: {{ .Values.global.kafka.bootstrapServers }}
+
+  # SCRAM against the phase-1 cluster as User:connect. Strimzi mounts the Secret's `password` key
+  # as a FILE and references it from the worker config through its own DirectoryConfigProvider, so
+  # the credential is never an environment variable and never appears in `kubectl describe pod`.
+  authentication:
+    type: scram-sha-512
+    username: {{ .Values.kafkaUser }}
+    passwordSecret:
+      secretName: {{ .Values.kafkaUser }}
+      password: password
+
+  # Top-level fields in Strimzi 1.x - they used to be spec.config entries and the CRD now rejects
+  # them there.
+  groupId: {{ .Values.groupId }}
+  configStorageTopic: {{ .Values.configStorageTopic }}
+  offsetStorageTopic: {{ .Values.offsetStorageTopic }}
+  statusStorageTopic: {{ .Values.statusStorageTopic }}
+
+  config:
+    # Worker-level defaults. Each connector overrides what it needs: the outbox source uses
+    # ByteArrayConverter for values (the payload column is already Avro wire bytes), the Mongo sink
+    # uses the Confluent Avro converter.
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: false
+    value.converter.schemas.enable: false
+
+    # The internal topics already exist as KafkaTopic CRs with these settings; Connect still
+    # validates them at startup and refuses to run if they disagree.
+    config.storage.replication.factor: 3
+    offset.storage.replication.factor: 3
+    status.storage.replication.factor: 3
+    offset.storage.partitions: 25
+    status.storage.partitions: 5
+
+    # Lets a connector's config say ${strimzienv:PAYMENT_API_DB_PASSWORD} instead of carrying the
+    # password. See the KafkaConnector templates and template.connectContainer.env below.
+    # strimzifile/strimzidir are listed because Strimzi's OWN generated config uses them for the
+    # SCRAM password file above - overriding config.providers without them breaks authentication.
+    config.providers: strimzienv,strimzifile,strimzidir
+    config.providers.strimzienv.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+    config.providers.strimzifile.class: org.apache.kafka.common.config.provider.FileConfigProvider
+    config.providers.strimzidir.class: org.apache.kafka.common.config.provider.DirectoryConfigProvider
+
+  resources:
+    {{- toYaml .Values.resources | nindent 4 }}
+
+  jvmOptions:
+    -Xms: {{ .Values.jvmOptions.Xms }}
+    -Xmx: {{ .Values.jvmOptions.Xmx }}
+
+  template:
+    connectContainer:
+      env:
+        # The datastore credentials the two connectors need, from the Secret the umbrella chart
+        # generated. They are env vars ON THE WORKER, resolved into connector configs at task
+        # startup by EnvVarConfigProvider - so the KafkaConnector objects, which are readable by
+        # anyone with `get kafkaconnector`, contain a provider reference and not a password.
+        - name: PAYMENT_API_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.global.datastoreSecretName }}
+              key: payment-api-db-password
+        - name: AUDIT_TRAIL_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.global.datastoreSecretName }}
+              key: audit-trail-db-password

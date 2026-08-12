@@ -1,0 +1,10 @@
+apiVersion: v2
+name: kafka-connect
+description: >-
+  The Strimzi KafkaConnect worker plus the two KafkaConnector CRs that make the pipeline start at
+  all: the Debezium Postgres source over payment-api's outbox table (M6) and the MongoDB audit
+  sink over ledger.ledger-entry-recorded.v1 (M13). Without the source connector nothing ever
+  reaches payments.payment-requested.v1 and every downstream service is idle but healthy.
+type: application
+version: 0.1.0
+appVersion: "1.1.0-kafka-4.3.0"

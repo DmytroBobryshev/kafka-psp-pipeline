@@ -1,0 +1,41 @@
+# The broadcast problem (M12): every instance needs every event, so each one uses a unique
+# group.id generated at startup rather than sharing a group. That makes replica count a pure
+# fan-out knob here - the opposite of ledger below it, where replicas are a correctness hazard.
+
+port: 8090
+replicas: 1
+
+# The Strimzi-generated Secret for User:realtime-gateway.
+kafkaUser: "realtime-gateway"
+
+# Contributors added to Spring Boot's `readiness` health group, i.e. to
+# /actuator/health/readiness, i.e. to what kube-proxy uses to decide whether this pod is in the
+# Service's endpoint list. `readinessState` alone is the servlet-level answer M15 proved can be
+# UP while nothing is consuming; the extra names come from libs/common-health.
+readinessInclude: readinessState,kafkaListeners
+
+resources:
+  requests:
+    memory: 384Mi
+    cpu: 100m
+  limits:
+    memory: 640Mi
+    cpu: 800m
+
+# Extra environment. Secrets only - anything non-secret belongs in `config` below, where it is
+# readable without `kubectl get secret`.
+env: []
+
+# Rendered into /config/application-k8s.yml (through `tpl`, so Helm expressions work). This is the
+# HIGHEST-precedence Spring config document in the pod.
+config: |
+  spring:
+  {{- include "psp.kafkaClientConfig" . | nindent 2 }}
+  realtime-gateway:
+    schema-registry:
+      url: {{ .Values.global.schemaRegistryUrl }}
+  psp:
+    health:
+      kafka:
+        enabled: true
+  {{ include "psp.commonConfig" . }}

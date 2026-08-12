@@ -1,0 +1,7 @@
+apiVersion: v2
+name: payment-api
+description: >-
+  M3/M6 - the REST edge. Accepts the payment command and writes the outbox row Debezium relays into payments.payment-requested.v1.
+type: application
+version: 0.1.0
+appVersion: "0.1.0-SNAPSHOT"

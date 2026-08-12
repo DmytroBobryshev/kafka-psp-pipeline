@@ -1,10 +1,15 @@
-# M16/ADR-0009: the OTHER half of the profile switch, made real now rather than left aspirational
-# for M18. This file is NOT exercised by anything yet - infra/k8s/ is still just kind.yaml and a
-# hello-world manifest (M18 builds the actual namespace/Deployments/Services this profile
-# targets) - but the config exists today, is real Spring config, and is what api-gateway will
-# read the moment SPRING_PROFILES_ACTIVE=k8s is set inside a pod. See README.md "k8s profile
-# (untested until M18)" for the honest caveat and services/discovery-server/README.md for the
-# argument this whole profile split exists to demonstrate.
+# M16/ADR-0009: the OTHER half of the profile switch. Written in M16 against an illustrative
+# namespace, made REAL in M18 phase 2 - this file is now what api-gateway actually reads inside
+# its pod (SPRING_PROFILES_ACTIVE=k8s, set by the Helm chart), and every address below is a
+# Service that exists. See infra/k8s/README.md.
+#
+# NAMESPACE: `kafka`, not the `psp` this file guessed in M16 (its own comment said "the 'psp'
+# namespace ... is M18's decision to make"). M18 phase 2 put the application workloads in the
+# SAME namespace as the Strimzi cluster because a Kubernetes Secret is namespace-scoped: the
+# per-service SCRAM credentials are Secrets the Strimzi User Operator generates next to the
+# Kafka CR, and a pod can only `secretKeyRef` a Secret in its own namespace. Splitting the
+# namespaces would have meant copying every credential into the second one - exactly the thing
+# phase 1's credential model exists to avoid. infra/k8s/README.md argues this at length.
 #
 # eureka.client.enabled is deliberately absent (not just "false"): api-gateway's own
 # spring-cloud-starter-netflix-eureka-client dependency ships in the image unconditionally (a
@@ -15,11 +20,9 @@
 spring:
   data:
     redis:
-      # Illustrative Kubernetes Service DNS name (ADR-0009's own convention:
-      # http://payment-api.psp.svc.cluster.local) - the "psp" namespace and this exact Service
-      # name are M18's decision to make, not this module's; this is the config shape, not a
-      # verified address.
-      host: redis.psp.svc.cluster.local
+      # The Redis the RequestRateLimiter default-filter needs (application.yml). Deployed by
+      # the umbrella chart's `redis` subchart as a Service of this exact name.
+      host: redis.kafka.svc.cluster.local
       port: 6379
   cloud:
     gateway:
@@ -34,7 +37,7 @@ spring:
           # a literal value.
           routes:
             - id: payment-api
-              uri: http://payment-api.psp.svc.cluster.local:8085
+              uri: http://payment-api.kafka.svc.cluster.local:8085
               predicates:
                 - Path=/api/payments/**,/api/merchants/**
               filters:
@@ -43,23 +46,23 @@ spring:
                     name: paymentApiCB
                     fallbackUri: forward:/fallback/payment-api
             - id: ledger
-              uri: http://ledger.psp.svc.cluster.local:8087
+              uri: http://ledger.kafka.svc.cluster.local:8087
               predicates:
                 - Path=/api/refunds/**
             - id: webhook-notifier
-              uri: http://webhook-notifier.psp.svc.cluster.local:8088
+              uri: http://webhook-notifier.kafka.svc.cluster.local:8088
               predicates:
                 - Path=/api/webhooks/**
             - id: analytics
-              uri: http://analytics.psp.svc.cluster.local:8089
+              uri: http://analytics.kafka.svc.cluster.local:8089
               predicates:
                 - Path=/api/analytics/**
             - id: realtime-gateway
-              uri: http://realtime-gateway.psp.svc.cluster.local:8090
+              uri: http://realtime-gateway.kafka.svc.cluster.local:8090
               predicates:
                 - Path=/api/realtime/**
             - id: psp-connector
-              uri: http://psp-connector.psp.svc.cluster.local:8086
+              uri: http://psp-connector.kafka.svc.cluster.local:8086
               predicates:
                 - Path=/api/psp-connector/**
               filters:
@@ -68,6 +71,10 @@ spring:
 management:
   otlp:
     tracing:
-      # Illustrative - M18/M15-on-k8s would deploy Tempo (or reuse the compose one via
-      # port-forward) under some Service name; this is not a verified address.
+      # Tempo is NOT deployed in M18 phase 2 (observability on k8s is out of this phase's
+      # scope), so this address does not resolve. Nothing tries to reach it: the chart's
+      # ConfigMap sets management.tracing.sampling.probability=0, so no span is ever sampled
+      # and the OTLP exporter is never invoked. The address stays as the shape M15-on-k8s
+      # would fill in, and infra/k8s/README.md says so out loud rather than leaving a reader
+      # to discover it from connection-refused warnings.
       endpoint: http://tempo.observability.svc.cluster.local:4318/v1/traces

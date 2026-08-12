@@ -1,0 +1,81 @@
+# The largest memory allowance of the seven: RocksDB's off-heap block cache and memtables live
+# OUTSIDE the JVM heap, so the container limit has to cover heap (70% of it, per the image's
+# MaxRAMPercentage) plus RocksDB plus thread stacks for num-stream-threads=2. Sizing this like the
+# other services is the classic way to get a Streams pod OOMKilled with a heap graph that looks fine.
+#
+# STATE IS AN emptyDir. On restart the state stores are rebuilt from the changelog topics, which is
+# correct but not instant - and it is exactly the M10 proof ("kill analytics and restart, state
+# restores from the changelog"). A PVC would make restarts faster and is what a StatefulSet would
+# bring; it is deliberately not here, because the changelog restore is the behaviour worth seeing.
+#
+# readinessInclude adds kafkaStreams: a Streams app that is REBALANCING or restoring is alive but
+# is not yet answering interactive queries correctly, and during a rolling update that is precisely
+# when it should be out of the Service's endpoints.
+
+port: 8089
+replicas: 1
+
+# The Strimzi-generated Secret for User:analytics.
+kafkaUser: "analytics"
+
+# Contributors added to Spring Boot's `readiness` health group, i.e. to
+# /actuator/health/readiness, i.e. to what kube-proxy uses to decide whether this pod is in the
+# Service's endpoint list. `readinessState` alone is the servlet-level answer M15 proved can be
+# UP while nothing is consuming; the extra names come from libs/common-health.
+readinessInclude: readinessState,kafkaListeners,kafkaStreams
+
+resources:
+  requests:
+    memory: 768Mi
+    cpu: 250m
+  limits:
+    memory: 1152Mi
+    cpu: 1500m
+
+# Extra environment. Secrets only - anything non-secret belongs in `config` below, where it is
+# readable without `kubectl get secret`.
+env:
+  - name: SPRING_DATA_MONGODB_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: psp-datastore-credentials
+        key: analytics-db-password
+  # Kafka Streams advertises this address to the other instances of the same application.id so an
+  # interactive query for a key owned by another instance can be forwarded. With one replica it is
+  # only ever self-referential, but a wrong value here is a bug that only appears when you scale.
+  - name: POD_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.podIP
+
+# Rendered into /config/application-k8s.yml (through `tpl`, so Helm expressions work). This is the
+# HIGHEST-precedence Spring config document in the pod.
+config: |
+  spring:
+    data:
+      mongodb:
+        host: {{ .Values.global.mongodb.host }}
+        port: {{ .Values.global.mongodb.port }}
+        database: analytics
+        authentication-database: analytics
+        username: analytics
+  {{- include "psp.kafkaClientConfig" . | nindent 2 }}
+  analytics:
+    schema-registry:
+      url: {{ .Values.global.schemaRegistryUrl }}
+    streams:
+      # /tmp is the emptyDir mounted by the shared Deployment template; the image's root filesystem
+      # is read-only, so anywhere else fails at startup.
+      state-dir: /tmp/kafka-psp/analytics-streams
+      application-server: ${POD_IP}:8089
+  psp:
+    health:
+      kafka:
+        enabled: true
+        # analytics is the only service with a Streams topology, so it is the only one that gets
+        # the kafkaStreams contributor - and it names it in readinessInclude above. The two must
+        # be switched on together; Spring Boot refuses to start if a readiness group names a
+        # contributor that does not exist.
+        streams:
+          enabled: true
+  {{ include "psp.commonConfig" . }}

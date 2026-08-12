@@ -1,0 +1,8 @@
+apiVersion: v2
+name: mongodb
+description: >-
+  One MongoDB 7 instance with a logical database + scoped user per consumer (webhook-notifier,
+  analytics, audit-trail), mirroring infra/compose/mongo/init/01-init-databases.sh.
+type: application
+version: 0.1.0
+appVersion: "7.0"
