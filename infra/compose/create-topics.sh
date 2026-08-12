@@ -14,6 +14,11 @@
 #   - `connect.configs` / `connect.offsets` / `connect.status`: created by Kafka Connect workers
 #     when Connect is deployed in M6/M13. Not needed until then.
 #
+# M14: the cluster requires authentication. Both modes below run as the `admin` SCRAM superuser -
+# see the CONTAINER_ADMIN_CONFIG/HOST_ADMIN_CONFIG block for how the credentials are supplied.
+# `--host` mode additionally needs the .env values in the environment, which the `source .env`
+# below already does.
+#
 # Usage:
 #   ./create-topics.sh              # create topics via `docker compose exec` (default)
 #   BOOTSTRAP=localhost:29092 ./create-topics.sh --host   # create via a host-installed kafka-topics
@@ -33,11 +38,42 @@ fi
 INTERNAL_BOOTSTRAP="kafka1:9092,kafka2:9092,kafka3:9092"
 HOST_BOOTSTRAP="localhost:${KAFKA1_EXTERNAL_PORT:-29092},localhost:${KAFKA2_EXTERNAL_PORT:-29093},localhost:${KAFKA3_EXTERNAL_PORT:-29094}"
 
+# ---------------------------------------------------------------------------------------------
+# M14: the cluster now requires SASL/SCRAM-SHA-512 authentication, so every CLI call needs a
+# --command-config. This script runs as the `admin` SCRAM superuser (infra/compose/.env's
+# KAFKA_ADMIN_USER / KAFKA_ADMIN_PASSWORD).
+#
+#   compose mode: docker-compose.yml renders the properties file into every broker container at
+#                 /etc/kafka/secrets/admin.properties (a Compose `configs:` entry with inline
+#                 content, interpolated from .env - so the credentials never exist as a file in
+#                 this repository).
+#   host mode:    the same content is written to a mode-600 temp file, removed on exit.
+#
+# Without it the CLI hangs and then reports "Timed out waiting for a node assignment" or
+# "Connection to node -1 (kafka1/172.x.x.x:9092) failed authentication due to: Unexpected
+# handshake request with client mechanism" - both of which read like a network problem.
+# See infra/compose/README.md's "M14 - Security" section.
+# ---------------------------------------------------------------------------------------------
+CONTAINER_ADMIN_CONFIG="/etc/kafka/secrets/admin.properties"
+HOST_ADMIN_CONFIG=""
+
+if [[ "$MODE" == "host" ]]; then
+  HOST_ADMIN_CONFIG="$(mktemp)"
+  chmod 600 "$HOST_ADMIN_CONFIG"
+  trap 'rm -f "$HOST_ADMIN_CONFIG"' EXIT
+  cat > "$HOST_ADMIN_CONFIG" <<EOF
+security.protocol=SASL_PLAINTEXT
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="${KAFKA_ADMIN_USER:-admin}" password="${KAFKA_ADMIN_PASSWORD:?KAFKA_ADMIN_PASSWORD must be set - source infra/compose/.env}";
+EOF
+fi
+
 run_kafka_topics() {
   if [[ "$MODE" == "host" ]]; then
-    kafka-topics --bootstrap-server "$HOST_BOOTSTRAP" "$@"
+    kafka-topics --bootstrap-server "$HOST_BOOTSTRAP" --command-config "$HOST_ADMIN_CONFIG" "$@"
   else
-    docker compose exec -T kafka1 kafka-topics --bootstrap-server "$INTERNAL_BOOTSTRAP" "$@"
+    docker compose exec -T kafka1 kafka-topics --bootstrap-server "$INTERNAL_BOOTSTRAP" \
+      --command-config "$CONTAINER_ADMIN_CONFIG" "$@"
   fi
 }
 
@@ -148,9 +184,10 @@ EXTRA_CONFIGS=(
 
 run_kafka_configs() {
   if [[ "$MODE" == "host" ]]; then
-    kafka-configs --bootstrap-server "$HOST_BOOTSTRAP" "$@"
+    kafka-configs --bootstrap-server "$HOST_BOOTSTRAP" --command-config "$HOST_ADMIN_CONFIG" "$@"
   else
-    docker compose exec -T kafka1 kafka-configs --bootstrap-server "$INTERNAL_BOOTSTRAP" "$@"
+    docker compose exec -T kafka1 kafka-configs --bootstrap-server "$INTERNAL_BOOTSTRAP" \
+      --command-config "$CONTAINER_ADMIN_CONFIG" "$@"
   fi
 }
 
@@ -169,7 +206,8 @@ done
 echo
 if [[ "$fail" -eq 0 ]]; then
   echo "All topics present. Verify with:"
-  echo "  docker compose exec kafka1 kafka-topics --bootstrap-server ${INTERNAL_BOOTSTRAP} --list"
+  echo "  docker compose exec kafka1 kafka-topics --bootstrap-server ${INTERNAL_BOOTSTRAP} \\"
+  echo "    --command-config ${CONTAINER_ADMIN_CONFIG} --list"
 else
   echo "One or more topics failed to create - see FAIL lines above." >&2
   exit 1

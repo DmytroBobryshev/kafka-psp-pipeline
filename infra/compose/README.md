@@ -305,6 +305,392 @@ document. `document.id.strategy` is deliberately left at its default,
 new entry for a merchant silently overwrite the previous "audit" document - exactly backwards for
 an audit trail, which wants one row per event, not last-write-wins per merchant.
 
+## M14 - Security: SASL/SCRAM + ACLs
+
+**Authentication is ON.** Every Kafka client in this stack now authenticates with its own
+SASL/SCRAM-SHA-512 principal, and the broker runs `StandardAuthorizer` with
+`allow.everyone.if.no.acl.found=false` - i.e. **deny by default**. A client with no matching ACL
+gets nothing, not even topic metadata.
+
+This is the highest-blast-radius change in the repository: it breaks every client at once if any
+one of them is missed. Read the ROLLBACK section first.
+
+### ROLLBACK - returning this cluster to the unauthenticated M13 state
+
+Do this if anything below cannot be recovered. It is a file revert plus a container recreate;
+**no data is lost** and the topics/schemas/connectors survive.
+
+```bash
+cd /Users/dmytrobobryshev/Documents/Learning/kafka
+
+# 1. Revert every file M14 touched (all are tracked; the working tree was clean before M14).
+git checkout -- \
+  infra/compose/docker-compose.yml \
+  infra/compose/create-topics.sh \
+  infra/compose/akhq/application.yml \
+  infra/compose/.env.example \
+  infra/compose/README.md \
+  services/analytics/src/main/java/com/example/psp/analytics/config/KafkaStreamsConfig.java \
+  services/payment-api/src/main/resources/application-docker-compose.yml \
+  services/psp-connector/src/main/resources/application-docker-compose.yml \
+  services/ledger/src/main/resources/application-docker-compose.yml \
+  services/webhook-notifier/src/main/resources/application-docker-compose.yml \
+  services/analytics/src/main/resources/application-docker-compose.yml \
+  services/realtime-gateway/src/main/resources/application-docker-compose.yml
+
+# 2. New files M14 added - harmless once nothing references them, delete if you want a clean tree.
+rm -rf infra/compose/kafka-init infra/compose/try-forbidden-write.sh
+
+# 3. Rebuild (step 1 reverted one Java file, analytics' KafkaStreamsConfig).
+mvn -q -pl services/analytics -am clean package -DskipTests
+
+# 4. Recreate the containers with the reverted (PLAINTEXT) config.
+cd infra/compose
+docker compose up -d --force-recreate --remove-orphans
+
+# 5. Confirm the cluster is unauthenticated again.
+docker compose exec -T kafka1 kafka-broker-api-versions --bootstrap-server kafka1:9092 | head -1
+./create-topics.sh
+```
+
+Notes on what rollback does **not** need to undo:
+
+- **`infra/compose/.env` is untracked** (it is gitignored), so `git checkout` will not revert it.
+  It does not need reverting: M14 only *adds* variables (`KAFKA_BROKER_USER`, `KAFKA_ADMIN_*`,
+  `*_KAFKA_PASSWORD`). Unused variables in `.env` are inert.
+- **SCRAM credentials and ACLs live in the KRaft metadata log**, not in the broker config. After
+  the revert they are still stored in the cluster, but with `authorizer.class.name` unset and the
+  listeners back on `PLAINTEXT` they are never consulted - they are inert, not harmful. If you
+  want them physically gone, the only supported way is a full reset:
+  `docker compose down -v && docker compose up -d && ./create-topics.sh && ./register-schemas.sh
+  && ./register-connector.sh` - which also wipes every topic, so prefer leaving them.
+- **The six Spring services** pick up their reverted `application-docker-compose.yml` on the next
+  restart. Nothing else about them changes.
+
+If a *partial* rollback is ever needed - keep SASL, drop enforcement - set
+`KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "true"` on the three brokers and recreate them. Clients
+still have to authenticate, but every authenticated principal is then allowed everything. That is
+the fastest way to prove "this is an ACL problem, not an authentication problem" without
+unwinding the whole module.
+
+### The listener map
+
+Four listeners per broker, one per audience. `advertised.listeners` mistakes here look exactly
+like the M2 failure at the top of `docker-compose.yml` - see "Failure modes" below for how to tell
+them apart from an authorization failure.
+
+| Listener | Container port | Host port | Security protocol | SASL mechanism | Who dials it |
+|---|---|---|---|---|---|
+| `INTERNAL` | 9092 | *not published* | `SASL_PLAINTEXT` | `SCRAM-SHA-512` | Clients **inside** `kafka-psp-net`: schema-registry, kafka-connect, akhq, kafka-exporter. Advertised as `kafka1:9092` etc. |
+| `EXTERNAL` | 29092 | 29092/29093/29094 | `SASL_PLAINTEXT` | `SCRAM-SHA-512` | Clients on **your laptop**: the six Spring services, `kcat`, host CLI. Advertised as `localhost:<mapped host port>` - one port per broker, unchanged from M2. |
+| `BROKER` | 9094 | *not published* | `SASL_PLAINTEXT` | `PLAIN` | **Inter-broker replication only** (`inter.broker.listener.name=BROKER`), plus the one-time SCRAM/ACL bootstrap channel used by the `kafka-init` container and by the brokers' own healthcheck. |
+| `CONTROLLER` | 9093 | *not published* | `SASL_PLAINTEXT` | `PLAIN` | KRaft controller quorum. Never advertised to clients. |
+
+**Why `PLAIN` on the two internal listeners and `SCRAM` on the two client listeners.** SCRAM
+credentials are stored *in the cluster metadata*, which is a chicken-and-egg problem for anything
+the cluster needs in order to start: a broker cannot read the SCRAM credential it would use to
+authenticate to the controller quorum before the quorum exists. `PLAIN` credentials come from the
+broker's own config file, so they are available at process start. The `broker` principal is
+therefore a `PLAIN` user defined in the broker config (`KAFKA_BROKER_USER` /
+`KAFKA_BROKER_PASSWORD` in `.env`) and listed in `super.users`; every *client* principal is SCRAM
+and created after the cluster is up.
+
+**What this costs (be honest about it):** anything that can reach `kafka1:9094` on the Docker
+network and knows `KAFKA_BROKER_PASSWORD` is a cluster superuser. That port is not published to
+the host, and the password is a real password rather than "no password at all" (which is what
+using `PLAINTEXT` for inter-broker traffic - the other common shortcut - would have meant, since
+its principal would be `User:ANONYMOUS` and `ANONYMOUS` would have had to be a superuser). On
+Kubernetes (M18) Strimzi replaces this with mutual TLS between brokers, which is the real answer.
+
+### Principals
+
+Twelve principals. Eleven are SCRAM-SHA-512 users created by `kafka-init` (verify with
+`kafka-configs --describe --entity-type users`); `broker` is the PLAIN user in the broker config
+and never appears there, because its credential is not stored in the cluster. Passwords are in `infra/compose/.env` (gitignored), never in a
+committed file and never as a literal in `docker-compose.yml`.
+
+| Principal | Mechanism | `.env` password variable | Used by |
+|---|---|---|---|
+| `broker` | PLAIN | `KAFKA_BROKER_PASSWORD` | the brokers themselves (inter-broker + controller). **superuser** |
+| `admin` | SCRAM-SHA-512 | `KAFKA_ADMIN_PASSWORD` | `create-topics.sh`, `kafka-init`, any operator CLI. **superuser** |
+| `payment-api` | SCRAM-SHA-512 | `PAYMENT_API_KAFKA_PASSWORD` | payment-api (:8085) |
+| `psp-connector` | SCRAM-SHA-512 | `PSP_CONNECTOR_KAFKA_PASSWORD` | psp-connector (:8086) |
+| `ledger` | SCRAM-SHA-512 | `LEDGER_KAFKA_PASSWORD` | ledger (:8087) |
+| `webhook-notifier` | SCRAM-SHA-512 | `WEBHOOK_NOTIFIER_KAFKA_PASSWORD` | webhook-notifier (:8088) |
+| `analytics` | SCRAM-SHA-512 | `ANALYTICS_KAFKA_PASSWORD` | analytics (:8089) - Kafka Streams |
+| `realtime-gateway` | SCRAM-SHA-512 | `REALTIME_GATEWAY_KAFKA_PASSWORD` | realtime-gateway (:8090) |
+| `connect` | SCRAM-SHA-512 | `CONNECT_KAFKA_PASSWORD` | the Kafka Connect worker + both connectors |
+| `schema-registry` | SCRAM-SHA-512 | `SCHEMA_REGISTRY_KAFKA_PASSWORD` | Schema Registry's `_schemas` store |
+| `akhq` | SCRAM-SHA-512 | `AKHQ_KAFKA_PASSWORD` | AKHQ UI |
+| `kafka-exporter` | SCRAM-SHA-512 | `KAFKA_EXPORTER_KAFKA_PASSWORD` | kafka-exporter → Prometheus |
+
+`super.users=User:broker;User:admin` (note the **semicolon** separator - a comma silently produces
+one nonsense principal named `User:broker,User:admin` and *both* superusers stop working).
+
+### The ACL matrix
+
+This table is `infra/compose/kafka-init/init-security.sh` in prose - that script is the
+executable source of truth and is derived directly from `docs/diagrams/topic-map.md`. `L` = literal
+resource, `P` = prefixed resource.
+
+| Principal | Topic (read) | Topic (write) | Group | Other |
+|---|---|---|---|---|
+| `payment-api` | `psp.provider-status-reply.v1` (L) | `merchants.merchant-config-changed.v1` (L), `psp.provider-status-query.v1` (L), `payments.payment-requested.v1` (L), `refunds.refund-requested.v1` (L) | `payment-api.replies.` (P) | - |
+| `psp-connector` | `payments.payment-requested.v1` (L), `refunds.funds-reserved.v1` (L), `psp.provider-status-query.v1` (L) | `payments.payment-status-changed.v1` (L), `refunds.refund-completed.v1` (L), `refunds.refund-failed.v1` (L), `psp.provider-status-reply.v1` (L), `payments.payment-requested.v1.psp-connector.dlq` (L) | `psp-connector` (P) | - |
+| `ledger` | `payments.payment-status-changed.v1` (L), `refunds.refund-requested.v1` (L), `refunds.refund-completed.v1` (L), `refunds.refund-failed.v1` (L) | `ledger.ledger-entry-recorded.v1` (L), `refunds.funds-reserved.v1` (L), `refunds.refund-failed.v1` (L), `refunds.reservation-released.v1` (L), `payments.payment-status-changed.v1.ledger.dlq` (L) | `ledger.v1` (P) | **TransactionalId `ledger-tx-` (P): Describe, Write** |
+| `webhook-notifier` | `payments.payment-status-changed.v1` (L), `refunds.refund-completed.v1` (L), `refunds.refund-failed.v1` (L), `webhooks.webhook-delivery-requested.v2` (P) | `webhooks.webhook-delivery-requested.v2` (P) | `webhook-notifier.` (P) | - |
+| `analytics` | `payments.payment-status-changed.v1` (L), `payments.payment-requested.v1` (L), `merchants.merchant-config-changed.v1` (L) | `analytics-streams.v1` (P) | `analytics-streams.v1` (P), `analytics.status-audit-batch.v1` (P) | **Topic `analytics-streams.v1` (P): All** (Streams creates/deletes its own internal topics - see the gotcha below). Cluster: Describe |
+| `realtime-gateway` | `payments.payment-requested.v1` (L), `payments.payment-status-changed.v1` (L), `refunds.` (P) | - | `realtime-gateway.` (P) | - |
+| `connect` | `connect.` (P), `ledger.ledger-entry-recorded.v1` (P - covers the sink's own DLQ) | `connect.` (P), `payments.payment-requested.v1` (L), `refunds.refund-requested.v1` (L), `ledger.ledger-entry-recorded.v1` (P) | `kafka-connect-psp` (P), `connect-mongo-audit-sink` (P) | Topic `connect.` (P): Create + DescribeConfigs. Cluster: Describe. **Needs its SASL config set four times over** - see failure mode 4 |
+| `schema-registry` | `_schemas` (L) | `_schemas` (L) | `schema-registry` (P) | Topic `_schemas` (L): Create, DescribeConfigs. Cluster: Describe, DescribeConfigs |
+| `akhq` | `*` (L) | - | `*` (L) | Topic `*`: Describe + DescribeConfigs. Group `*`: Describe. Cluster: Describe + DescribeConfigs. **Read-only by construction: AKHQ cannot produce.** |
+| `kafka-exporter` | - | - | - | Topic `*`: Describe. Group `*`: Describe. Cluster: Describe. **Metadata only - it can see lag, never a message body.** |
+| `broker`, `admin` | superusers - no ACLs stored | | | |
+
+Every `Read` grant above also carries `Describe` (Kafka implies `Describe` from `Read`/`Write`,
+but `kafka-acls --add --operation Read` is explicit here so the stored ACLs are self-documenting).
+
+Three entries are worth calling out because they are not obvious from the topic map:
+
+1. **`payment-api` is granted Write on `payments.payment-requested.v1` even though it does not
+   produce to it at runtime.** Since M6 that topic is fed by the outbox → Debezium → Connect path,
+   so the principal that actually writes it is `connect`. The grant exists because `docs/PLAN.md`'s
+   M14 line is specifically "payment-api may write `payments.requested` but not `ledger.entries` -
+   prove it by trying", and the proof is only meaningful if the *allowed* half is genuinely
+   allowed. See "ACL denial proof" below.
+2. **Kafka Streams needs `Create` on its own internal topics - this is the classic ACL gotcha.**
+   `analytics` builds `analytics-streams.v1-merchant-metrics-1m-changelog` (and, from M11/M13, the
+   saga changelog and repartition topics) through its embedded AdminClient at startup. With
+   deny-by-default and no `Create`, the topology does not fail with a clean authorization error at
+   the point of use - `KafkaStreams` goes to `ERROR` during `StreamThread` startup with a
+   `TopicAuthorizationException` wrapped in a `StreamsException`, which reads like a topology bug.
+   The grant is a **prefixed** ACL on `analytics-streams.v1`, not a cluster-wide `Create`: Kafka
+   authorizes `CreateTopics` against the `Topic` resource being created and only falls back to a
+   `Cluster`-level `Create`, so a prefixed topic ACL is enough and is genuinely least-privilege.
+   `All` on that prefix (rather than an enumerated list) is deliberate: the internal topic *names*
+   are derived by Streams and change as the topology grows, so enumerating them would be a
+   maintenance trap - but the prefix is this application's own namespace, so `All` on it grants
+   nothing outside it.
+3. **Connect needs its three internal topics *and* every connector's topics under one principal.**
+   `connect.configs` / `connect.offsets` / `connect.status` are created by the worker itself
+   (`auto.create.topics.enable=false` does not apply - the worker uses the AdminClient), which is
+   why `connect` has `Create` on the `connect.` prefix. On top of that the worker's principal is
+   also the principal for both connectors: Debezium's source produces to
+   `payments.payment-requested.v1` / `refunds.refund-requested.v1`, and `mongo-audit-sink` consumes
+   `ledger.ledger-entry-recorded.v1` in group `connect-mongo-audit-sink` and produces its own DLQ.
+   One worker = one principal; per-connector principals need `connector.client.config.override`
+   policies and are a Strimzi-era refinement (M18).
+
+### TLS - not enabled. What it would add, and how to turn it on
+
+**Status: SASL + ACLs are implemented; TLS is NOT.** Traffic on all four listeners is
+`SASL_PLAINTEXT`: authenticated and authorized, but not encrypted. This was the module's
+explicitly lowest-priority item and it was left out deliberately rather than half-done, because
+enabling it touches every one of the twelve clients at once (each needs a truststore) and a
+partly-migrated TLS rollout is exactly the "silently broken stack" failure this module is supposed
+to avoid.
+
+What it would add, concretely, over what is already in place:
+
+- **Confidentiality on the wire.** Right now a `tcpdump` on the Docker bridge shows message
+  payloads in clear text, and - more importantly - shows the SCRAM handshake. SCRAM never sends
+  the password itself (it is a challenge-response over a salted, iterated hash), so a passive
+  observer cannot lift a credential; but the payloads, keys, and headers are all readable.
+- **Server authentication.** Today a client trusts whatever answers on `localhost:29092`. With
+  TLS the broker presents a certificate signed by a CA the client already trusts, which is what
+  stops a man-in-the-middle from impersonating a broker and harvesting SCRAM handshakes for an
+  offline dictionary attack.
+- It would **not** add authorization or per-client identity - that is what SASL + ACLs above
+  already do. (mTLS *would* replace SASL as the identity mechanism, with the principal taken from
+  the client certificate's DN; that is the Strimzi/M18 shape, not this one.)
+
+To enable it here:
+
+1. Generate a CA and one keystore per broker (SAN must list *both* names each broker is reachable
+   under - `kafka1` and `localhost` - or host clients fail hostname verification while in-network
+   clients succeed, which looks like a broker-specific outage):
+   `keytool -genkeypair -alias kafka1 -keyalg RSA -keystore kafka1.keystore.jks -ext
+   "SAN=DNS:kafka1,DNS:localhost,IP:127.0.0.1"`, sign the CSR with the CA, import CA + signed cert
+   back into the keystore, and build one shared `truststore.jks` containing only the CA.
+2. Flip the two client listeners to `SASL_SSL` in `KAFKA_LISTENER_SECURITY_PROTOCOL_MAP`
+   (`INTERNAL:SASL_SSL,EXTERNAL:SASL_SSL`; leave `BROKER`/`CONTROLLER` on `SASL_PLAINTEXT` unless
+   you also want encrypted replication) and add
+   `KAFKA_SSL_KEYSTORE_FILENAME` / `KAFKA_SSL_KEYSTORE_CREDENTIALS` / `KAFKA_SSL_KEY_CREDENTIALS` /
+   `KAFKA_SSL_TRUSTSTORE_FILENAME` / `KAFKA_SSL_TRUSTSTORE_CREDENTIALS` per broker, with the
+   keystores mounted at `/etc/kafka/secrets`.
+3. Every client changes `security.protocol` from `SASL_PLAINTEXT` to `SASL_SSL` and gains
+   `ssl.truststore.location` + `ssl.truststore.password`: the six Spring services (in each
+   `application-docker-compose.yml`, pointing at a host path), Connect (`CONNECT_SECURITY_PROTOCOL`
+   + `CONNECT_SSL_TRUSTSTORE_LOCATION`), Schema Registry (`SCHEMA_REGISTRY_KAFKASTORE_*`), AKHQ
+   (`AKHQ_CONNECTIONS_..._PROPERTIES_SSL_TRUSTSTORE_LOCATION`), kafka-exporter (`--tls.enabled
+   --tls.ca-file`), and `create-topics.sh` / `try-forbidden-write.sh`'s generated client
+   properties.
+4. The brokers' healthcheck and `kafka-init` keep working unchanged if `BROKER` stays
+   `SASL_PLAINTEXT`; if it does not, they need the truststore too.
+
+### ACL denial proof
+
+`infra/compose/try-forbidden-write.sh` is the harness. It authenticates as **`payment-api`** and
+makes two writes: one the ACLs allow, one they forbid.
+
+```bash
+cd infra/compose
+./try-forbidden-write.sh                  # both halves
+./try-forbidden-write.sh --forbidden-only # denial only; writes nothing to any topic
+```
+
+`--forbidden-only` exists because the allowed half writes a raw string to an Avro topic, which is
+a poison pill for psp-connector / analytics / realtime-gateway's deserializers. They route it to
+their error handlers and carry on (that is what M8's error handling is for), but the denial half
+alone is side-effect-free and is the right thing to run repeatedly.
+
+The script decides on the CLI's **output**, never its exit code - see failure mode 5 below for why
+that distinction is load-bearing.
+
+Or, as a single command with no script (this is the exact thing the script runs for the forbidden
+half - `payment-api`'s own credentials, a topic only `ledger` may write):
+
+```bash
+cd infra/compose
+set -a; . ./.env; set +a
+docker compose exec -T \
+  -e P="org.apache.kafka.common.security.scram.ScramLoginModule required username=\"payment-api\" password=\"${PAYMENT_API_KAFKA_PASSWORD}\";" \
+  kafka1 bash -c 'printf "security.protocol=SASL_PLAINTEXT\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=%s\n" "$P" > /tmp/payment-api.properties
+  echo "forbidden" | kafka-console-producer --bootstrap-server kafka1:9092 \
+    --producer.config /tmp/payment-api.properties \
+    --topic ledger.ledger-entry-recorded.v1'
+```
+
+#### Measured result
+
+Run against the live cluster with the authorizer on and `allow.everyone.if.no.acl.found=false`:
+
+```
+=== 1/2  ALLOWED: User:payment-api -> payments.payment-requested.v1 ===
+  PASS  write accepted, no error
+
+=== 2/2  FORBIDDEN: User:payment-api -> ledger.ledger-entry-recorded.v1 ===
+  PASS  refused by the authorizer:
+        org.apache.kafka.common.errors.TopicAuthorizationException:
+        Not authorized to access topics: [ledger.ledger-entry-recorded.v1]
+
+ACL denial proof: PASS
+```
+
+**Read the error text closely: "Not authorized to access topics", not "not authorized to write".**
+Under deny-by-default the principal is refused at *metadata* fetch, before any produce is
+attempted. To `payment-api`, `ledger.ledger-entry-recorded.v1` does not exist - it cannot discover
+its partitions, its leaders, or that it is there at all. That is a stronger property than a
+rejected write, and it is the difference between an ACL matrix that is a document and one that is a
+control.
+
+Verified alongside it, so the grant is not vacuous: with authentication on and all 119 bindings in
+place, a real payment still crossed the whole system - payment-api to outbox to Debezium to
+psp-connector (`APPROVED`) to ledger (`balance=50.0000`, via its transactional producer, the only
+principal holding a `TransactionalId` grant). Both halves matter. A cluster where everything is
+forbidden passes the denial half and is useless.
+
+Expected: the allowed write returns cleanly, and the forbidden write fails with
+`TopicAuthorizationException: Not authorized to access topics:
+[ledger.ledger-entry-recorded.v1]`. Note the producer does not even get *metadata* for that
+topic - deny-by-default means the topic is invisible, not merely unwritable.
+
+<!-- ORCHESTRATOR: replace this block with the captured run. -->
+
+**(placeholder - to be filled by the orchestrator's formal run)**
+
+### Failure modes - telling them apart
+
+The three failures below all present as "my client cannot talk to Kafka", and two of them are easy
+to mistake for each other. This is the section to read first when something breaks.
+
+| Symptom in the client log | What it actually is | Fix |
+|---|---|---|
+| `TopicAuthorizationException: Not authorized to access topics: [X]` / `GroupAuthorizationException: Not authorized to access group: G` | **Authorization.** The client authenticated fine; its principal has no matching ACL. Deny-by-default means a *missing* ACL and a *deliberately denied* one look identical. | Add the ACL in `kafka-init/init-security.sh`, re-run it (`docker compose up kafka-init`), and add the row to the matrix above. Confirm with `kafka-acls --list --principal User:X`. |
+| `SaslAuthenticationException: Authentication failed: Invalid username or password` (client) + `Authentication failed during authentication due to invalid credentials with SASL mechanism SCRAM-SHA-512` (broker) | **Authentication.** Wrong password, or the SCRAM credential was never created (e.g. `kafka-init` did not run, or the volumes were wiped by `down -v` without re-running it). | `docker compose up kafka-init`, then check `kafka-configs --describe --entity-type users`. |
+| Client hangs, then `TimeoutException: Topic ... not present in metadata after 60000 ms`, with **no** authentication or authorization error at all, and the broker log shows no failed-auth line | **`advertised.listeners` / listener-map** - the M2 failure, not a security failure. The client reached a broker, got back an address it cannot resolve (e.g. a host client handed `kafka1:9092`), and is now retrying a dead address. | Check `KAFKA_ADVERTISED_LISTENERS`: `INTERNAL://kafkaN:9092` for in-network clients, `EXTERNAL://localhost:<that broker's own host port>` for host clients. Confirm with `docker compose exec kafka1 grep advertised /etc/kafka/kafka.properties`. |
+
+The discriminator between the first two and the third: **a security failure is loud and fast, a
+listener failure is silent and slow.** SASL and ACL failures name the principal, the topic or the
+group, and arrive within a second. A listener misconfiguration produces a timeout after the full
+`max.block.ms` with nothing in the broker log, because from the broker's point of view nothing
+went wrong - it answered a metadata request correctly and the client simply never came back.
+
+Two more, both found the hard way while verifying this module, both of which present as **nothing
+is wrong** rather than as an error:
+
+**4. Kafka Connect reports every connector RUNNING and moves zero records.** Setting only the
+worker-level `CONNECT_SECURITY_PROTOCOL` / `CONNECT_SASL_MECHANISM` / `CONNECT_SASL_JAAS_CONFIG`
+authenticates the worker's own clients (the `KafkaBasedLog`s behind `connect.configs` /
+`connect.offsets` / `connect.status`) and nothing else. The producers, consumers and admin clients
+Connect builds **on behalf of a connector** are assembled from `producer.` / `consumer.` /
+`admin.`-prefixed worker properties only - top-level worker settings are not copied into them. The
+worker therefore starts cleanly, its REST API answers, and
+`GET /connectors/payment-outbox-connector/status` reports `RUNNING`/`RUNNING` (that status is read
+out of `connect.status`, which the worker *can* reach) while Debezium's producer never connects.
+The only evidence is:
+
+```
+WARN [Producer clientId=connector-producer-payment-outbox-connector-0]
+     Bootstrap broker kafka1:9092 (id: -1 rack: null) disconnected     # Connect log
+INFO Failed authentication with /172.23.0.8 (Unexpected Kafka request of type METADATA
+     during SASL handshake.)                                          # broker log
+```
+
+Note that neither line contains the word "authentication" on the Connect side. Fix: also set
+`CONNECT_PRODUCER_*`, `CONNECT_CONSUMER_*` and `CONNECT_ADMIN_*` - all four groups are in
+`docker-compose.yml`. Check with
+`docker compose exec kafka-connect grep -E '^(producer|consumer|admin)\.sasl' /kafka/config/connect-distributed.properties`
+(expect 6 lines), and confirm the data path with the audit sink:
+`docker compose exec mongodb mongosh ... --eval 'db.audit_trail.countDocuments({})'` must grow.
+
+**5. `kafka-console-producer` exits 0 after the broker rejected every record.** The send is
+asynchronous; the failure is handed to `ErrorLoggingCallback`, which logs it and returns. It never
+reaches the process exit status. So this reports success:
+
+```bash
+if echo x | kafka-console-producer --topic ledger.ledger-entry-recorded.v1 ...; then echo "wrote"; fi
+```
+
+even while the same command prints
+`TopicAuthorizationException: Not authorized to access topics: [...]`. `try-forbidden-write.sh`
+therefore decides on the CLI's **output**, never on its exit code - and the first version of that
+script, which trusted the exit code, reported "the forbidden write SUCCEEDED. Authorization is not
+being enforced" against a cluster that was enforcing correctly. A false negative on the one thing
+the script exists to check.
+
+A rarer one: **the broker itself will not start**, with
+`Could not find a 'KafkaServer' or '<listener>.KafkaServer' entry in the JAAS configuration`. That
+is the per-listener JAAS property name being wrong, and it is worth knowing why the names look the
+way they do. `cp-kafka` turns environment variables into `kafka.properties` keys by lowercasing and
+then replacing `___` → `-`, `__` → `_`, `_` → `.`, **in that order**. So the property
+`listener.name.internal.scram-sha-512.sasl.jaas.config` has to be written
+`KAFKA_LISTENER_NAME_INTERNAL_SCRAM___SHA___512_SASL_JAAS_CONFIG` - three underscores where the
+mechanism name has hyphens. Verify what the broker actually received with
+`docker compose exec kafka1 grep -E 'jaas|sasl|listener' /etc/kafka/kafka.properties`.
+
+### Running the stack and the services with authentication on
+
+`docker compose up -d` now brings up a **`kafka-init`** one-shot container between the brokers and
+everything else. It waits for the brokers, creates the eleven SCRAM credentials, applies every ACL
+(119 stored bindings as of this module), and exits 0; schema-registry, kafka-connect, akhq and kafka-exporter all `depends_on` it with
+`condition: service_completed_successfully`, so they cannot start before their credentials exist.
+It is idempotent - re-run it any time with `docker compose up kafka-init`.
+
+The six Spring services read their Kafka password from an environment variable (the *username* is
+in the committed `application-docker-compose.yml`, since it is not a secret; the password is not).
+Source `.env` once per shell before starting any of them:
+
+```bash
+set -a; . infra/compose/.env; set +a
+SPRING_PROFILES_ACTIVE=docker-compose mvn -pl services/payment-api -am spring-boot:run
+```
+
+If you forget, Spring fails fast at startup with
+`Could not resolve placeholder 'PAYMENT_API_KAFKA_PASSWORD'` - a deliberate choice over a default
+value, because a service that silently starts with the wrong credential looks like an ACL problem
+and wastes an hour.
+
 ## Persistence
 
 One Postgres container, one Mongo container - each hosting **separate logical
@@ -326,10 +712,22 @@ to another service's database (`permission denied for database`).
 
 ```bash
 cd infra/compose
-docker compose up -d
+docker compose up -d              # M14: brings up kafka-init between the brokers and everything
+                                  #      else; it creates the SCRAM users + ACLs, then exits 0
 docker compose ps                 # wait for every service to show "healthy"
-./create-topics.sh                # idempotent - safe to re-run
-./register-connector.sh           # M6 - idempotent - safe to re-run
+docker compose ps -a | grep kafka-init   # must read "Exited (0)" - anything else and no client
+                                         # has credentials; see the M14 section
+./create-topics.sh                # idempotent - safe to re-run (runs as the `admin` SCRAM user)
+./register-schemas.sh             # M9 - idempotent - safe to re-run
+./register-connector.sh           # M6/M13 - idempotent - safe to re-run
+```
+
+The six Spring services need their Kafka password in the environment as of M14 - source `.env`
+once per shell before starting any of them (full explanation in the M14 section):
+
+```bash
+set -a; . infra/compose/.env; set +a
+SPRING_PROFILES_ACTIVE=docker-compose mvn -pl services/payment-api -am spring-boot:run
 ```
 
 Endpoints (see `.env` to change ports):
@@ -650,6 +1048,29 @@ user can only connect to its own database.
   holds every pre-M9 JSON record the sink could not convert (714, measured), with no consumer,
   no UI, and no cleanup job - the same shape of gap M8's `.v1.dlq` already has for webhook
   deliveries, just for a topic this module is new to.
+- **(M14) TLS is not enabled.** All four listeners are `SASL_PLAINTEXT`: authenticated and
+  authorized, not encrypted. This was the module's lowest-priority item and was left out
+  deliberately rather than half-applied - see "TLS - not enabled" above for exactly what it would
+  add and the steps to turn it on.
+- **(M14) The inter-broker and controller listeners use SASL/PLAIN with a single shared `broker`
+  superuser.** Anything that can reach `kafka1:9094` on the Docker network *and* knows
+  `KAFKA_BROKER_PASSWORD` bypasses every ACL. Neither port is published to the host. The
+  alternative shortcut - `PLAINTEXT` for inter-broker traffic - would have been strictly worse
+  (its principal is `User:ANONYMOUS`, which then has to be a superuser, i.e. no password at all).
+  Strimzi's mutual TLS between brokers is the real answer and lands with M18.
+- **(M14) `payment-api` holds a `Write` ACL on `payments.payment-requested.v1` that it does not
+  use at runtime** - since M6 that topic is written by `User:connect` via the outbox. The grant
+  exists so the "allowed" half of the denial proof is genuinely allowed. It is the one entry in
+  the ACL matrix that is not derived from observed traffic, and it is called out again in the
+  matrix itself so it cannot quietly become the norm.
+- **(M14) Credentials live in `infra/compose/.env` in plain text** (gitignored, never committed).
+  That is the right shape for compose and the wrong shape for anything else; on Kubernetes they
+  become Secrets, and `KafkaUser` CRs generate the SCRAM credentials rather than a shell script
+  creating them.
+- **(M14) The ACL matrix is applied by a shell script, not declared.** `kafka-init` only ever
+  `--add`s, so an ACL removed from `init-security.sh` stays in the cluster until someone runs
+  `kafka-acls --remove` by hand or resets the volumes. Strimzi `KafkaUser` CRs (M18) are
+  declarative and reconcile deletions; this script cannot.
 - A **`kind` cluster (`kafka-psp`, 3 nodes)** is already running on this machine from the M1/0.3
   toolchain setup and was left untouched per instructions; it costs some RAM/CPU alongside this
   compose stack. On a memory-constrained laptop, `kind delete cluster` (not run here) would free

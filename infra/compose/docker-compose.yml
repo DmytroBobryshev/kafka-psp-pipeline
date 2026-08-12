@@ -7,18 +7,35 @@
 # ============================================================================================
 # THE #1 MISCONFIGURATION: KAFKA_ADVERTISED_LISTENERS (read this before touching listener config)
 # ============================================================================================
-# Every broker below opens THREE listeners:
+# Every broker below opens FOUR listeners (M14 added BROKER and moved authentication onto
+# INTERNAL/EXTERNAL - see README.md's "M14 - Security" section for the full listener map,
+# principal list, ACL matrix and ROLLBACK procedure):
 #
-#   PLAINTEXT  (container port 9092)  - for clients running INSIDE this compose network
-#                                        (schema-registry, akhq, kafka-exporter, other services
-#                                        in later modules). Advertised as the container's
-#                                        Compose-DNS hostname, e.g. `kafka1:9092` - only
-#                                        resolvable *inside* the `kafka-psp-net` network.
+#   INTERNAL   (container port 9092)  - for clients running INSIDE this compose network
+#                                        (schema-registry, kafka-connect, akhq, kafka-exporter).
+#                                        Advertised as the container's Compose-DNS hostname,
+#                                        e.g. `kafka1:9092` - only resolvable *inside* the
+#                                        `kafka-psp-net` network. SASL_PLAINTEXT/SCRAM-SHA-512
+#                                        as of M14 (was PLAINTEXT, and was named PLAINTEXT).
 #   CONTROLLER (container port 9093)  - KRaft controller-quorum traffic ONLY (broker-to-broker
 #                                        metadata replication). Never advertised to clients.
-#   EXTERNAL   (container port 29092) - for clients running on YOUR LAPTOP (kafka CLI, kcat,
-#                                        this README's produce/consume commands). Advertised as
+#                                        SASL_PLAINTEXT/PLAIN as of M14.
+#   BROKER     (container port 9094)  - M14. Inter-broker replication ONLY
+#                                        (`inter.broker.listener.name`), plus the bootstrap
+#                                        channel kafka-init and the healthcheck use before any
+#                                        SCRAM credential exists. SASL_PLAINTEXT/PLAIN. Not
+#                                        published to the host.
+#   EXTERNAL   (container port 29092) - for clients running on YOUR LAPTOP (the six Spring
+#                                        services, kafka CLI, kcat, this README's
+#                                        produce/consume commands). Advertised as
 #                                        `localhost:<mapped-host-port>`.
+#                                        SASL_PLAINTEXT/SCRAM-SHA-512 as of M14.
+#
+# Why PLAIN on the two broker-internal listeners and SCRAM on the two client listeners: SCRAM
+# credentials are stored IN the cluster metadata log, so a broker cannot read the credential it
+# would need in order to join the quorum that stores it. PLAIN credentials come from the broker's
+# own config file and are therefore available at process start. The `broker` principal is a
+# superuser; every client principal is SCRAM and is created by kafka-init after the cluster is up.
 #
 # Why three, and why does this matter: a Kafka client's first connection is to any broker in
 # `bootstrap.servers`; that broker then hands back its FULL advertised.listeners metadata for
@@ -52,14 +69,60 @@ volumes:
   prometheus-data:
   grafana-data:
 
+# ==============================================================================================
+# M14 - client properties files, rendered at `docker compose up` time from .env.
+#
+# `configs:` with inline `content:` (Compose Spec, docker compose >= 2.23) rather than a file
+# committed under infra/compose/: these hold real credentials, so they must never exist on disk
+# in the repository. Compose interpolates ${...} from .env and mounts the result read-only into
+# whichever containers declare it. This is what lets `docker compose exec kafka1 kafka-topics
+# --command-config ...` keep working now that the CLI has to authenticate.
+# ==============================================================================================
+configs:
+  # The SASL/PLAIN broker superuser. Used by the brokers' own healthcheck and by kafka-init,
+  # because both must work BEFORE any SCRAM credential exists in the cluster metadata.
+  kafka-broker-admin-client:
+    content: |
+      security.protocol=SASL_PLAINTEXT
+      sasl.mechanism=PLAIN
+      sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${KAFKA_BROKER_USER}" password="${KAFKA_BROKER_PASSWORD}";
+  # The SCRAM superuser for operator CLI work (create-topics.sh). Goes over the same
+  # SASL/SCRAM-SHA-512 client listener every application uses - i.e. it exercises the real
+  # authentication path rather than the brokers' private one.
+  kafka-admin-client:
+    content: |
+      security.protocol=SASL_PLAINTEXT
+      sasl.mechanism=SCRAM-SHA-512
+      sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="${KAFKA_ADMIN_USER}" password="${KAFKA_ADMIN_PASSWORD}";
+  # AKHQ's credential. Merged with the committed, secret-free akhq/application.yml through
+  # MICRONAUT_CONFIG_FILES - see the akhq service below for why not environment variables.
+  akhq-security:
+    content: |
+      akhq:
+        connections:
+          kafka-psp-compose:
+            properties:
+              security.protocol: SASL_PLAINTEXT
+              sasl.mechanism: SCRAM-SHA-512
+              sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="akhq" password="${AKHQ_KAFKA_PASSWORD}";'
+
 x-kafka-common: &kafka-common
   image: ${KAFKA_IMAGE}:${KAFKA_VERSION}
   networks: [kafka-psp-net]
   restart: unless-stopped
+  configs:
+    - source: kafka-broker-admin-client
+      target: /etc/kafka/secrets/broker-admin.properties
+    - source: kafka-admin-client
+      target: /etc/kafka/secrets/admin.properties
   healthcheck:
-    # Talks to the broker's OWN internal listener from inside its own container - proves the
+    # Talks to the broker's OWN inter-broker listener from inside its own container - proves the
     # broker process is actually serving the Kafka protocol, not just that the port is open.
-    test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1 || exit 1"]
+    # M14: this moved from 9092 to 9094 and gained --command-config. It deliberately does NOT use
+    # the SCRAM listener: the healthcheck has to pass before kafka-init can create any SCRAM
+    # credential, and kafka-init cannot run until the brokers are healthy. Pointing it at the
+    # SCRAM listener is a deadlock, and it looks like a broker that never starts.
+    test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9094 --command-config /etc/kafka/secrets/broker-admin.properties > /dev/null 2>&1 || exit 1"]
     interval: 10s
     timeout: 10s
     retries: 15
@@ -69,8 +132,48 @@ x-kafka-common: &kafka-common
     KAFKA_PROCESS_ROLES: broker,controller
     KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
     KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-    KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+    KAFKA_INTER_BROKER_LISTENER_NAME: BROKER
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:SASL_PLAINTEXT,CONTROLLER:SASL_PLAINTEXT,BROKER:SASL_PLAINTEXT,EXTERNAL:SASL_PLAINTEXT
+    # ---- M14: SASL ---------------------------------------------------------------------------
+    # Broker-wide union of the mechanisms any listener may offer; the per-listener overrides
+    # below are what actually decide, and they are deliberately narrow (a client on EXTERNAL
+    # cannot fall back to PLAIN and log in as the broker superuser).
+    KAFKA_SASL_ENABLED_MECHANISMS: PLAIN,SCRAM-SHA-512
+    KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: PLAIN
+    KAFKA_SASL_MECHANISM_CONTROLLER_PROTOCOL: PLAIN
+    KAFKA_LISTENER_NAME_BROKER_SASL_ENABLED_MECHANISMS: PLAIN
+    KAFKA_LISTENER_NAME_CONTROLLER_SASL_ENABLED_MECHANISMS: PLAIN
+    KAFKA_LISTENER_NAME_INTERNAL_SASL_ENABLED_MECHANISMS: SCRAM-SHA-512
+    KAFKA_LISTENER_NAME_EXTERNAL_SASL_ENABLED_MECHANISMS: SCRAM-SHA-512
+    # The PLAIN JAAS entry is used in BOTH directions on these two listeners: `username`/
+    # `password` are what this broker PRESENTS when it dials another broker or a controller,
+    # `user_<name>=<password>` is the map of credentials it ACCEPTS. Both halves are required.
+    KAFKA_LISTENER_NAME_BROKER_PLAIN_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="${KAFKA_BROKER_USER}" password="${KAFKA_BROKER_PASSWORD}" user_${KAFKA_BROKER_USER}="${KAFKA_BROKER_PASSWORD}";'
+    KAFKA_LISTENER_NAME_CONTROLLER_PLAIN_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="${KAFKA_BROKER_USER}" password="${KAFKA_BROKER_PASSWORD}" user_${KAFKA_BROKER_USER}="${KAFKA_BROKER_PASSWORD}";'
+    # The SCRAM JAAS entries carry no credentials at all - the broker looks every SCRAM user up
+    # in the cluster metadata. They still have to be present: without a JAAS context for the
+    # listener the broker refuses to start with "Could not find a 'KafkaServer' or
+    # '<listener>.KafkaServer' entry in the JAAS configuration".
+    #
+    # The THREE underscores are not a typo. cp-kafka builds kafka.properties from KAFKA_* env
+    # vars by lowercasing and then replacing '___'->'-', '__'->'_', '_'->'.', in that order - so
+    # SCRAM___SHA___512 is the only way to write the property key
+    # listener.name.internal.scram-sha-512.sasl.jaas.config. Verify with:
+    #   docker compose exec kafka1 grep jaas /etc/kafka/kafka.properties
+    KAFKA_LISTENER_NAME_INTERNAL_SCRAM___SHA___512_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.scram.ScramLoginModule required;'
+    KAFKA_LISTENER_NAME_EXTERNAL_SCRAM___SHA___512_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.scram.ScramLoginModule required;'
+    # ---- M14: authorization ------------------------------------------------------------------
+    # KRaft's own authorizer (NOT kafka.security.authorizer.AclAuthorizer, which is the ZooKeeper
+    # one and will not start on a KRaft cluster). ACLs live in the metadata log.
+    KAFKA_AUTHORIZER_CLASS_NAME: org.apache.kafka.metadata.authorizer.StandardAuthorizer
+    # DENY BY DEFAULT. The whole point of the module: a principal with no matching ACL gets
+    # nothing, not even topic metadata. Flip to "true" for a partial rollback that keeps
+    # authentication but stops enforcing (see README's ROLLBACK section).
+    KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "false"
+    # SEMICOLON-separated, not comma. A comma parses as ONE principal literally named
+    # "broker,User:admin" and both superusers stop working - the cluster then fails to form,
+    # because inter-broker replication is itself an authorized operation.
+    KAFKA_SUPER_USERS: User:${KAFKA_BROKER_USER};User:${KAFKA_ADMIN_USER}
     KAFKA_LOG_DIRS: /var/lib/kafka/data
     # ---- cluster-wide defaults, per docs/diagrams/topic-map.md "Cluster-wide defaults" ----
     KAFKA_DEFAULT_REPLICATION_FACTOR: 3
@@ -102,10 +205,12 @@ services:
     environment:
       <<: *kafka-common-env
       KAFKA_NODE_ID: 1
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
-      # Internal name resolves only inside kafka-psp-net; EXTERNAL name/port is what YOU dial
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,BROKER://0.0.0.0:9094,EXTERNAL://0.0.0.0:29092
+      # Internal names resolve only inside kafka-psp-net; EXTERNAL name/port is what YOU dial
       # from the host - must match the host-side port this broker is actually published on.
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:9092,EXTERNAL://localhost:${KAFKA1_EXTERNAL_PORT}
+      # CONTROLLER is never advertised (clients must not discover the controller quorum); BROKER
+      # is advertised because inter-broker replication resolves peers through this same metadata.
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka1:9092,BROKER://kafka1:9094,EXTERNAL://localhost:${KAFKA1_EXTERNAL_PORT}
     volumes:
       - kafka1-data:/var/lib/kafka/data
 
@@ -118,8 +223,8 @@ services:
     environment:
       <<: *kafka-common-env
       KAFKA_NODE_ID: 2
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:9092,EXTERNAL://localhost:${KAFKA2_EXTERNAL_PORT}
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,BROKER://0.0.0.0:9094,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka2:9092,BROKER://kafka2:9094,EXTERNAL://localhost:${KAFKA2_EXTERNAL_PORT}
     volumes:
       - kafka2-data:/var/lib/kafka/data
 
@@ -132,10 +237,58 @@ services:
     environment:
       <<: *kafka-common-env
       KAFKA_NODE_ID: 3
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:9092,EXTERNAL://localhost:${KAFKA3_EXTERNAL_PORT}
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,BROKER://0.0.0.0:9094,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka3:9092,BROKER://kafka3:9094,EXTERNAL://localhost:${KAFKA3_EXTERNAL_PORT}
     volumes:
       - kafka3-data:/var/lib/kafka/data
+
+  # ============================================================================================
+  # M14 - kafka-init: the one-shot security bootstrap.
+  #
+  # Creates one SCRAM-SHA-512 credential per client principal and applies the entire ACL matrix,
+  # then exits 0. Everything that needs a credential depends on it with
+  # `condition: service_completed_successfully`, which is what guarantees no client ever starts
+  # before its own credential exists (the failure that looks like a wrong password).
+  #
+  # It talks to the BROKER (inter-broker, SASL/PLAIN) listener, not the SCRAM one, for the
+  # obvious reason: it is the thing that creates the SCRAM credentials.
+  #
+  # Idempotent - `kafka-configs --alter --add-config SCRAM-SHA-512=[...]` overwrites, and
+  # `kafka-acls --add` on an existing binding is a no-op. Re-run any time:
+  #   docker compose up kafka-init
+  # ============================================================================================
+  kafka-init:
+    image: ${KAFKA_IMAGE}:${KAFKA_VERSION}
+    container_name: kafka-init
+    networks: [kafka-psp-net]
+    restart: "no"
+    depends_on:
+      kafka1: { condition: service_healthy }
+      kafka2: { condition: service_healthy }
+      kafka3: { condition: service_healthy }
+    volumes:
+      - ./kafka-init:/opt/kafka-init:ro
+    configs:
+      - source: kafka-broker-admin-client
+        target: /etc/kafka/secrets/broker-admin.properties
+    # Bypasses the cp-kafka image's own entrypoint (/etc/confluent/docker/run) - this container
+    # is not a broker, it just borrows the image for its CLI tools.
+    entrypoint: ["/bin/bash", "/opt/kafka-init/init-security.sh"]
+    environment:
+      BOOTSTRAP: kafka1:9094,kafka2:9094,kafka3:9094
+      CLIENT_CONFIG: /etc/kafka/secrets/broker-admin.properties
+      KAFKA_ADMIN_USER: ${KAFKA_ADMIN_USER}
+      KAFKA_ADMIN_PASSWORD: ${KAFKA_ADMIN_PASSWORD}
+      PAYMENT_API_KAFKA_PASSWORD: ${PAYMENT_API_KAFKA_PASSWORD}
+      PSP_CONNECTOR_KAFKA_PASSWORD: ${PSP_CONNECTOR_KAFKA_PASSWORD}
+      LEDGER_KAFKA_PASSWORD: ${LEDGER_KAFKA_PASSWORD}
+      WEBHOOK_NOTIFIER_KAFKA_PASSWORD: ${WEBHOOK_NOTIFIER_KAFKA_PASSWORD}
+      ANALYTICS_KAFKA_PASSWORD: ${ANALYTICS_KAFKA_PASSWORD}
+      REALTIME_GATEWAY_KAFKA_PASSWORD: ${REALTIME_GATEWAY_KAFKA_PASSWORD}
+      CONNECT_KAFKA_PASSWORD: ${CONNECT_KAFKA_PASSWORD}
+      SCHEMA_REGISTRY_KAFKA_PASSWORD: ${SCHEMA_REGISTRY_KAFKA_PASSWORD}
+      AKHQ_KAFKA_PASSWORD: ${AKHQ_KAFKA_PASSWORD}
+      KAFKA_EXPORTER_KAFKA_PASSWORD: ${KAFKA_EXPORTER_KAFKA_PASSWORD}
 
   # ============================================================================================
   # Schema Registry - runs inside the compose network, so it is an INTERNAL client: it talks to
@@ -151,13 +304,20 @@ services:
       kafka1: { condition: service_healthy }
       kafka2: { condition: service_healthy }
       kafka3: { condition: service_healthy }
+      # M14: its SCRAM credential and its ACLs on `_schemas` must exist before it starts.
+      kafka-init: { condition: service_completed_successfully }
     ports:
       - "${SCHEMA_REGISTRY_PORT}:8081"
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka1:9092,PLAINTEXT://kafka2:9092,PLAINTEXT://kafka3:9092
-      SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL: PLAINTEXT
+      # M14: the scheme prefix here is the SECURITY PROTOCOL, not a listener name - it must match
+      # SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL below or the store fails to connect with a
+      # misleading "no resolvable bootstrap urls" error.
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: SASL_PLAINTEXT://kafka1:9092,SASL_PLAINTEXT://kafka2:9092,SASL_PLAINTEXT://kafka3:9092
+      SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      SCHEMA_REGISTRY_KAFKASTORE_SASL_MECHANISM: SCRAM-SHA-512
+      SCHEMA_REGISTRY_KAFKASTORE_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="schema-registry" password="${SCHEMA_REGISTRY_KAFKA_PASSWORD}";'
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8081/subjects > /dev/null || exit 1"]
       interval: 10s
@@ -180,10 +340,28 @@ services:
       kafka2: { condition: service_healthy }
       kafka3: { condition: service_healthy }
       schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
     ports:
       - "${AKHQ_PORT}:8080"
     volumes:
       - ./akhq/application.yml:/app/application.yml:ro
+    configs:
+      # M14: the half of AKHQ's connection config that contains a password, rendered from .env at
+      # `up` time so it never exists as a file in this repository. Micronaut merges the two files
+      # in MICRONAUT_CONFIG_FILES order (later wins on a key collision; these two do not collide).
+      #
+      # Tried first and REJECTED: supplying the same three keys as
+      # AKHQ_CONNECTIONS_KAFKA__PSP__COMPOSE_PROPERTIES_* environment variables, which is what
+      # AKHQ's own docs suggest. The variables reached the container (verified with `docker
+      # compose exec akhq env`) but never landed in the connection's `properties` map, and AKHQ's
+      # only symptom was every API call failing after 60s with "Timed out waiting for a node
+      # assignment. Call: listTopics" while the broker logged "Unexpected Kafka request of type
+      # METADATA during SASL handshake" - i.e. AKHQ was still speaking PLAINTEXT. A second config
+      # file is deterministic where the env-var name mangling is not.
+      - source: akhq-security
+        target: /app/application-security.yml
+    environment:
+      MICRONAUT_CONFIG_FILES: /app/application.yml,/app/application-security.yml
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/ || exit 1"]
       interval: 10s
@@ -266,6 +444,9 @@ services:
       kafka3: { condition: service_healthy }
       postgres: { condition: service_healthy }
       mongodb: { condition: service_healthy } # M13: the Mongo sink connector's write target
+      # M14: the worker creates connect.configs/offsets/status itself on first start, which needs
+      # both its SCRAM credential and its Create ACL on the `connect.` prefix to already exist.
+      kafka-init: { condition: service_completed_successfully }
     ports:
       - "${KAFKA_CONNECT_PORT}:8083" # Connect REST API - register/inspect connectors here
     volumes:
@@ -339,6 +520,40 @@ services:
       # implicit (same style as the brokers' KAFKA_* block above).
       CONNECT_OFFSET_STORAGE_PARTITIONS: "25"
       CONNECT_STATUS_STORAGE_PARTITIONS: "5"
+      # ---- M14: SASL, FOUR TIMES OVER - this is the module's nastiest trap ----------------------
+      # The top-level trio below authenticates the WORKER's own clients: the KafkaBasedLog
+      # instances behind connect.configs / connect.offsets / connect.status.
+      #
+      # It does NOT reach the clients Connect creates ON BEHALF OF a connector. Those are built
+      # from `producer.` / `consumer.` / `admin.`-prefixed worker properties only - top-level
+      # worker settings are not copied into them. Set only the top-level trio and you get the
+      # worst possible outcome: the worker starts, its REST API answers, `GET
+      # /connectors/<name>/status` reports connector RUNNING and task RUNNING (that status is read
+      # out of connect.status, which the worker CAN reach), and not one record moves. The only
+      # visible symptom is a repeating
+      #   WARN [Producer clientId=connector-producer-payment-outbox-connector-0]
+      #        Bootstrap broker kafka1:9092 (id: -1 rack: null) disconnected
+      # in the Connect log, and
+      #   Failed authentication ... (Unexpected Kafka request of type METADATA during SASL
+      #   handshake)
+      # in the broker log - neither of which says "authentication" in the client's own words.
+      # This was caught during M14 verification, not predicted.
+      #
+      # `admin.` matters too: it is what creates mongo-audit-sink's errors.deadletterqueue topic.
+      # One worker = one principal (`connect`) for all four; per-connector principals would need
+      # connector.client.config.override.policy and are an M18/Strimzi refinement.
+      CONNECT_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      CONNECT_SASL_MECHANISM: SCRAM-SHA-512
+      CONNECT_SASL_JAAS_CONFIG: &connect-jaas 'org.apache.kafka.common.security.scram.ScramLoginModule required username="connect" password="${CONNECT_KAFKA_PASSWORD}";'
+      CONNECT_PRODUCER_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      CONNECT_PRODUCER_SASL_MECHANISM: SCRAM-SHA-512
+      CONNECT_PRODUCER_SASL_JAAS_CONFIG: *connect-jaas
+      CONNECT_CONSUMER_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      CONNECT_CONSUMER_SASL_MECHANISM: SCRAM-SHA-512
+      CONNECT_CONSUMER_SASL_JAAS_CONFIG: *connect-jaas
+      CONNECT_ADMIN_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      CONNECT_ADMIN_SASL_MECHANISM: SCRAM-SHA-512
+      CONNECT_ADMIN_SASL_JAAS_CONFIG: *connect-jaas
     healthcheck:
       # The worker itself, not any connector running on it - proves the REST API is up and the
       # group of internal topics was created successfully. Connector/task RUNNING status is a
@@ -396,12 +611,22 @@ services:
       kafka1: { condition: service_healthy }
       kafka2: { condition: service_healthy }
       kafka3: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
     command:
       - "--kafka.server=kafka1:9092"
       - "--kafka.server=kafka2:9092"
       - "--kafka.server=kafka3:9092"
       - "--kafka.version=3.8.0"
       - "--web.listen-address=:9308"
+      # M14. This exporter is protocol-based (see "Metrics" in README), so it is a Kafka client
+      # like any other and needs a principal. Its ACLs are Describe-only on Topic:*/Group:*/
+      # Cluster - it reads offsets and lag metadata, never a message body, which is exactly the
+      # kind of distinction per-principal ACLs exist to make. Sarama spells the mechanism
+      # lower-case with no second hyphen: `scram-sha512`, not `SCRAM-SHA-512`.
+      - "--sasl.enabled"
+      - "--sasl.mechanism=scram-sha512"
+      - "--sasl.username=kafka-exporter"
+      - "--sasl.password=${KAFKA_EXPORTER_KAFKA_PASSWORD}"
     ports:
       - "${KAFKA_EXPORTER_PORT}:9308"
     healthcheck:

@@ -43,6 +43,18 @@ public class KafkaStreamsConfig {
         AnalyticsProperties.Streams streams = properties.streams();
         Map<String, Object> config = new HashMap<>();
 
+        // --- spring.kafka.properties.* (M14) -----------------------------------------------------
+        // Copied in FIRST, so every explicit StreamsConfig.* below still wins. Unlike every other
+        // Kafka client in this repository, a Kafka Streams application does not go through
+        // KafkaProperties.buildConsumerProperties()/buildProducerProperties() - this bean assembles
+        // its config by hand, so the shared `spring.kafka.properties` block is not picked up unless
+        // it is copied in explicitly. That block is where M14 puts security.protocol,
+        // sasl.mechanism and sasl.jaas.config (see application-docker-compose.yml). Without this
+        // line the Streams client is the ONE client that still tries to connect unauthenticated,
+        // and it fails at StreamThread startup with an error about the topology rather than about
+        // authentication.
+        config.putAll(kafkaProperties.getProperties());
+
         // --- application.id ---------------------------------------------------------------------
         // The single most consequential value in the file. It is simultaneously:
         //   * the consumer group.id for every source topic,

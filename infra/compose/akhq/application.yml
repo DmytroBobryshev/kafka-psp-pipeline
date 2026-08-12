@@ -1,8 +1,18 @@
 # infra/compose/akhq/application.yml
 #
-# AKHQ connects over the internal PLAINTEXT listener (docker-network hostnames kafka1/2/3:9092)
-# because AKHQ itself runs as a container on the compose network - it is an "in-container
-# client", never a host tool. See README "advertised.listeners" section.
+# AKHQ connects over the internal listener (docker-network hostnames kafka1/2/3:9092) because
+# AKHQ itself runs as a container on the compose network - it is an "in-container client", never
+# a host tool. See README "advertised.listeners" section.
+#
+# M14: that listener is now SASL_PLAINTEXT/SCRAM-SHA-512. The three properties that carry AKHQ's
+# credential (security.protocol, sasl.mechanism, sasl.jaas.config) are deliberately NOT here -
+# sasl.jaas.config contains a password and this file is committed. They are supplied as
+# environment variables on the akhq service in docker-compose.yml
+# (AKHQ_CONNECTIONS_KAFKA__PSP__COMPOSE_PROPERTIES_*), which Micronaut merges into exactly the
+# `properties` map below. `docker compose exec akhq env | grep AKHQ_CONNECTIONS` shows them.
+#
+# AKHQ's principal (User:akhq) is granted Read/Describe/DescribeConfigs cluster-wide and NO Write
+# anywhere: it can browse every topic and consumer group and cannot produce a single record.
 akhq:
   connections:
     kafka-psp-compose:

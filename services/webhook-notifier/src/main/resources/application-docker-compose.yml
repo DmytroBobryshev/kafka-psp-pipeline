@@ -14,6 +14,29 @@ spring:
     # equivalent entry (infra/compose/README.md's advertised-listeners section).
     bootstrap-servers: localhost:29092,localhost:29093,localhost:29094
 
+    # ---- M14: SASL/SCRAM-SHA-512 ---------------------------------------------------------------
+    # The EXTERNAL listener above requires authentication as of M14. `spring.kafka.properties` is
+    # the COMMON block: Spring Boot merges it into the producer, the consumer AND the admin client,
+    # which is what makes one four-line block enough for a service that is several of those at
+    # once. Putting it under spring.kafka.consumer.properties instead is the classic half-fix - the
+    # consumer connects and the producer does not.
+    #
+    # The USERNAME is committed on purpose: it is this service's identity, not a secret, and it is
+    # the exact string the ACLs in infra/compose/kafka-init/init-security.sh key off
+    # (User:webhook-notifier). The PASSWORD is a placeholder resolved from the environment, and has no
+    # default - a service that silently starts with the wrong credential produces authorization
+    # errors that look like a missing ACL and waste an hour, so it fails fast instead:
+    #
+    #   set -a; . infra/compose/.env; set +a
+    #   SPRING_PROFILES_ACTIVE=docker-compose mvn -pl services/webhook-notifier -am spring-boot:run
+    #
+    # This block lives in the docker-compose profile ONLY. The default profile and the test profile
+    # stay unauthenticated, so @EmbeddedKafka in `mvn verify` is unaffected.
+    properties:
+      security.protocol: SASL_PLAINTEXT
+      sasl.mechanism: SCRAM-SHA-512
+      sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="webhook-notifier" password="${WEBHOOK_NOTIFIER_KAFKA_PASSWORD}";'
+
 # M9 Phase 2: webhook-notifier runs on the HOST (java -jar ...), so it reaches Schema Registry via
 # its published host port - localhost:8081, same convention as psp-connector's/ledger's
 # equivalent entries.
