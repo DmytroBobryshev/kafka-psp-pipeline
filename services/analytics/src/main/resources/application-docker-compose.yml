@@ -40,6 +40,16 @@ spring:
 
 # analytics runs on the HOST (java -jar ...), so it reaches Schema Registry via its published host
 # port - localhost:8081, same convention as every other service's equivalent entry.
+# M16/ADR-0009: same convention as payment-api/application-docker-compose.yml's identical block.
+eureka:
+  client:
+    enabled: true
+    service-url:
+      defaultZone: http://localhost:${DISCOVERY_SERVER_PORT:8761}/eureka/
+  instance:
+    hostname: localhost
+    lease-renewal-interval-in-seconds: 5
+
 analytics:
   schema-registry:
     url: http://localhost:8081

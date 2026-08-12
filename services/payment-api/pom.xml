@@ -32,6 +32,14 @@
       <artifactId>common-web</artifactId>
     </dependency>
 
+    <!-- M16/ADR-0009: Eureka client - compose profile only. eureka.client.enabled=false by
+         default (application.yml) so `mvn verify`'s context-load test needs no running registry;
+         application-docker-compose.yml flips it on so api-gateway can resolve lb://payment-api. -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+    </dependency>
+
     <!-- Web + actuator -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

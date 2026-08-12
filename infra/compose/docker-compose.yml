@@ -685,6 +685,56 @@ services:
       retries: 15
       start_period: 15s
 
+  # ============================================================================================
+  # M16 - discovery-server (Netflix Eureka), compose-profile only (ADR-0009). The one Spring
+  # service in this repo that runs AS A CONTAINER rather than on the host, alongside the six
+  # pipeline services and api-gateway - see services/discovery-server/README.md's "Why this
+  # service runs in a container". Build its jar first:
+  #   mvn -pl services/discovery-server -am package -DskipTests
+  #   docker compose -f infra/compose/docker-compose.yml build discovery-server
+  # ============================================================================================
+  discovery-server:
+    build:
+      context: ../../services/discovery-server
+      dockerfile: Dockerfile
+    hostname: discovery-server
+    container_name: discovery-server
+    networks: [kafka-psp-net]
+    restart: unless-stopped
+    ports:
+      - "${DISCOVERY_SERVER_PORT}:8761" # the six services + api-gateway (all HOST processes)
+                                         # reach this via localhost:${DISCOVERY_SERVER_PORT}
+    environment:
+      SPRING_PROFILES_ACTIVE: docker-compose
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8761/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  # ============================================================================================
+  # M16 - Redis: backs api-gateway's Resilience4j-adjacent RequestRateLimiter filter
+  # (spring.cloud.gateway.default-filters, org.springframework.cloud.gateway.filter.ratelimit.
+  # RedisRateLimiter). Nothing else in this stack uses it. api-gateway runs on the HOST like the
+  # six pipeline services, so it reaches Redis via this published host port - see
+  # services/api-gateway/README.md's "Rate limit" section for the exact configuration.
+  # ============================================================================================
+  redis:
+    image: redis:${REDIS_VERSION}
+    hostname: redis
+    container_name: redis
+    networks: [kafka-psp-net]
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT}:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   grafana:
     image: grafana/grafana:${GRAFANA_VERSION}
     hostname: grafana

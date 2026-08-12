@@ -29,6 +29,15 @@
       <artifactId>common-events</artifactId>
     </dependency>
 
+    <!-- M16/ADR-0009: Eureka client - compose profile only, same convention as every other
+         service (see payment-api/pom.xml's identical comment). Registers this service so
+         api-gateway can resolve lb://psp-connector, even though ADR-0004 means it exposes no
+         business REST endpoint - only actuator (below). -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+    </dependency>
+
     <!-- Web + actuator: no business REST endpoints in M4 (ADR-0004 - inter-service traffic is
          Kafka-only), but actuator health/info needs a web server to expose HTTP, and M8's DLQ
          replay endpoint will live here later. -->

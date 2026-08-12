@@ -26,6 +26,12 @@ server:
   # (docs/PLAN.md).
   port: 8090
 
+eureka:
+  client:
+    # M16/ADR-0009: off by default (and under `mvn verify`'s test-classpath override) - see
+    # payment-api/application.yml's identical comment.
+    enabled: false
+
 management:
   endpoints:
     web:

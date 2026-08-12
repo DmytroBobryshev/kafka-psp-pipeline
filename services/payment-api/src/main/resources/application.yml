@@ -116,6 +116,14 @@ server:
   # 8081 is Schema Registry and 8080 is AKHQ in infra/compose - keep services off both.
   port: 8085
 
+eureka:
+  client:
+    # M16/ADR-0009: off by default (and under `mvn verify`'s test-classpath override) - the
+    # docker-compose profile is the only place this service registers with Eureka so api-gateway
+    # can resolve lb://payment-api; a k8s profile (M18) would also leave this disabled and rely on
+    # native Service/DNS discovery instead (ADR-0009).
+    enabled: false
+
 management:
   endpoints:
     web:

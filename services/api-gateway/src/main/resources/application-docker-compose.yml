@@ -1,0 +1,87 @@
+# M16/ADR-0009: activate with SPRING_PROFILES_ACTIVE=docker-compose (PLAN.md 0.2's naming
+# convention for every profile that targets the docker-compose stack). api-gateway runs on the
+# HOST like the six pipeline services (NOT as a container - see services/discovery-server's
+# README for the one service in this repo that IS a container and why), so every address below is
+# a published HOST port, same convention every other service's application-docker-compose.yml
+# already follows:
+#   set -a; . infra/compose/.env; set +a
+#   SPRING_PROFILES_ACTIVE=docker-compose mvn -pl services/api-gateway -am spring-boot:run
+eureka:
+  client:
+    enabled: true
+    service-url:
+      defaultZone: http://localhost:${DISCOVERY_SERVER_PORT:8761}/eureka/
+  instance:
+    # Registers this instance (and, symmetrically, every service registering itself the same way
+    # - see e.g. payment-api/application-docker-compose.yml) under a hostname the OTHER host
+    # processes doing the discovering can actually dial. Left as the machine's real hostname,
+    # Eureka would advertise something like "Dmytros-MacBook.local", which usually still resolves
+    # locally but is one more thing to go wrong for zero benefit on a single-laptop dev stack.
+    hostname: localhost
+    lease-renewal-interval-in-seconds: 5
+
+spring:
+  data:
+    redis:
+      host: localhost
+      port: ${REDIS_PORT:6379}
+  cloud:
+    gateway:
+      server:
+        webflux:
+          # ADR-0009: "Gateway routes use lb://payment-api, resolved through Eureka." One entry
+          # per service (all six, per the task brief), even psp-connector, which exposes no
+          # business REST API at all (ADR-0004: it's a pure Kafka consumer/producer) - only
+          # actuator, so its route exists purely to keep every service reachable through the one
+          # edge for ops purposes.
+          routes:
+            - id: payment-api
+              uri: lb://payment-api
+              predicates:
+                - Path=/api/payments/**,/api/merchants/**
+              filters:
+                # M16: the ONE route with a circuit breaker (task brief: "on at least one
+                # route"). payment-api is the pipeline's single write entry point (POST
+                # /api/payments) - protecting it is where a fallback actually matters end-to-end.
+                # See web.FallbackController and README "Circuit breaker" for the exact trip
+                # conditions and how to force it (stop payment-api - it runs on the host, so
+                # Ctrl+C the process or kill its PID, not `docker stop`).
+                - name: CircuitBreaker
+                  args:
+                    name: paymentApiCB
+                    fallbackUri: forward:/fallback/payment-api
+            - id: ledger
+              uri: lb://ledger
+              predicates:
+                - Path=/api/refunds/**
+            - id: webhook-notifier
+              uri: lb://webhook-notifier
+              predicates:
+                - Path=/api/webhooks/**
+            - id: analytics
+              uri: lb://analytics
+              predicates:
+                - Path=/api/analytics/**
+            - id: realtime-gateway
+              uri: lb://realtime-gateway
+              predicates:
+                # SSE lives here (GET /api/realtime/events) - see README "SSE through the
+                # gateway" for why this route needs no special filter (streaming works precisely
+                # BECAUSE nothing here buffers the response body).
+                - Path=/api/realtime/**
+            - id: psp-connector
+              uri: lb://psp-connector
+              predicates:
+                - Path=/api/psp-connector/**
+              filters:
+                # psp-connector's own paths have no /api prefix (spring-boot-starter-actuator's
+                # default /actuator/**) - StripPrefix=2 removes "/api/psp-connector", forwarding
+                # /api/psp-connector/actuator/health as /actuator/health.
+                - StripPrefix=2
+
+# M15 parity with the six services: payment-api runs on the HOST, so it reaches Tempo via its
+# published OTLP/HTTP port - see payment-api/application-docker-compose.yml's identical comment.
+management:
+  otlp:
+    tracing:
+      endpoint: http://localhost:${TEMPO_OTLP_HTTP_PORT:4318}/v1/traces

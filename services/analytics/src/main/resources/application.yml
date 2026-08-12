@@ -22,6 +22,12 @@ server:
   # Schema Registry 8081, Grafana 3000, Prometheus 9090 - this service uses 8089.
   port: 8089
 
+eureka:
+  client:
+    # M16/ADR-0009: off by default (and under `mvn verify`'s test-classpath override) - see
+    # payment-api/application.yml's identical comment.
+    enabled: false
+
 management:
   endpoints:
     web:

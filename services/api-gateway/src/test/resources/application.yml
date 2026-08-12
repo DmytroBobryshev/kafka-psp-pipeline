@@ -1,0 +1,21 @@
+# Test-classpath override of src/main/resources/application.yml (same convention as every other
+# service - see e.g. payment-api's src/test/resources/application.yml). No routes, no live
+# Eureka/Redis needed: ApiGatewayApplicationTests only needs the context to load, and Spring
+# Data Redis's reactive Lettuce connection factory connects lazily (on first command, never
+# issued here) rather than eagerly at context-refresh - see that test class's javadoc.
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes: []
+
+eureka:
+  client:
+    enabled: false
+
+api-gateway:
+  startup:
+    require-known-profile: false

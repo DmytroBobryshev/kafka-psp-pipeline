@@ -18,8 +18,10 @@ Vite 6, React 19, TypeScript 5.9 (strict), TanStack Query 5, Tailwind CSS 4
 
 ## How to run
 
-Prerequisites: the Kafka/Postgres/Connect stack (`infra/compose`) already running, and
-**payment-api** (8085) + **realtime-gateway** (8090) started — see their READMEs for exact
+Prerequisites: the Kafka/Postgres/Connect stack (`infra/compose`) already running — which as of
+M16 includes **discovery-server** (Eureka, 8761) and **redis** (6379), both compose containers —
+and **payment-api** (8085) + **realtime-gateway** (8090) started on the host, plus **api-gateway**
+(8000, also host), which is now what the browser actually talks to — see their READMEs for exact
 commands. For a fully live timeline (payment-requested *and* payment-status-changed), also
 start **psp-connector** (8086), which consumes `payments.payment-requested.v1` and produces
 `payments.payment-status-changed.v1`.
@@ -55,21 +57,31 @@ The connection state is always visible, not inferred: **Idle → Connecting… �
 Reconnecting…/Closed**, with a manual **Reconnect** action once the browser's own SSE retry
 gives up.
 
-## Why a proxy, not CORS
+## Why a proxy, not CORS — and what M16 changed
 
-`vite.config.ts` proxies `/api/payments/*` → `http://localhost:8085` and `/api/realtime/*` →
-`http://localhost:8090`. The browser only ever calls same-origin `/api/*`; Vite forwards the
-request server-side.
+Through M15, `vite.config.ts` proxied `/api/payments/*` straight to `http://localhost:8085`
+(payment-api) and `/api/realtime/*` straight to `http://localhost:8090` (realtime-gateway),
+because neither service had CORS configured and there was no gateway yet to own it. The
+reasoning at the time: turning on CORS in two backend services purely so a *dev-only* Vite
+server could reach them would mean touching backend config for something that is not a backend
+concern at all — per ADR-0004, payment-api and realtime-gateway are edge-adjacent but the real
+single-entry-point gateway (M16) didn't exist yet, so a dev proxy was the only thing keeping the
+browser same-origin.
 
-The alternative — turning on CORS in payment-api and realtime-gateway — was rejected because
-CORS is purely a browser-origin concern, and neither service has any other reason to accept
-cross-origin requests: per ADR-0004, payment-api is the only externally-reachable service and
-everything else talks Kafka internally; a browser calling either service directly is itself a
-dev-only convenience that api-gateway (M16) will eventually front properly. Adding
-`Access-Control-Allow-Origin` to two backend services' production config to satisfy a *dev
-server's* cross-port requirement would be solving a Vite problem inside the backend. The proxy
-keeps this entirely inside `ui/`, touches no backend code, and disappears in production once a
-real gateway sits in front of both services on one origin.
+**M16 built that gateway.** `vite.config.ts` now proxies the single prefix `/api/*` to
+`http://localhost:8000` (api-gateway), which itself routes to all six services (see
+`services/api-gateway/README.md`'s route table) and — unlike payment-api/realtime-gateway before
+it — **does** have CORS configured, for exactly this UI's origin
+(`spring.cloud.gateway.globalcors` in `services/api-gateway/src/main/resources/application.yml`).
+
+The dev proxy is kept anyway, for a narrower reason than before: it makes `pnpm dev` a
+zero-config, same-origin experience (no `VITE_API_BASE_URL` env var to set, no CORS preflight
+noise in the browser devtools during local development). **In production, this proxy would not
+exist** — there is no Vite dev server in a production build (`pnpm build` ships a static
+`dist/`), so a production browser would call `https://<gateway-host>/api/*` directly, relying
+entirely on api-gateway's CORS configuration rather than a server-side proxy. That's the
+scenario api-gateway's CORS config is actually FOR; the dev proxy proves the routes work without
+exercising it.
 
 ## SSE lifecycle
 

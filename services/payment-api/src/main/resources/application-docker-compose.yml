@@ -52,6 +52,18 @@ spring:
       sasl.mechanism: SCRAM-SHA-512
       sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="payment-api" password="${PAYMENT_API_KAFKA_PASSWORD}";'
 
+# M16/ADR-0009: registers with the discovery-server container's published host port so
+# api-gateway (also on the HOST) can resolve lb://payment-api through Eureka. hostname: localhost
+# so the registered address is dialable by another host process, not the machine's real hostname.
+eureka:
+  client:
+    enabled: true
+    service-url:
+      defaultZone: http://localhost:${DISCOVERY_SERVER_PORT:8761}/eureka/
+  instance:
+    hostname: localhost
+    lease-renewal-interval-in-seconds: 5
+
 # M9 Phase 1: payment-api runs on the HOST (java -jar ...), so it reaches Schema Registry via its
 # published host port - localhost:8081, per infra/compose/.env's SCHEMA_REGISTRY_PORT - the same
 # host/compose-network split every other infra address in this file already follows.

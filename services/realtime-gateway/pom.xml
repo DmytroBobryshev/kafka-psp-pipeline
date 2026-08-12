@@ -35,6 +35,14 @@
       <artifactId>common-web</artifactId>
     </dependency>
 
+    <!-- M16/ADR-0009: Eureka client - compose profile only, same convention as every other
+         service (see payment-api/pom.xml's identical comment). Registers this service so
+         api-gateway can resolve lb://realtime-gateway for the SSE route. -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+    </dependency>
+
     <!-- Web (SseEmitter lives in spring-webmvc, pulled in transitively) + actuator. No database
          (module brief, PLAN.md M12) - this service holds no state beyond in-memory SSE
          subscriptions, which are meaningless to persist (they die with the browser connection). -->

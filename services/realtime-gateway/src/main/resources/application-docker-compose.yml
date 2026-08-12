@@ -29,6 +29,16 @@ spring:
       sasl.mechanism: SCRAM-SHA-512
       sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="realtime-gateway" password="${REALTIME_GATEWAY_KAFKA_PASSWORD}";'
 
+# M16/ADR-0009: same convention as payment-api/application-docker-compose.yml's identical block.
+eureka:
+  client:
+    enabled: true
+    service-url:
+      defaultZone: http://localhost:${DISCOVERY_SERVER_PORT:8761}/eureka/
+  instance:
+    hostname: localhost
+    lease-renewal-interval-in-seconds: 5
+
 # realtime-gateway runs on the HOST (java -jar ...), so it reaches Schema Registry via its
 # published host port - localhost:8081, per infra/compose/.env's SCHEMA_REGISTRY_PORT - same
 # host/compose-network split every other service's equivalent entry uses.

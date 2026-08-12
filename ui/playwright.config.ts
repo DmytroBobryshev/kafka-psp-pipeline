@@ -6,6 +6,11 @@ import { defineConfig, devices } from "@playwright/test";
  * thing worth testing here is that an event produced by one service reaches a browser via
  * another, which a mocked EventSource would assert nothing about.
  *
+ * M16: the browser's traffic now goes through api-gateway (8000, also required running) rather
+ * than straight to payment-api/realtime-gateway - see ui/vite.config.ts and
+ * services/api-gateway/README.md. The three services above still need to be running underneath
+ * it; api-gateway is what actually routes to them now.
+ *
  * Start the backends first (see ui/README.md); Playwright starts the Vite dev server itself.
  */
 export default defineConfig({

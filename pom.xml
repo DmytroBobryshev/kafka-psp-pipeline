@@ -25,6 +25,12 @@
 
     <!-- Centralized versions (ADR-0007: child POMs declare dependencies WITHOUT versions) -->
     <spring-boot.version>3.5.3</spring-boot.version>
+    <!-- M16: Spring Cloud 2025.0.x (Northfields) is the release train compatible with Spring Boot
+         3.5.x (spring.io/projects/spring-cloud's compatibility matrix) - discovery-server (Eureka
+         server) and api-gateway (Spring Cloud Gateway, Netflix Eureka client, LoadBalancer,
+         Resilience4j Circuitbreaker) all come from this one BOM, imported below the same way the
+         Spring Boot BOM already is. -->
+    <spring-cloud.version>2025.0.3</spring-cloud.version>
     <lombok.version>1.18.38</lombok.version>
     <mapstruct.version>1.5.5.Final</mapstruct.version>
     <lombok-mapstruct-binding.version>0.2.0</lombok-mapstruct-binding.version>
@@ -59,6 +65,9 @@
     <module>services/webhook-notifier</module>
     <module>services/analytics</module>
     <module>services/realtime-gateway</module>
+    <!-- M16 -->
+    <module>services/discovery-server</module>
+    <module>services/api-gateway</module>
   </modules>
 
   <!--
@@ -72,6 +81,18 @@
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-dependencies</artifactId>
         <version>${spring-boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- M16: Spring Cloud BOM - manages spring-cloud-starter-gateway, spring-cloud-starter-
+           netflix-eureka-{server,client}, spring-cloud-starter-circuitbreaker-reactor-resilience4j.
+           Import order after spring-boot-dependencies matters little here (no overlapping
+           artifacts), but this mirrors the convention of "framework BOM first, then extensions". -->
+      <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-dependencies</artifactId>
+        <version>${spring-cloud.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>

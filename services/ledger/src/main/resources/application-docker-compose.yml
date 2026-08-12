@@ -53,6 +53,16 @@ spring:
       sasl.mechanism: SCRAM-SHA-512
       sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="ledger" password="${LEDGER_KAFKA_PASSWORD}";'
 
+# M16/ADR-0009: same convention as payment-api/application-docker-compose.yml's identical block.
+eureka:
+  client:
+    enabled: true
+    service-url:
+      defaultZone: http://localhost:${DISCOVERY_SERVER_PORT:8761}/eureka/
+  instance:
+    hostname: localhost
+    lease-renewal-interval-in-seconds: 5
+
 # M9 Phase 2: ledger runs on the HOST (java -jar ...), so it reaches Schema Registry via its
 # published host port - localhost:8081, same convention as psp-connector's equivalent entry.
 ledger:

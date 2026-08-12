@@ -41,6 +41,13 @@
       <artifactId>common-web</artifactId>
     </dependency>
 
+    <!-- M16/ADR-0009: Eureka client - compose profile only, same convention as every other
+         service (see payment-api/pom.xml's identical comment). -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+    </dependency>
+
     <!-- Web + actuator: no business REST endpoints through M7 (ADR-0004 - inter-service traffic
          is Kafka-only), but actuator health/info/metrics needs a web server to expose HTTP; M11
          adds GET /api/refunds/{refundId}, and the M8 DLQ replay endpoint

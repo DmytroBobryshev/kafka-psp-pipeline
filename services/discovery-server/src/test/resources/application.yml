@@ -1,0 +1,19 @@
+# Test-classpath override of src/main/resources/application.yml (same convention as every other
+# service - see e.g. payment-api's src/test/resources/application.yml). Disables
+# ComposeProfileGuard so DiscoveryServerApplicationTests can load the context with no active
+# profile, and binds to a random port instead of the fixed 8761 so the test never collides with a
+# real discovery-server the developer might already have running via docker compose.
+spring:
+  application:
+    name: discovery-server
+
+eureka:
+  client:
+    register-with-eureka: false
+    fetch-registry: false
+  server:
+    enable-self-preservation: false
+
+discovery-server:
+  startup:
+    require-compose-profile: false

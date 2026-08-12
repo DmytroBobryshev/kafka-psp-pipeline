@@ -1,0 +1,113 @@
+# Profile-INDEPENDENT behavior only - matches every other service's application.yml /
+# application-docker-compose.yml split (PLAN.md 0.2). The route table itself
+# (spring.cloud.gateway.server.webflux.routes) is deliberately NOT here: each route's `uri`
+# differs completely between
+# profiles (lb://payment-api via Eureka vs. a direct Kubernetes Service DNS name - ADR-0009), and
+# Spring Boot's relaxed binding replaces a YAML *list* wholesale per property source rather than
+# merging it element-by-element, so splitting one route's filters here and its uri in a profile
+# file would silently produce a route no route table anyone wrote by hand. The accepted cost -
+# two full route tables to keep in sync - is ADR-0009's own tradeoff, not an oversight; see
+# application-docker-compose.yml and application-k8s.yml.
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      # M16/Spring Cloud 2025.0.x: config lives under server.webflux.* now - the old
+      # spring.cloud.gateway.* keys still work (temporarily remapped with a deprecation warning)
+      # but this repo uses the current key, matching the non-deprecated
+      # spring-cloud-starter-gateway-server-webflux dependency (pom.xml).
+      server:
+        webflux:
+          httpclient:
+            connect-timeout: 5000
+            # NO response-timeout set here (default: "none"/unbounded) - and that absence is
+            # load-bearing, not an oversight. The realtime-gateway route proxies a long-lived
+            # text/event-stream response with no fixed upper bound (its own idle timeout is
+            # realtime-gateway's SseEmitter, 5 minutes - see that service's application.yml); a
+            # response-timeout configured here would sever that stream partway through exactly
+            # like a naive buffering reverse proxy, which is the specific SSE-through-a-gateway
+            # failure mode this module's README calls out and verifies against. Do not add one
+            # without re-reading that section first.
+          # M16: RequestRateLimiter (RedisRateLimiter) as a DEFAULT filter - applies to every
+          # route, not just one, so the orchestrator can trip it against whichever route is most
+          # convenient (POST /api/payments is the natural choice - it's the one write path that
+          # visibly proves end-to-end pipeline behavior). See README "Rate limit" for the exact
+          # numbers and how to trip them; ipKeyResolver is defined in config.RateLimiterConfig.
+          default-filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 10
+                redis-rate-limiter.requestedTokens: 1
+                key-resolver: "#{@ipKeyResolver}"
+          # CORS for the UI origin (ADR-0004: "The gateway ... owns CORS"). Vite's dev server
+          # proxies /api/* so the BROWSER never actually needs this in dev (see
+          # ui/vite.config.ts) - this is what a production browser calling the gateway directly,
+          # cross-origin, would need instead of a dev proxy. Kept here (profile-independent)
+          # rather than duplicated per profile: the UI origin doesn't change between
+          # docker-compose and k8s in this project (no separate production UI origin is in scope)
+          # - see README "CORS" for the honest caveat that a real k8s deployment would need this
+          # to be an actual production origin, not localhost:5173.
+          globalcors:
+            cors-configurations:
+              "[/**]":
+                allowedOrigins: "http://localhost:5173"
+                allowedMethods: [GET, POST, PUT, DELETE, OPTIONS]
+                allowedHeaders: "*"
+                allowCredentials: false
+
+server:
+  # Task brief's port map: 8000 (api-gateway), 8761 (discovery-server).
+  port: 8000
+
+management:
+  endpoint:
+    gateway:
+      # Spring Boot 3.4+ actuator endpoints default to a restricted Access level for anything
+      # that could be considered sensitive; without this, "gateway" registers but every operation
+      # on it 404s as if the endpoint didn't exist at all - a genuinely confusing failure mode
+      # this line exists specifically to avoid re-discovering.
+      access: unrestricted
+  endpoints:
+    web:
+      exposure:
+        # "gateway" exposes GET /actuator/gateway/routes - the live route table, used to verify
+        # routing without guessing from YAML alone (see README "Prove it").
+        include: health,info,gateway
+  tracing:
+    sampling:
+      probability: 1.0
+
+# M16: Resilience4j circuit breaker + time limiter for the payment-api route (see
+# application-docker-compose.yml's "CircuitBreaker" filter on that route, name: paymentApiCB).
+# Profile-independent: these numbers describe BEHAVIOR (how many calls to sample, what failure
+# rate opens the breaker), not an environment-specific address, so they belong here rather than
+# duplicated in every profile file. See README "Circuit breaker" for the exact numbers and how to
+# trip it.
+resilience4j:
+  circuitbreaker:
+    instances:
+      paymentApiCB:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+  timelimiter:
+    instances:
+      paymentApiCB:
+        # Generous on purpose: this should trip on payment-api being genuinely DOWN (connection
+        # refused, fast) or genuinely hanging, not on ordinary request latency under load -
+        # a too-tight timeout here would make the breaker flaky rather than meaningful.
+        timeout-duration: 4s
+
+# See config.KnownProfileGuard's javadoc: real (not aspirational) enforcement of ADR-0009's "the
+# active profile determines which route table is live" rule. Flipped to false by
+# src/test/resources/application.yml so ApiGatewayApplicationTests needs no active profile, the
+# same convention every other service's context-load test already uses.
+api-gateway:
+  startup:
+    require-known-profile: true

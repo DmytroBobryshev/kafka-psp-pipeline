@@ -33,6 +33,13 @@
       <artifactId>common-events</artifactId>
     </dependency>
 
+    <!-- M16/ADR-0009: Eureka client - compose profile only, same convention as every other
+         service (see payment-api/pom.xml's identical comment). -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+    </dependency>
+
     <!-- Web: the simulated merchant endpoint AND the DLQ replay endpoint both live here -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

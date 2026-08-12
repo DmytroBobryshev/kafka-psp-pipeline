@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example.psp</groupId>
+    <artifactId>kafka-psp-pipeline</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>api-gateway</artifactId>
+  <packaging>jar</packaging>
+
+  <name>api-gateway</name>
+  <description>
+    api-gateway (M16): Spring Cloud Gateway, the single REST entry point ADR-0004 describes.
+    Routes to all six services (lb:// via Eureka in the docker-compose profile, direct k8s
+    Service DNS in the k8s profile - ADR-0009), CORS for the UI origin, Redis-backed request rate
+    limiting, a Resilience4j circuit breaker on the payment-api route, and an
+    X-Correlation-Id injection filter that hands off to the same W3C traceparent propagation
+    Micrometer already manages for the rest of the pipeline (M15).
+
+    Deliberately NOT hexagonal (ADR-0007's package-by-hexagon template): this module has no
+    domain to protect. It is pure edge infrastructure - route/filter CONFIGURATION - the same
+    category ADR-0004 puts "api-gateway -&gt; service HTTP" in ("edge-to-service, not
+    service-to-service"). See README.md "Why no hexagon here".
+
+    Reactive (spring-cloud-starter-gateway/WebFlux), not spring-boot-starter-web: Spring Cloud
+    Gateway is built on Reactor Netty and explicitly must NOT share a classpath with
+    spring-boot-starter-web (Spring Boot's web-application-type auto-detection would pick
+    SERVLET and silently disable the reactive gateway autoconfiguration) - this is why this
+    module does not depend on libs/common-web, which pulls spring-boot-starter-web in
+    transitively.
+  </description>
+
+  <dependencies>
+    <!-- M16: Spring Cloud Gateway itself (reactive/WebFlux, Reactor Netty). Spring Cloud
+         2025.0.x split the old spring-cloud-starter-gateway into webflux/webmvc variants (the
+         legacy artifact is now a deprecated alias for this one, kept for migration only) - this
+         is the explicit, current name. -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-gateway-server-webflux</artifactId>
+    </dependency>
+
+    <!-- M16/ADR-0009: Eureka CLIENT (not server - that's discovery-server) so `lb://payment-api`
+         etc. resolve via Spring Cloud LoadBalancer in the docker-compose profile. Disabled by
+         default (application.yml) and in the k8s profile; enabled only in
+         application-docker-compose.yml. -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+    </dependency>
+
+    <!-- M16: Resilience4j circuit breaker via Spring Cloud Circuitbreaker's reactive adapter -
+         the one that composes with Gateway's reactive filter chain rather than blocking it. -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-circuitbreaker-reactor-resilience4j</artifactId>
+    </dependency>
+
+    <!-- M16: backs spring.cloud.gateway.default-filters' RequestRateLimiter (RedisRateLimiter) -
+         REACTIVE Redis, matching the rest of this module's WebFlux stack (the blocking
+         spring-boot-starter-data-redis would pull in a blocking Jedis/Lettuce path Gateway's own
+         filter never uses). -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-redis-reactive</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- M15 parity: the gateway is the HTTP edge every trace begins or passes through, so it
+         gets the same Micrometer Tracing + OTel-bridge wiring as the six services (see
+         infra/compose/README.md's M15 section) - no version on either, both managed transitively
+         by the Spring Boot BOM. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-tracing-bridge-otel</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-exporter-otlp</artifactId>
+    </dependency>
+
+    <!-- Test -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.projectreactor</groupId>
+      <artifactId>reactor-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>api-gateway</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

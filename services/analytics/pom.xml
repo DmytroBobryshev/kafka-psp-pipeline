@@ -35,6 +35,13 @@
       <artifactId>common-web</artifactId>
     </dependency>
 
+    <!-- M16/ADR-0009: Eureka client - compose profile only, same convention as every other
+         service (see payment-api/pom.xml's identical comment). -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+    </dependency>
+
     <!-- Web + actuator. Unlike ledger, the REST surface here is NOT incidental: interactive
          queries are the whole point of endpoint /api/analytics/** (ADR-0004 still holds - these
          are read-only queries served to an operator/UI, not inter-service commands). -->

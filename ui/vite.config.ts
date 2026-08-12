@@ -2,28 +2,28 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-// Dev-server proxy instead of backend CORS.
+// Dev-server proxy to api-gateway (M16), instead of straight to payment-api/realtime-gateway.
 //
-// payment-api (8085) and realtime-gateway (8090) both expose plain, un-CORS'd REST/SSE
-// endpoints - the right choice for services that, per ADR-0004, are never meant to be called
-// directly by a browser from a different origin in production (api-gateway, M16, will front
-// them). Turning on CORS in two backend services purely so a *dev-only* Vite server can reach
-// them would mean touching backend config for something that is not a backend concern at all.
+// Through M15 this proxied straight to payment-api (8085) and realtime-gateway (8090), because
+// neither had CORS configured and api-gateway didn't exist yet (see ui/README.md "Why a proxy,
+// not CORS" for that era's reasoning, kept in the README for the historical record). M16 adds
+// api-gateway as the single REST entry point ADR-0004 describes - it now owns CORS, so the
+// proxy is no longer strictly load-bearing for HOW the browser avoids a cross-origin request,
+// only for keeping `pnpm dev` a same-origin, zero-config experience. Every `/api/*` request
+// (both the payment-api paths and the realtime-gateway SSE path) now goes through ONE target:
+// api-gateway on 8000, which itself routes to the six services (lb:// via Eureka - see
+// services/api-gateway/README.md's route table).
 //
-// Instead, every browser request stays same-origin against the Vite dev server (5173), which
-// forwards `/api/payments/*` to 8085 and `/api/realtime/*` to 8090 as a plain reverse proxy.
-// The browser never sees a cross-origin request, so no CORS headers are ever needed - not now,
-// not if a third backend service joins later. See ui/README.md "Why a proxy, not CORS".
+// SSE still streams through this proxy exactly as it did through the old direct-to-8090 one:
+// Vite's proxy (like api-gateway itself) is not a buffering reverse proxy - see
+// services/api-gateway/README.md "SSE through the gateway" for the equivalent gateway-side
+// argument, verified against a real payment.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      "/api/payments": {
-        target: "http://localhost:8085",
-        changeOrigin: true,
-      },
-      "/api/realtime": {
-        target: "http://localhost:8090",
+      "/api": {
+        target: "http://localhost:8000",
         changeOrigin: true,
       },
     },
