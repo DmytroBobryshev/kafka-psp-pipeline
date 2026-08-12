@@ -3,6 +3,7 @@ package com.example.psp.webhooknotifier.config;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import io.confluent.kafka.serializers.KafkaAvroSerializerConfig;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.HashMap;
 import java.util.Map;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -66,8 +67,15 @@ public class KafkaProducerConfig {
      */
     @Bean
     public KafkaTemplate<String, Object> webhookDeliveryDlqKafkaTemplate(
-            @Qualifier("webhookDeliveryDlqProducerFactory") ProducerFactory<String, Object> producerFactory) {
-        return new KafkaTemplate<>(producerFactory);
+            @Qualifier("webhookDeliveryDlqProducerFactory") ProducerFactory<String, Object> producerFactory,
+            ObservationRegistry observationRegistry) {
+        KafkaTemplate<String, Object> template = new KafkaTemplate<>(producerFactory);
+        // M15: hand-built bean, so Boot's spring.kafka.template.observation-enabled /
+        // spring.kafka.listener.observation-enabled property never reaches it - see
+        // infra/compose/README.md's M15 section.
+        template.setObservationRegistry(observationRegistry);
+        template.setObservationEnabled(true);
+        return template;
     }
 
     /**
@@ -96,8 +104,15 @@ public class KafkaProducerConfig {
      */
     @Bean
     public KafkaTemplate<String, Object> webhookDeliveryAvroKafkaTemplate(
-            @Qualifier("webhookDeliveryAvroProducerFactory") ProducerFactory<String, Object> producerFactory) {
-        return new KafkaTemplate<>(producerFactory);
+            @Qualifier("webhookDeliveryAvroProducerFactory") ProducerFactory<String, Object> producerFactory,
+            ObservationRegistry observationRegistry) {
+        KafkaTemplate<String, Object> template = new KafkaTemplate<>(producerFactory);
+        // M15: hand-built bean, so Boot's spring.kafka.template.observation-enabled /
+        // spring.kafka.listener.observation-enabled property never reaches it - see
+        // infra/compose/README.md's M15 section.
+        template.setObservationRegistry(observationRegistry);
+        template.setObservationEnabled(true);
+        return template;
     }
 
     /**

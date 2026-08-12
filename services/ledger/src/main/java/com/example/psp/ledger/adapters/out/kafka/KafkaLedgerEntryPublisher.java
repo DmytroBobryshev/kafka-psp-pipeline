@@ -96,8 +96,10 @@ public class KafkaLedgerEntryPublisher implements LedgerEntryPublisher {
 
         ProducerRecord<String, Object> record =
                 new ProducerRecord<>(topic, entry.getMerchantId(), event);
+        // M15: no hand-written "traceparent" header - KafkaTemplate's observation (enabled in
+        // config.KafkaProducerConfig, orthogonal to this producer's transactionality) injects a
+        // real W3C one on send(), completing the payment-api -> psp-connector -> ledger trace.
         record.headers()
-                .add("traceparent", entry.getTraceId().getBytes(StandardCharsets.UTF_8))
                 .add("event-id", envelope.eventId().toString().getBytes(StandardCharsets.UTF_8))
                 .add("event-type", envelope.eventType().getBytes(StandardCharsets.UTF_8))
                 .add("aggregate-id", envelope.aggregateId().getBytes(StandardCharsets.UTF_8));

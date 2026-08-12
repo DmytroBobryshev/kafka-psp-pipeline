@@ -121,6 +121,15 @@ management:
     web:
       exposure:
         include: health,info
+  # M15: sample every trace. A learning-cluster setting, not a production one - real deployments
+  # sample far below 1.0 (root-span-based, e.g. 0.1) because 100% tracing is real overhead per
+  # request and real storage cost in the backend. 1.0 here is deliberate: the acceptance bar is
+  # "one real payment produces one connected trace", and a probabilistic sampler would make that
+  # non-deterministic - the wrong trade for proving the wiring works, the right trade to abandon
+  # before this ever ran at real traffic.
+  tracing:
+    sampling:
+      probability: 1.0
 
 # payment-api custom properties (M3)
 payment-api:

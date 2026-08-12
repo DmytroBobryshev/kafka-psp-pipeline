@@ -89,8 +89,14 @@ public class KafkaPaymentStatusPublisher implements PaymentStatusPublisher {
         // Key = merchantId, NOT paymentId - see this class's javadoc.
         ProducerRecord<String, Object> record =
                 new ProducerRecord<>(topic, attempt.getMerchantId(), event);
+        // M15: no hand-written "traceparent" header here anymore - KafkaTemplate's observation
+        // (enabled in config.KafkaProducerConfig) injects a real W3C one on send(), continuing the
+        // SAME trace this consumer's own inbound record carried. See ADR-0002/M15 reconciliation
+        // in infra/compose/README.md for why the header is now owned exclusively by Micrometer's
+        // instrumentation while envelope.traceId() (set above from attempt.getTraceId(), itself
+        // forwarded from the consumed event's envelope) stays the value-level record of the SAME
+        // trace id for anything reading the deserialized record without headers (AKHQ, DLQ dumps).
         record.headers()
-                .add("traceparent", attempt.getTraceId().getBytes(StandardCharsets.UTF_8))
                 .add("event-id", envelope.eventId().toString().getBytes(StandardCharsets.UTF_8))
                 .add("event-type", envelope.eventType().getBytes(StandardCharsets.UTF_8))
                 .add("aggregate-id", envelope.aggregateId().getBytes(StandardCharsets.UTF_8));

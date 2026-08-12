@@ -4,6 +4,11 @@ import com.example.psp.common.events.EventEnvelope;
 import com.example.psp.paymentapi.domain.model.Payment;
 import com.example.psp.paymentapi.domain.port.PaymentEventPublisher;
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +51,30 @@ import org.springframework.stereotype.Component;
  * {@code infra/compose/connect/payment-outbox-connector.json} passes them through unchanged with
  * {@code ByteArrayConverter}. See the README's M9 section for the alternatives this rejected
  * (Connect-side {@code AvroConverter} inferring a schema from the JSON payload) and why.
+ *
+ * <h2>M15 - bridging the outbox hop</h2>
+ *
+ * <p>The M6 outbox breaks the in-process span chain by construction: this method commits a row
+ * and returns; the record reaches Kafka LATER, from Debezium/Kafka Connect - a different process
+ * that never had this request's span on its call stack. Left alone, psp-connector's consumer would
+ * find no {@code traceparent} header and start a brand-new trace, disconnected from payment-api's.
+ * The fix: read the CURRENT span here (via {@link Tracer}, not by hand-parsing anything) and
+ * {@link Propagator#inject} it into {@link OutboxEventEntity#getTraceParent()}. Debezium's outbox
+ * event router is configured ({@code infra/compose/connect/payment-outbox-connector.json}'s
+ * {@code table.fields.additional.placement}) to copy that column onto the relayed record as the
+ * {@code traceparent} header - the same header Micrometer's Kafka observation instrumentation
+ * would have written had this producer called Kafka directly. See
+ * {@code db/migration/V5__outbox_event_trace_parent.sql} for the column and
+ * services/payment-api/README.md's M15 section for the full propagation write-up, including the
+ * honest limit (the relay is a header copy, not a new span - there is no span representing
+ * "Debezium relayed this row").
+ *
+ * <p>{@link EventEnvelope#traceId()} is set from the SAME current span, not from
+ * {@code correlationId} - this is ADR-0002's original intent for the field ("W3C trace-id,
+ * propagated end to end (M15)"), finished here: every downstream {@code causedBy} envelope forwards
+ * whatever {@code traceId} it received (see psp-connector's and ledger's publishers), so setting it
+ * correctly once, at the root, is what makes the value in the Avro payload and the value in the
+ * {@code traceparent} header agree everywhere downstream - one notion of trace identity, not two.
  */
 @Component
 public class OutboxPaymentEventPublisher implements PaymentEventPublisher {
@@ -58,25 +87,34 @@ public class OutboxPaymentEventPublisher implements PaymentEventPublisher {
     private final OutboxEventJpaRepository outboxEventJpaRepository;
     private final PaymentAvroEventFactory avroEventFactory;
     private final KafkaAvroSerializer avroSerializer;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     public OutboxPaymentEventPublisher(
             OutboxEventJpaRepository outboxEventJpaRepository,
             PaymentAvroEventFactory avroEventFactory,
-            KafkaAvroSerializer paymentRequestedAvroSerializer) {
+            KafkaAvroSerializer paymentRequestedAvroSerializer,
+            Tracer tracer,
+            Propagator propagator) {
         this.outboxEventJpaRepository = outboxEventJpaRepository;
         this.avroEventFactory = avroEventFactory;
         this.avroSerializer = paymentRequestedAvroSerializer;
+        this.tracer = tracer;
+        this.propagator = propagator;
     }
 
     @Override
     public void publishPaymentCreated(Payment payment) {
-        // Same MDC-correlation-id-or-fresh-UUID fallback as the retired KafkaPaymentEventPublisher
-        // (real W3C traceparent propagation is M15 scope, not this module's).
+        // correlationId stays MDC-or-fresh-UUID (CorrelationIdFilter, libs/common-web) - the
+        // originating REQUEST id, stable across retries of the same logical request even if a
+        // retry gets its own trace. traceId below is now the real thing - see class javadoc.
         String correlationId = MDC.get("correlationId");
         if (correlationId == null || correlationId.isBlank()) {
             correlationId = UUID.randomUUID().toString();
         }
-        String traceId = correlationId;
+
+        Span currentSpan = tracer.currentSpan();
+        String traceId = currentSpan != null ? currentSpan.context().traceId() : correlationId;
 
         String paymentId = payment.getId().toString();
         EventEnvelope envelope =
@@ -100,15 +138,32 @@ public class OutboxPaymentEventPublisher implements PaymentEventPublisher {
         entity.setEventType(EVENT_TYPE);
         entity.setPayload(wireBytes);
         entity.setCreatedAt(envelope.occurredAt());
+        entity.setTraceParent(traceParentOf(currentSpan));
 
         outboxEventJpaRepository.save(entity);
 
         log.info(
-                "Staged outbox event outboxId={} eventType={} paymentId={} payloadBytes={} - relayed"
+                "Staged outbox event outboxId={} eventType={} paymentId={} payloadBytes={} traceId={} - relayed"
                         + " to Kafka by Debezium, not this process",
                 entity.getId(),
                 EVENT_TYPE,
                 paymentId,
-                wireBytes.length);
+                wireBytes.length,
+                traceId);
+    }
+
+    /**
+     * Renders {@code currentSpan}'s context as a real W3C {@code traceparent} string via the
+     * OTel-bridged {@link Propagator} - never hand-formatted (see class javadoc). Returns
+     * {@code null} when there is no active span, which {@link OutboxEventEntity#traceParent} is
+     * built to tolerate (see that field's javadoc).
+     */
+    private String traceParentOf(Span currentSpan) {
+        if (currentSpan == null) {
+            return null;
+        }
+        Map<String, String> carrier = new HashMap<>();
+        propagator.inject(currentSpan.context(), carrier, Map::put);
+        return carrier.get("traceparent");
     }
 }

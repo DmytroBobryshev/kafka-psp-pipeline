@@ -1,6 +1,7 @@
 package com.example.psp.pspconnector.config;
 
 import com.example.psp.pspconnector.adapters.in.kafka.PaymentRequestedEvent;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -66,13 +67,18 @@ public class KafkaAutoCommitDriftConfig {
     public ConcurrentKafkaListenerContainerFactory<String, PaymentRequestedEvent>
             autoCommitDriftKafkaListenerContainerFactory(
                     @Qualifier("autoCommitDriftConsumerFactory")
-                            ConsumerFactory<String, PaymentRequestedEvent> autoCommitDriftConsumerFactory) {
+                            ConsumerFactory<String, PaymentRequestedEvent> autoCommitDriftConsumerFactory,
+                    ObservationRegistry observationRegistry) {
         ConcurrentKafkaListenerContainerFactory<String, PaymentRequestedEvent> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(autoCommitDriftConsumerFactory);
         // AckMode is deliberately left at its default: with enable.auto.commit=true on the
         // consumer itself, Spring Kafka's own commit management (whatever AckMode said) never
         // engages - see the class javadoc. Nothing to configure here on purpose.
+        // M15: enabled for consistency with the production listener, even though this drill
+        // profile is off by default (see class javadoc).
+        factory.getContainerProperties().setObservationRegistry(observationRegistry);
+        factory.getContainerProperties().setObservationEnabled(true);
         return factory;
     }
 }

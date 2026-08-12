@@ -4,6 +4,7 @@ import com.example.psp.common.events.avro.ProviderStatusQuery;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -72,11 +73,17 @@ public class ProviderStatusKafkaConfig {
             providerStatusQueryKafkaListenerContainerFactory(
                     @Qualifier("providerStatusQueryConsumerFactory")
                             ConsumerFactory<String, ProviderStatusQuery> providerStatusQueryConsumerFactory,
-                    KafkaTemplate<String, Object> kafkaTemplate) {
+                    KafkaTemplate<String, Object> kafkaTemplate,
+                    ObservationRegistry observationRegistry) {
         ConcurrentKafkaListenerContainerFactory<String, ProviderStatusQuery> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(providerStatusQueryConsumerFactory);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        // M15: see KafkaConsumerConfig's identical comment. The reply itself (sent via
+        // kafkaTemplate, injected above) is traced too - that template's own observation is
+        // enabled in KafkaProducerConfig.
+        factory.getContainerProperties().setObservationRegistry(observationRegistry);
+        factory.getContainerProperties().setObservationEnabled(true);
         // THE bean that makes @SendTo work - see class javadoc.
         factory.setReplyTemplate(kafkaTemplate);
         return factory;

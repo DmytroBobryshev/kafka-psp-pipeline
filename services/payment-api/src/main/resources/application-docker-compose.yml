@@ -58,3 +58,11 @@ spring:
 payment-api:
   schema-registry:
     url: http://localhost:8081
+
+# M15: same host/compose-network split as schema-registry above - payment-api runs on the HOST, so
+# it reaches Tempo via its published OTLP/HTTP port (infra/compose/.env's TEMPO_OTLP_HTTP_PORT,
+# default 4318), not the compose-DNS name tempo:4318 an in-network client would use.
+management:
+  otlp:
+    tracing:
+      endpoint: http://localhost:4318/v1/traces

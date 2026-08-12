@@ -4,6 +4,7 @@ import com.example.psp.common.events.avro.FundsReserved;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -53,11 +54,15 @@ public class RefundKafkaConsumerConfig {
     public ConcurrentKafkaListenerContainerFactory<String, FundsReserved>
             fundsReservedKafkaListenerContainerFactory(
                     @Qualifier("fundsReservedConsumerFactory")
-                            ConsumerFactory<String, FundsReserved> fundsReservedConsumerFactory) {
+                            ConsumerFactory<String, FundsReserved> fundsReservedConsumerFactory,
+                    ObservationRegistry observationRegistry) {
         ConcurrentKafkaListenerContainerFactory<String, FundsReserved> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(fundsReservedConsumerFactory);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        // M15: see KafkaConsumerConfig's identical comment.
+        factory.getContainerProperties().setObservationRegistry(observationRegistry);
+        factory.getContainerProperties().setObservationEnabled(true);
         // No CommonErrorHandler override: this module does not introduce a new retryable exception
         // type, so Spring Kafka's default classification (deserialization/conversion failures are
         // non-retryable, ADR-0006 category C) applies unchanged. M8 scope: the real policy is a

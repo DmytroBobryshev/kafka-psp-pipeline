@@ -1,5 +1,6 @@
 package com.example.psp.pspconnector.config;
 
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
@@ -27,7 +28,15 @@ public class KafkaProducerConfig {
 
     @Bean
     public KafkaTemplate<String, Object> kafkaTemplate(
-            ProducerFactory<String, Object> paymentStatusProducerFactory) {
-        return new KafkaTemplate<>(paymentStatusProducerFactory);
+            ProducerFactory<String, Object> paymentStatusProducerFactory,
+            ObservationRegistry observationRegistry) {
+        KafkaTemplate<String, Object> template = new KafkaTemplate<>(paymentStatusProducerFactory);
+        // M15: hand-built bean, so Boot's spring.kafka.template.observation-enabled property never
+        // reaches it - see infra/compose/README.md's M15 section. This is what makes
+        // KafkaPaymentStatusPublisher's send() inject a real W3C traceparent header, continuing
+        // the trace this consumer's inbound record's header started (see KafkaConsumerConfig).
+        template.setObservationRegistry(observationRegistry);
+        template.setObservationEnabled(true);
+        return template;
     }
 }

@@ -6,6 +6,7 @@ import com.example.psp.common.events.avro.RefundRequested;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -52,8 +53,9 @@ public class RefundKafkaConsumerConfig {
             refundRequestedKafkaListenerContainerFactory(
                     @Qualifier("refundRequestedConsumerFactory")
                             ConsumerFactory<String, RefundRequested> consumerFactory,
-                    KafkaTransactionManager<String, Object> kafkaTransactionManager) {
-        return containerFactory(consumerFactory, kafkaTransactionManager);
+                    KafkaTransactionManager<String, Object> kafkaTransactionManager,
+                    ObservationRegistry observationRegistry) {
+        return containerFactory(consumerFactory, kafkaTransactionManager, observationRegistry);
     }
 
     @Bean
@@ -67,8 +69,9 @@ public class RefundKafkaConsumerConfig {
             refundCompletedKafkaListenerContainerFactory(
                     @Qualifier("refundCompletedConsumerFactory")
                             ConsumerFactory<String, RefundCompleted> consumerFactory,
-                    KafkaTransactionManager<String, Object> kafkaTransactionManager) {
-        return containerFactory(consumerFactory, kafkaTransactionManager);
+                    KafkaTransactionManager<String, Object> kafkaTransactionManager,
+                    ObservationRegistry observationRegistry) {
+        return containerFactory(consumerFactory, kafkaTransactionManager, observationRegistry);
     }
 
     @Bean
@@ -81,8 +84,9 @@ public class RefundKafkaConsumerConfig {
     public ConcurrentKafkaListenerContainerFactory<String, RefundFailed>
             refundFailedKafkaListenerContainerFactory(
                     @Qualifier("refundFailedConsumerFactory") ConsumerFactory<String, RefundFailed> consumerFactory,
-                    KafkaTransactionManager<String, Object> kafkaTransactionManager) {
-        return containerFactory(consumerFactory, kafkaTransactionManager);
+                    KafkaTransactionManager<String, Object> kafkaTransactionManager,
+                    ObservationRegistry observationRegistry) {
+        return containerFactory(consumerFactory, kafkaTransactionManager, observationRegistry);
     }
 
     /**
@@ -114,13 +118,18 @@ public class RefundKafkaConsumerConfig {
      */
     private <T> ConcurrentKafkaListenerContainerFactory<String, T> containerFactory(
             ConsumerFactory<String, T> consumerFactory,
-            KafkaTransactionManager<String, Object> kafkaTransactionManager) {
+            KafkaTransactionManager<String, Object> kafkaTransactionManager,
+            ObservationRegistry observationRegistry) {
         ConcurrentKafkaListenerContainerFactory<String, T> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);
         factory.getContainerProperties().setKafkaAwareTransactionManager(kafkaTransactionManager);
         factory.setAfterRollbackProcessor(
                 new DefaultAfterRollbackProcessor<>(new FixedBackOff(1_000L, 2L)));
+        // M15: see KafkaConsumerConfig's identical comment - one place, covers all three refund
+        // saga listeners built through this shared helper.
+        factory.getContainerProperties().setObservationRegistry(observationRegistry);
+        factory.getContainerProperties().setObservationEnabled(true);
         return factory;
     }
 }

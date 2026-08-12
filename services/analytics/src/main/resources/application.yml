@@ -30,6 +30,12 @@ management:
         # client - task/thread state, records-lag, process-rate. The lag meters are what tell you a
         # restore has finished without watching the log.
         include: health,info,metrics
+  # M15: sample every trace - a dev-cluster setting (1.0), not a production one. Only reaches the
+  # @KafkaListener batch path (config.BatchListenerKafkaConfig) - see config/KafkaStreamsConfig.java
+  # for why the Kafka Streams topology itself is NOT covered by this.
+  tracing:
+    sampling:
+      probability: 1.0
 
 analytics:
   kafka:

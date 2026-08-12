@@ -11,3 +11,14 @@ datasources:
     url: http://prometheus:9090
     isDefault: true
     editable: true
+
+  # M15: Tempo, the tracing backend (infra/compose/README.md's M15 section). uid is pinned so
+  # this datasource can be referenced by a fixed id from a dashboard or from Prometheus exemplars
+  # later, the same reason the Prometheus datasource used in every dashboard JSON in this repo is
+  # referenced as {"type": "prometheus", "uid": "prometheus"} rather than by name.
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: true

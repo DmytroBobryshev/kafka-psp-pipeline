@@ -71,6 +71,10 @@ management:
         # ledger.entries.ignored - the counters that make a replay experiment readable without
         # reading the log. See README.
         include: health,info,metrics
+  # M15: see payment-api/application.yml's comment on this same key - identical reasoning.
+  tracing:
+    sampling:
+      probability: 1.0
 
 ledger:
   # Identity of this LOGICAL instance. Feeds transactional-id-prefix below, and MUST be stable

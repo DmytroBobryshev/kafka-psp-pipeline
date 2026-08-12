@@ -87,6 +87,10 @@ management:
         # /actuator/metrics/psp-connector.payment.attempts.deduplicated - see
         # application.ProcessPaymentRequestUseCase and the README's M5 section.
         include: health,info,metrics
+  # M15: see payment-api/application.yml's comment on this same key - identical reasoning.
+  tracing:
+    sampling:
+      probability: 1.0
 
 # psp-connector custom properties
 psp-connector:

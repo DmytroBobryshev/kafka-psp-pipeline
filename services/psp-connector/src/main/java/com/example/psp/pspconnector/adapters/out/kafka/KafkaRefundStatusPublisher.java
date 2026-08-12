@@ -69,8 +69,9 @@ public class KafkaRefundStatusPublisher implements RefundStatusPublisher {
                         : avroEventFactory.toRefundFailed(envelope, attempt);
 
         ProducerRecord<String, Object> record = new ProducerRecord<>(topic, attempt.getMerchantId(), event);
+        // M15: see KafkaPaymentStatusPublisher's identical comment - the traceparent header is
+        // now injected by KafkaTemplate's observation instrumentation, not written by hand here.
         record.headers()
-                .add("traceparent", attempt.getTraceId().getBytes(StandardCharsets.UTF_8))
                 .add("event-id", envelope.eventId().toString().getBytes(StandardCharsets.UTF_8))
                 .add("event-type", envelope.eventType().getBytes(StandardCharsets.UTF_8))
                 .add("aggregate-id", envelope.aggregateId().getBytes(StandardCharsets.UTF_8));

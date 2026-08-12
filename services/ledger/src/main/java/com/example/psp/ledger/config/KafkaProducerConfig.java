@@ -1,5 +1,6 @@
 package com.example.psp.ledger.config;
 
+import io.micrometer.observation.ObservationRegistry;
 import jakarta.persistence.EntityManagerFactory;
 import java.util.Map;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -148,12 +149,22 @@ public class KafkaProducerConfig {
 
     @Bean
     public KafkaTemplate<String, Object> kafkaTemplate(
-            ProducerFactory<String, Object> ledgerEntryProducerFactory) {
+            ProducerFactory<String, Object> ledgerEntryProducerFactory,
+            ObservationRegistry observationRegistry) {
         // Because the factory above has a transaction-id prefix, this template is transactional:
         // send() outside a transaction would throw, and inside one it enrolls the target partition
         // in the open transaction. adapters.out.kafka.KafkaLedgerEntryPublisher is only ever called
         // from inside the listener's transaction, so it never needs executeInTransaction().
-        return new KafkaTemplate<>(ledgerEntryProducerFactory);
+        KafkaTemplate<String, Object> template = new KafkaTemplate<>(ledgerEntryProducerFactory);
+        // M15: hand-built bean, so Boot's spring.kafka.template.observation-enabled property never
+        // reaches it (see infra/compose/README.md's M15 section). Observation and transactionality
+        // are orthogonal - this still wraps every send() in the Micrometer span it would get
+        // without the transaction manager involved, injecting a real traceparent header the same
+        // way. This is the last hop the acceptance-bar trace needs: payment-api -> psp-connector ->
+        // ledger.
+        template.setObservationRegistry(observationRegistry);
+        template.setObservationEnabled(true);
+        return template;
     }
 
     @Bean

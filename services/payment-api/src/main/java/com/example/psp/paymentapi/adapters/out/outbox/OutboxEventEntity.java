@@ -57,4 +57,17 @@ public class OutboxEventEntity {
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
+
+    /**
+     * M15: the W3C {@code traceparent} of the span active when this row was staged, captured via
+     * Micrometer's {@code Tracer}/{@code Propagator} (never hand-formatted - see
+     * {@code OutboxPaymentEventPublisher}). Nullable: no active span means no trace context to
+     * bridge, and this column is simply left null (see {@code db/migration/V5__outbox_event_trace_parent.sql}
+     * for what that degrades to downstream). Debezium's outbox event router places it back onto
+     * the relayed Kafka record as the {@code traceparent} header
+     * ({@code infra/compose/connect/payment-outbox-connector.json}) - this is the bridge across
+     * the outbox hop the M6 architecture would otherwise break.
+     */
+    @Column(name = "trace_parent", length = 64)
+    private String traceParent;
 }

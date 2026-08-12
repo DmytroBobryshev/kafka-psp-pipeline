@@ -1,0 +1,46 @@
+# infra/compose/tempo/tempo.yaml
+#
+# M15 - single-binary ("monolithic mode") Tempo: one process runs distributor, ingester,
+# querier, compactor and query-frontend together, backed by local disk instead of object storage.
+# The right shape for a laptop dev stack proving trace connectivity, not for production (Tempo's
+# own docs recommend the microservices deployment + object storage - S3/GCS - beyond a single
+# node). See infra/compose/README.md's M15 section for why Tempo was chosen over Jaeger.
+server:
+  http_listen_port: 3200
+
+# Only the OTLP/HTTP receiver is enabled - it's the only protocol any client in this stack speaks
+# (management.otlp.tracing.endpoint in each service's application-docker-compose.yml posts to
+# POST /v1/traces). No gRPC receiver, no Jaeger/Zipkin receivers: this stack has exactly one
+# tracing client shape, and an unused receiver is an unused port to explain in the README, not a
+# feature anyone here exercises.
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  # How long a block stays in memory before being cut to disk - short here on purpose so a trace
+  # produced during "prove it" verification is queryable within minutes, not after a long default
+  # cycle. Not a durability setting: on ANY cut (time-based or process restart) the WAL already on
+  # disk (storage.trace.wal below) is what actually protects in-flight spans.
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    # This is a learning cluster with no retention requirement beyond "the trace survives long
+    # enough to look at it" - 24h is generous for that and keeps local disk usage bounded across
+    # restarts without ever mattering in practice for this module's verification.
+    block_retention: 24h
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal
+
+# Query-frontend defaults (search, TraceQL) are fine unmodified for a single-binary deployment at
+# this scale - nothing here needs tuning for a handful of traces per verification run.

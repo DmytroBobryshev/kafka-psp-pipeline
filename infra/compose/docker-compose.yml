@@ -68,6 +68,7 @@ volumes:
   mongo-data:
   prometheus-data:
   grafana-data:
+  tempo-data:
 
 # ==============================================================================================
 # M14 - client properties files, rendered at `docker compose up` time from .env.
@@ -636,6 +637,34 @@ services:
       retries: 15
       start_period: 20s
 
+  # ============================================================================================
+  # M15 - Tempo: the tracing backend. Single-binary/monolithic mode (see tempo/tempo.yaml's
+  # top comment). The six Spring services below run on the HOST, so they reach Tempo's OTLP/HTTP
+  # receiver via its published host port (management.otlp.tracing.endpoint in each service's
+  # application-docker-compose.yml), same host/compose-network split every other infra address in
+  # this file already follows. Grafana (below) reaches it over the compose network instead, via
+  # the Tempo datasource in grafana/provisioning/datasources/datasource.yml.
+  # ============================================================================================
+  tempo:
+    image: grafana/tempo:${TEMPO_VERSION}
+    hostname: tempo
+    container_name: tempo
+    networks: [kafka-psp-net]
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "${TEMPO_OTLP_HTTP_PORT}:4318" # OTLP/HTTP - the six Spring services push spans here
+      - "${TEMPO_QUERY_PORT}:3200"     # Tempo's query API - Grafana's datasource reads this
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3200/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 15s
+
   prometheus:
     image: prom/prometheus:${PROMETHEUS_VERSION}
     hostname: prometheus
@@ -664,6 +693,7 @@ services:
     restart: unless-stopped
     depends_on:
       prometheus: { condition: service_healthy }
+      tempo: { condition: service_healthy } # M15: the Tempo datasource below needs it reachable
     ports:
       - "${GRAFANA_PORT}:3000"
     environment:

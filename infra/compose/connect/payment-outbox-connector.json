@@ -34,7 +34,7 @@
     "transforms.outbox.route.by.field": "aggregate_type",
     "transforms.outbox.route.topic.replacement": "${routedByValue}s.${routedByValue}-requested.v1",
 
-    "transforms.outbox.table.fields.additional.placement": "event_type:header:eventType",
+    "transforms.outbox.table.fields.additional.placement": "event_type:header:eventType,trace_parent:header:traceparent",
 
     "transforms.byteBufferFix.type": "com.example.psp.connect.smt.ByteBufferToBytes"
   }

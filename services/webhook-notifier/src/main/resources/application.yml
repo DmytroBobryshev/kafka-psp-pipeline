@@ -48,6 +48,11 @@ management:
     web:
       exposure:
         include: health,info,metrics
+  # M15: sample every trace - a dev-cluster setting (1.0), not a production one. See
+  # payment-api/application.yml's identical comment for the full reasoning.
+  tracing:
+    sampling:
+      probability: 1.0
 
 # webhook-notifier custom properties - config.WebhookNotifierProperties /
 # config.SimulatedMerchantProperties. See README.md for the full property reference.

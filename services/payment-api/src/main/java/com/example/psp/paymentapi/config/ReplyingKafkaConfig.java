@@ -7,6 +7,7 @@ import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import io.confluent.kafka.serializers.KafkaAvroSerializerConfig;
+import io.micrometer.observation.ObservationRegistry;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.time.Duration;
@@ -147,8 +148,15 @@ public class ReplyingKafkaConfig {
     @Bean
     public KafkaMessageListenerContainer<String, ProviderStatusReply> providerStatusReplyContainer(
             ConsumerFactory<String, ProviderStatusReply> providerStatusReplyConsumerFactory,
-            @Value("${payment-api.kafka.provider-status-reply-topic}") String replyTopic) {
+            @Value("${payment-api.kafka.provider-status-reply-topic}") String replyTopic,
+            ObservationRegistry observationRegistry) {
         ContainerProperties containerProperties = new ContainerProperties(replyTopic);
+        // M15: hand-built container, same reasoning as every other config class in this service -
+        // wired explicitly so the reply consumer's receive extracts whatever traceparent the
+        // responder (psp-connector) sent back, continuing the SAME trace the query started
+        // rather than starting a fresh one.
+        containerProperties.setObservationRegistry(observationRegistry);
+        containerProperties.setObservationEnabled(true);
         // ReplyingKafkaTemplate installs its OWN internal MessageListener on this container (it
         // matches each record's KafkaHeaders.CORRELATION_ID against its pending-request map) -
         // this bean exists purely to be handed to the template below, never to carry a
@@ -159,7 +167,8 @@ public class ReplyingKafkaConfig {
     @Bean
     public ReplyingKafkaTemplate<String, ProviderStatusQuery, ProviderStatusReply> providerStatusReplyingKafkaTemplate(
             ProducerFactory<String, ProviderStatusQuery> providerStatusQueryProducerFactory,
-            KafkaMessageListenerContainer<String, ProviderStatusReply> providerStatusReplyContainer) {
+            KafkaMessageListenerContainer<String, ProviderStatusReply> providerStatusReplyContainer,
+            ObservationRegistry observationRegistry) {
         ReplyingKafkaTemplate<String, ProviderStatusQuery, ProviderStatusReply> template =
                 new ReplyingKafkaTemplate<>(providerStatusQueryProducerFactory, providerStatusReplyContainer);
 
@@ -172,6 +181,12 @@ public class ReplyingKafkaConfig {
         // adapters.out.kafka.ProviderStatusRequestGateway / the README for the value's
         // justification.
         template.setDefaultReplyTimeout(Duration.ofSeconds(5));
+
+        // M15: ReplyingKafkaTemplate extends KafkaTemplate, so the same hand-built-bean caveat
+        // applies to the query it sends - the outbound psp.provider-status-query.v1 record gets a
+        // real traceparent header only because this is set explicitly.
+        template.setObservationRegistry(observationRegistry);
+        template.setObservationEnabled(true);
 
         return template;
     }

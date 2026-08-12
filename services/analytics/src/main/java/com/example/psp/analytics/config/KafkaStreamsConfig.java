@@ -31,6 +31,17 @@ import org.springframework.kafka.config.KafkaStreamsConfiguration;
  * {@code StreamsBuilder} as a bean, and start/stop the {@code KafkaStreams} client with the
  * application context. {@code adapters.in.kafka.AnalyticsTopology} injects that builder and
  * describes the topology; nothing here knows what the topology contains.
+ *
+ * <p>M15 - NOT instrumented for distributed tracing. Spring Boot's Micrometer Observation-based
+ * Kafka instrumentation (used everywhere else in this repo to inject/extract W3C traceparent
+ * headers) only wraps KafkaTemplate sends and {@code @KafkaListener}-managed containers - it does
+ * not reach Kafka Streams' own internal producer/consumer clients at all. Bridging this
+ * topology's consume/produce hops into the same trace as the rest of the system would need a
+ * separate OpenTelemetry Kafka-clients instrumentation-agent library (its own release train,
+ * wired to a {@code GlobalOpenTelemetry} singleton) - out of scope for this module. This
+ * topology's spans are therefore absent from Tempo; only analytics' plain {@code @KafkaListener}
+ * batch path ({@code config.BatchListenerKafkaConfig}) participates in tracing. See
+ * infra/compose/README.md's M15 section for the full write-up.
  */
 @Configuration
 @EnableKafkaStreams

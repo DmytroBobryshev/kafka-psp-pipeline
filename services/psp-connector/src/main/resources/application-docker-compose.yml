@@ -55,3 +55,9 @@ spring:
 psp-connector:
   schema-registry:
     url: http://localhost:8081
+
+# M15: same host/compose-network split as schema-registry above.
+management:
+  otlp:
+    tracing:
+      endpoint: http://localhost:4318/v1/traces

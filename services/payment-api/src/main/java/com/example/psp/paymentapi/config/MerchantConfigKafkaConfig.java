@@ -3,6 +3,7 @@ package com.example.psp.paymentapi.config;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import io.confluent.kafka.serializers.KafkaAvroSerializerConfig;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.HashMap;
 import java.util.Map;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -72,7 +73,13 @@ public class MerchantConfigKafkaConfig {
     @Bean
     public KafkaTemplate<String, Object> merchantConfigKafkaTemplate(
             @Qualifier("merchantConfigProducerFactory")
-                    ProducerFactory<String, Object> merchantConfigProducerFactory) {
-        return new KafkaTemplate<>(merchantConfigProducerFactory);
+                    ProducerFactory<String, Object> merchantConfigProducerFactory,
+            ObservationRegistry observationRegistry) {
+        KafkaTemplate<String, Object> template = new KafkaTemplate<>(merchantConfigProducerFactory);
+        // M15: same reasoning as config.KafkaProducerConfig's template - a hand-built bean needs
+        // observation wired in explicitly, the Boot property does not reach it.
+        template.setObservationRegistry(observationRegistry);
+        template.setObservationEnabled(true);
+        return template;
     }
 }

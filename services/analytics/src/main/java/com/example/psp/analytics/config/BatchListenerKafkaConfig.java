@@ -4,6 +4,7 @@ import com.example.psp.common.events.avro.PaymentStatusChanged;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -72,10 +73,16 @@ public class BatchListenerKafkaConfig {
     public ConcurrentKafkaListenerContainerFactory<String, PaymentStatusChanged>
             paymentStatusAuditBatchKafkaListenerContainerFactory(
                     @Qualifier("paymentStatusAuditConsumerFactory")
-                            ConsumerFactory<String, PaymentStatusChanged> consumerFactory) {
+                            ConsumerFactory<String, PaymentStatusChanged> consumerFactory,
+                    ObservationRegistry observationRegistry) {
         ConcurrentKafkaListenerContainerFactory<String, PaymentStatusChanged> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);
+
+        // M15: hand-built factory, so Boot's spring.kafka.listener.observation-enabled property never
+        // reaches it - see infra/compose/README.md's M15 section.
+        factory.getContainerProperties().setObservationRegistry(observationRegistry);
+        factory.getContainerProperties().setObservationEnabled(true);
 
         // --- THE setting that makes this a batch listener -------------------------------------
         // Without this, the same @KafkaListener(topics = ...) would fail to start: Spring Kafka

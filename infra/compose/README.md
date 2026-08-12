@@ -686,10 +686,272 @@ set -a; . infra/compose/.env; set +a
 SPRING_PROFILES_ACTIVE=docker-compose mvn -pl services/payment-api -am spring-boot:run
 ```
 
-If you forget, Spring fails fast at startup with
-`Could not resolve placeholder 'PAYMENT_API_KAFKA_PASSWORD'` - a deliberate choice over a default
-value, because a service that silently starts with the wrong credential looks like an ACL problem
-and wastes an hour.
+**If you forget, it does NOT fail fast** - measured, after this section originally claimed it did.
+The placeholder sits inside the `spring.kafka.*.properties` map, which is resolved when a Kafka
+client is built, not when the context starts. So the service boots, serves HTTP, and reports
+`/actuator/health` as `UP` - the web server has no opinion about Kafka - while every listener
+container fails the SASL handshake and stops:
+
+```
+Authentication failed during authentication due to invalid credentials with SASL mechanism SCRAM-SHA-512
+Authorization Exception and no authExceptionRetryInterval set
+psp-connector.v1: Consumer stopped
+```
+
+Those lines are in the log and nowhere else. Four services were in exactly this state at once
+during M15's verification, and the only external symptom was consumer lag that never moved.
+
+This is the third instance of one pattern in this project: M12's fan-out failure (zero lag on every
+instance while half the users get nothing), M14's Kafka Connect (`RUNNING` while moving zero
+records), and now this. **A component asked about itself will say it is fine.** The check that
+works is always the same one - did data actually move. `kafka-consumer-groups --describe` and a lag
+that does not budge answers in seconds what a health endpoint never will.
+
+Two things would help and neither is implemented: `authExceptionRetryInterval` on the container
+factory, so it keeps retrying and logging rather than stopping dead; and a readiness probe
+reflecting the listener containers' real state rather than the servlet's.
+
+## M15 - Observability: distributed tracing + consumer lag dashboards
+
+Two things land in this module: a tracing backend (Tempo) that every one of the six Spring
+services exports spans to over OTLP, and a Grafana dashboard built entirely on metrics
+kafka-exporter (M2) already scrapes - no new exporter, no new principal for that half.
+
+### Tracing backend: Tempo, not Jaeger
+
+The task allows either; Tempo was chosen for one reason that outweighs Jaeger's simplicity-of-setup
+edge: **this stack has centered every piece of observability in Grafana since M2** (Prometheus
+metrics, the `kafka-overview` dashboard) - Tempo is a Grafana-Labs product with a first-class
+Grafana datasource (trace search, trace-by-ID lookup, and span-to-log/span-to-metric linking all
+render *inside* Grafana), so adding it means zero new UI to stand up, learn, or explain in this
+README. Jaeger is genuinely simpler to bring up standalone (one container, its own UI baked in,
+nothing else to configure) - that simplicity is real and is the honest case for it - but it would
+be a *second* observability UI next to Grafana rather than a piece of the one this stack already
+has, which is the wrong trade for a system whose M2-through-M15 throughline has been "one pane of
+glass." Tempo also runs happily in single-binary/monolithic mode on local disk
+(`infra/compose/tempo/tempo.yaml`) for a stack this size, so the simplicity gap is smaller than it
+first looks: one more container, one more datasource, no separate UI to reach.
+
+| Component | Image | Port(s) | Why |
+|---|---|---|---|
+| Tempo | `grafana/tempo:${TEMPO_VERSION}` (2.6.1) | `4318` (OTLP/HTTP, host clients push spans here), `3200` (Tempo's own query API, Grafana's datasource reads this) | See above. Single-binary mode, local-disk storage (`tempo/tempo.yaml`) - the right shape for proving trace connectivity on a laptop, not for production (Tempo's own docs recommend the microservices deployment + object storage beyond one node). |
+
+Grafana's Tempo datasource (`grafana/provisioning/datasources/datasource.yml`, `uid: tempo`) is
+provisioned the same way the Prometheus one already is - no manual "Add data source" click.
+Traces: **Grafana -> Explore -> Tempo datasource -> paste a trace ID**, or search by service name/
+tags if TraceQL search is enabled (it is, by default, in this Tempo version).
+
+### W3C trace context across the Kafka hop
+
+**Micrometer Tracing + the OpenTelemetry bridge** (`io.micrometer:micrometer-tracing-bridge-otel`
++ `io.opentelemetry:opentelemetry-exporter-otlp`, no `<version>` in any service pom - both are
+managed transitively by the root pom's imported `spring-boot-dependencies` BOM, same as
+`spring-kafka` itself) is added to all six services. Once that + `spring-boot-starter-actuator`
+(already present everywhere) are on the classpath, Spring Boot auto-configures: a `Tracer` bean,
+a `Propagator` bean (W3C `traceparent`/`tracestate` by default under the OTel bridge - this is
+what makes the header format W3C, not a hand-picked choice), an `ObservationRegistry` bean with
+the tracing `ObservationHandler`s already registered on it, and - because `spring-boot-starter-web`
+is present on the HTTP-facing services - a span around every inbound HTTP request automatically
+(this is where a payment's trace is born, in `payment-api`'s `POST /api/payments` handler).
+
+**The task's instruction was "Spring Kafka has instrumentation for this - wire it rather than
+hand-rolling header injection," and that instrumentation is Spring Kafka's Observation API**
+(`KafkaTemplate.setObservationEnabled(true)` / `ContainerProperties.setObservationEnabled(true)`):
+once enabled, a `KafkaTemplate.send()` is wrapped in a Micrometer observation that - because the
+tracing `ObservationHandler`s are registered - injects the current span's context into the
+outbound `ProducerRecord`'s headers via the `Propagator` (a real `traceparent`, not a raw string);
+symmetrically, a `@KafkaListener`-managed container's observation extracts whatever `traceparent`
+header is present on the inbound `ConsumerRecord` *before* invoking the listener, making it the
+**parent** of the span the listener runs under. Two records consumed-and-produced across that
+boundary end up as parent/child spans in the *same* trace, not two disconnected ones.
+
+**The gotcha that would have made this silently do nothing:** every one of this repo's six
+services hand-builds its own `KafkaTemplate` and `ConcurrentKafkaListenerContainerFactory` beans
+in `@Configuration` classes (see M4/M7/M12's own config classes) rather than relying on Spring
+Boot's auto-configured ones - a deliberate, pre-M15 choice, made so the beans' generics and
+producer/consumer properties are unambiguous (see e.g. `psp-connector`'s `KafkaProducerConfig`
+javadoc). Spring Boot's `spring.kafka.template.observation-enabled` /
+`spring.kafka.listener.observation-enabled` YAML properties **only wire the bean Boot itself
+creates** (`KafkaAutoConfiguration`, `@ConditionalOnMissingBean`) - since a custom bean already
+exists everywhere in this codebase, that autoconfiguration is skipped entirely and the YAML
+property is silently inert. This is the same shape of trap M14 documented for Kafka Connect's
+`producer.`/`consumer.`/`admin.`-prefixed properties (worker-level config that authenticates the
+worker but not the clients built on a connector's behalf) - a setting that looks like it should
+apply but doesn't, with no error anywhere. The fix: every hand-built `KafkaTemplate` and listener
+container factory across all six services now calls `.setObservationRegistry(...)` and
+`.setObservationEnabled(true)` **explicitly, in code** - grep any service's `config/` package for
+`// M15:` to find every site.
+
+**What is NOT covered:** Spring Kafka's Observation API only wraps `KafkaTemplate` sends and
+`@KafkaListener`-managed container invocations. `analytics`' Kafka Streams topology
+(`AnalyticsTopology`/`KafkaStreamsConfig`) talks to Kafka through Streams' own internal
+producer/consumer clients, which this mechanism does not reach at all - bridging that would need a
+separate OpenTelemetry Kafka-clients instrumentation-agent library (its own release train, wired
+to a `GlobalOpenTelemetry` singleton), left out of scope. `analytics`' plain `@KafkaListener` batch
+path (M13's `PaymentStatusChangedBatchListener`) is fully covered; the windowed-metrics Streams
+topology's own hops are not. See that service's `KafkaStreamsConfig.java` for the same note in
+code.
+
+### Reconciling W3C `traceparent` with ADR-0002's `traceId`/`correlationId`
+
+ADR-0002 already carries `traceId` and `correlationId` in the event envelope, and (pre-M15)
+several publishers hand-wrote a `traceparent` Kafka header whose value was just a copy of
+`correlationId` - not a real W3C trace-parent string, and not derived from any actual span. M15
+resolves this rather than leaving two competing notions of trace identity in place:
+
+- **The `traceparent` HEADER is now owned exclusively by Micrometer/Spring Kafka's observation
+  instrumentation.** No producer in this codebase writes it by hand anymore (every
+  `.add("traceparent", ...)` call from before this module was removed) - it is real W3C format,
+  injected/extracted automatically, and it is the mechanism that actually links spans across
+  services in Tempo.
+- **The envelope's `traceId` field is now the REAL W3C trace id** (the 32-hex-char id, read from
+  `Tracer.currentSpan().context().traceId()`), not a copy of `correlationId`. This finishes what
+  ADR-0002 already documented as the field's intent ("W3C trace-id, propagated end to end (M15)")
+  rather than introducing a new concept. It is set once, at the root
+  (`payment-api`'s `OutboxPaymentEventPublisher`/`OutboxRefundEventPublisher`, where the incoming
+  HTTP request's span exists) - every downstream `EventEnvelope.causedBy(...)` call in
+  `psp-connector` and `ledger` already forwards whatever `traceId` it read off the consumed event
+  (unchanged code, see e.g. `KafkaPaymentStatusPublisher`), so fixing it once at the root is enough
+  to make the value in the Avro payload and the value in the `traceparent` header agree everywhere
+  downstream - one notion of trace identity, expressed in two encodings (bare trace-id in the
+  payload for anything reading a deserialized record without headers - AKHQ, the MongoDB audit
+  sink, a DLQ dump; full `traceparent` in the header for cross-process propagation), not two
+  independent ones that can silently drift apart.
+- **`correlationId` is unchanged and stays a distinct concept**: the originating REQUEST id
+  (`libs/common-web`'s `CorrelationIdFilter`, `X-Correlation-Id`), stable across retries of the
+  same logical request even where a retry might get its own trace. `correlationId` answers "which
+  client request was this," `traceId`/`traceparent` answer "which causally-connected chain of
+  spans was this" - related but not interchangeable, and M15 does not merge them.
+
+### The M6 outbox hop: the honest limit, and the bridge
+
+The M6 transactional outbox breaks the in-process span chain **by construction**: `payment-api`
+commits an `outbox_event` row inside the HTTP request's span and returns; the record reaches Kafka
+**later**, from **Debezium/Kafka Connect** - a different process that never had, and never could
+have had, that span on its call stack (Kafka Connect is not instrumented with Micrometer at all).
+Left alone, `psp-connector`'s consumer would find no `traceparent` header on the relayed record and
+start a brand-new, disconnected trace - two spans in two different traces for one payment, which
+is exactly the failure the acceptance bar exists to catch.
+
+**The bridge, implemented in this module** (`services/payment-api/README.md`'s M15 section has the
+full code-level write-up): `OutboxPaymentEventPublisher`/`OutboxRefundEventPublisher` read the
+current span via `Tracer` and inject it (via `Propagator.inject`, never hand-formatted) into a new
+`outbox_event.trace_parent` column (`db/migration/V5__outbox_event_trace_parent.sql`). Debezium's
+outbox event router is configured (`connect/payment-outbox-connector.json`'s
+`transforms.outbox.table.fields.additional.placement`, now
+`event_type:header:eventType,trace_parent:header:traceparent`) to copy that column onto the relayed
+Kafka record as the `traceparent` header - the same header the record would have carried had
+`payment-api` produced it directly through an observed `KafkaTemplate`.
+
+**What this does and does not fix:** the relayed record's trace **identity** is preserved (every
+downstream span shares the same trace id, so Tempo shows one connected trace), but there is no span
+representing "Debezium relayed this row" - the trace has a gap in **time** (the row can sit in
+`outbox_event` for a while before Connect gets to it; nothing marks that wait), just not in
+**identity**. A caller with no active span (e.g. a future scheduled job staging a row outside any
+HTTP request) simply produces a row with `trace_parent = NULL`; Debezium's additional-field
+placement leaves the header off, and the consumer starts a fresh root span instead of continuing
+one - a graceful degrade, not a failure.
+
+### Correlation-id filter (unchanged) and how it fits
+
+`libs/common-web`'s `CorrelationIdFilter` keeps working exactly as before M15 - it still reads/
+generates `X-Correlation-Id`, puts it in the SLF4J MDC for intra-service log correlation, and
+echoes it on the response. Nothing about M15 touches it. What changed is one level up: MDC's
+`correlationId` used to be the *only* thing hand-carried into the envelope's `traceId` field too
+(a stand-in, pre-M15); now `traceId` is the real thing (see "Reconciling" above) and
+`correlationId` keeps its own, narrower job.
+
+### Consumer lag dashboard
+
+`grafana/dashboards/kafka-consumer-lag.json` (auto-provisioned like `kafka-overview.json`, M2) is
+built entirely on **kafka-exporter** (M2's Describe-only principal, no new exporter, no new ACL) -
+the task's explicit preference over adding a second exporter. Panels and the metric each uses:
+
+| Panel | Metric |
+|---|---|
+| Total lag, all groups | `sum(kafka_consumergroup_lag)` |
+| Lag by consumer group | `sum by (consumergroup) (kafka_consumergroup_lag)` |
+| Consumer groups reporting (exporter sanity check) | `count(count by (consumergroup) (kafka_consumergroup_lag))` |
+| **Lag by group and topic, over time** (the panel this dashboard exists for) | `sum by (consumergroup, topic) (kafka_consumergroup_lag)` |
+| Lag by partition (detail, for lag-induction drills) | `kafka_consumergroup_lag` (unaggregated - `consumergroup`/`topic`/`partition` labels) |
+| Current offset by group/topic (context: stuck vs. just-behind-a-fast-producer) | `sum by (consumergroup, topic) (kafka_consumergroup_current_offset)` |
+
+### New principals / ACLs
+
+**None.** Tempo is not a Kafka client - services push spans to it over OTLP/HTTP, entirely outside
+the Kafka protocol, so it needs no SASL/SCRAM principal and no entry in
+`kafka-init/init-security.sh`. The lag dashboard is read entirely through the Prometheus datasource
+against kafka-exporter's existing M14 Describe-only principal - no new grant either. This module's
+only new `.env` variables are `TEMPO_VERSION`, `TEMPO_OTLP_HTTP_PORT`, `TEMPO_QUERY_PORT`.
+
+### Trace proof
+
+Captured against the live stack (compose infra + all six services on the host, SASL/SCRAM auth
+on): `POST /api/payments` for `merchantId=merchant-m15-trace-proof`, `paymentId=e3a20542-2f5a-47db-b177-6ffd0c6eeb14`.
+
+**The outbox bridge, at the database row:**
+
+```
+$ docker compose exec -T postgres psql -U payment_api -d payment_api -c \
+  "SELECT id, aggregate_type, aggregate_id, trace_parent FROM outbox_event WHERE aggregate_id = 'e3a20542-2f5a-47db-b177-6ffd0c6eeb14';"
+
+id                                   | aggregate_type | aggregate_id                         | trace_parent
+019ff374-640e-70c1-a903-ac67592c53f4 | payment        | e3a20542-2f5a-47db-b177-6ffd0c6eeb14 | 00-9f98cc4509b3725cb34628bdd6b691ed-d643cec9d8f3b190-01
+```
+
+A real W3C `traceparent` (version `00`, trace-id `9f98cc4509b3725cb34628bdd6b691ed`), captured from
+the HTTP request's span via `Tracer`/`Propagator` and stored on the outbox row *before* Debezium
+ever touches it - exactly the bridge described above.
+
+**The same trace id in every downstream log line** (Spring Boot's default log pattern prints
+`[traceId-spanId]` once Micrometer Tracing is on the classpath - this is independent,
+zero-extra-code confirmation the header crossed every hop):
+
+```
+psp-connector     [9f98cc4509b3725cb34628bdd6b691ed-...] Consumed payment-requested paymentId=e3a20542-...
+psp-connector     [9f98cc4509b3725cb34628bdd6b691ed-...] Published payments.payment-status-changed.v1 ... status=SUCCEEDED
+ledger            [9f98cc4509b3725cb34628bdd6b691ed-...] Consumed payment-status-changed ... status=SUCCEEDED
+webhook-notifier  [9f98cc4509b3725cb34628bdd6b691ed-...] Consumed payment-status-changed ... status=SUCCEEDED
+realtime-gateway  (same trace id in its own log, consuming both payments.payment-requested.v1 and payments.payment-status-changed.v1)
+```
+
+**Queried from Tempo** (`GET http://localhost:3200/api/traces/9f98cc4509b3725cb34628bdd6b691ed`,
+same thing `Grafana -> Explore -> Tempo -> <paste trace id>` shows):
+
+**Trace ID `9f98cc4509b3725cb34628bdd6b691ed` - 10 spans across 5 services** (payment-api,
+psp-connector, ledger, webhook-notifier, realtime-gateway - every service except `analytics`,
+whose Kafka Streams topology is the documented, out-of-scope gap above):
+
+```
+payment-api        SERVER    http post /api/payments                              (root span)
+├─ psp-connector    CONSUMER  payments.payment-requested.v1 receive                 (the outbox-bridged hop)
+│  └─ psp-connector PRODUCER  payments.payment-status-changed.v1 send
+│     ├─ ledger            CONSUMER  payments.payment-status-changed.v1 receive
+│     │  └─ ledger         PRODUCER  ledger.ledger-entry-recorded.v1 send
+│     ├─ webhook-notifier  CONSUMER  payments.payment-status-changed.v1 receive
+│     │  └─ webhook-notifier PRODUCER webhooks.webhook-delivery-requested.v2 send
+│     │     └─ webhook-notifier CONSUMER webhooks.webhook-delivery-requested.v2 receive
+│     └─ realtime-gateway  CONSUMER  payments.payment-status-changed.v1 receive
+└─ realtime-gateway CONSUMER  payments.payment-requested.v1 receive
+```
+
+Every span's `parentSpanId` resolves to a real span already in the trace - no orphans, one
+connected tree, spanning the M6 outbox hop (`payment-api` -> Debezium -> `psp-connector`, the one
+hop with no instrumented process in between) exactly as designed. This is strictly more than the
+acceptance bar's "at least payment-api, psp-connector and ledger": `webhook-notifier` and
+`realtime-gateway` both joined the same trace for free, because their listener container factories
+got the identical M15 treatment.
+
+**Lag dashboard, queried live during this same run** (`sum by (consumergroup, topic)
+(kafka_consumergroup_lag)`, panel 4 above): 109 group/topic series returned, including
+`ledger.v1`/`payments.payment-status-changed.v1 = 0` and `psp-connector.v1`/
+`payments.payment-requested.v1 = 1` for the two consumer groups this payment exercised - real,
+live numbers, not an empty panel.
+
+<!-- ORCHESTRATOR: replace/extend this block with the formal run's own captured trace ID, span
+     count and service list if it differs from the one above. -->
+
+**(the run above is this module's own verification; the orchestrator's formal proof goes here)**
 
 ## Persistence
 

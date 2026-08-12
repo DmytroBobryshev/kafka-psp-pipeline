@@ -43,6 +43,16 @@
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
 
+    <!-- M15: Micrometer Tracing bridged to OpenTelemetry, exporting to Tempo over OTLP. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-tracing-bridge-otel</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-exporter-otlp</artifactId>
+    </dependency>
+
     <!-- MongoDB persistence (ADR-0005: webhook-notifier owns its own database, `webhook_notifier`) -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

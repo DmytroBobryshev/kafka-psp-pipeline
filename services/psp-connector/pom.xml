@@ -41,6 +41,17 @@
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
 
+    <!-- M15: Micrometer Tracing bridged to OpenTelemetry, exporting to Tempo over OTLP - see
+         payment-api/pom.xml's comment for why no <version> is needed. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-tracing-bridge-otel</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-exporter-otlp</artifactId>
+    </dependency>
+
     <!-- Real Postgres persistence (ADR-0005: psp-connector owns its own database, psp_connector) -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

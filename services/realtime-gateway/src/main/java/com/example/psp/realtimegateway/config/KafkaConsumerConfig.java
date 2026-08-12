@@ -3,6 +3,7 @@ package com.example.psp.realtimegateway.config;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
+import io.micrometer.observation.ObservationRegistry;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.Map;
@@ -154,10 +155,19 @@ public class KafkaConsumerConfig {
 
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, Object> realtimeKafkaListenerContainerFactory(
-            ConsumerFactory<String, Object> realtimeConsumerFactory) {
+            ConsumerFactory<String, Object> realtimeConsumerFactory,
+            ObservationRegistry observationRegistry) {
         ConcurrentKafkaListenerContainerFactory<String, Object> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(realtimeConsumerFactory);
+
+        // M15: hand-built factory, so Boot's spring.kafka.listener.observation-enabled property never
+        // reaches it - see infra/compose/README.md's M15 section. This is what lets this consumer extract
+        // the traceparent header psp-connector/payment-api produced upstream and continue THAT trace,
+        // even though realtime-gateway never produces anything back to Kafka itself.
+        factory.getContainerProperties().setObservationRegistry(observationRegistry);
+        factory.getContainerProperties().setObservationEnabled(true);
+
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         // No CommonErrorHandler override, no DLQ - see adapters.in.kafka.RealtimeEventListener's
         // javadoc for why (docs/diagrams/topic-map.md's explicit "analytics and realtime-gateway

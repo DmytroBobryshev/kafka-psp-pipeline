@@ -55,3 +55,11 @@ analytics:
     #   du -sh ~/.kafka-psp/analytics-streams-state/analytics-streams.v1
     #   rm -rf  ~/.kafka-psp/analytics-streams-state
     state-dir: ${user.home}/.kafka-psp/analytics-streams-state
+
+# M15: analytics runs on the HOST, so it reaches Tempo via its published OTLP/HTTP port
+# (infra/compose/.env's TEMPO_OTLP_HTTP_PORT, default 4318) - same host/compose-network split
+# every other infra address in this file already follows.
+management:
+  otlp:
+    tracing:
+      endpoint: http://localhost:4318/v1/traces

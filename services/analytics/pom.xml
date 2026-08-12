@@ -46,6 +46,15 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
+    <!-- M15: Micrometer Tracing bridged to OpenTelemetry, exporting to Tempo over OTLP. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-tracing-bridge-otel</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-exporter-otlp</artifactId>
+    </dependency>
     <!-- Bean validation on the interactive-query request parameters (lookbackMinutes bounds) -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

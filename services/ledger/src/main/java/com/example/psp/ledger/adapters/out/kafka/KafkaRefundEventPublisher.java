@@ -163,8 +163,8 @@ public class KafkaRefundEventPublisher implements RefundEventPublisher {
 
     private void send(String topic, String key, Object value, EventEnvelope envelope) {
         ProducerRecord<String, Object> record = new ProducerRecord<>(topic, key, value);
+        // M15: see KafkaLedgerEntryPublisher's identical comment.
         record.headers()
-                .add("traceparent", envelope.traceId().getBytes(StandardCharsets.UTF_8))
                 .add("event-id", envelope.eventId().toString().getBytes(StandardCharsets.UTF_8))
                 .add("event-type", envelope.eventType().getBytes(StandardCharsets.UTF_8))
                 .add("aggregate-id", envelope.aggregateId().getBytes(StandardCharsets.UTF_8));

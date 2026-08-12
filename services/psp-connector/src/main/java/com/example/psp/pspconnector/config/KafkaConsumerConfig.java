@@ -5,6 +5,7 @@ import com.example.psp.pspconnector.domain.exception.ProviderTimeoutException;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -150,10 +151,19 @@ public class KafkaConsumerConfig {
     public ConcurrentKafkaListenerContainerFactory<String, PaymentRequested>
             paymentRequestedKafkaListenerContainerFactory(
                     @Qualifier("paymentRequestedConsumerFactory")
-                            ConsumerFactory<String, PaymentRequested> paymentRequestedConsumerFactory) {
+                            ConsumerFactory<String, PaymentRequested> paymentRequestedConsumerFactory,
+                    ObservationRegistry observationRegistry) {
         ConcurrentKafkaListenerContainerFactory<String, PaymentRequested> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(paymentRequestedConsumerFactory);
+
+        // M15: hand-built factory, so Boot's spring.kafka.listener.observation-enabled property
+        // never reaches it (see infra/compose/README.md's M15 section). Enabling this explicitly
+        // is what makes the container extract an inbound traceparent header (real, from Micrometer's
+        // observation on payment-api's send - or bridged across the M6 outbox, see
+        // OutboxPaymentEventPublisher) and continue that SAME trace, instead of starting a new one.
+        factory.getContainerProperties().setObservationRegistry(observationRegistry);
+        factory.getContainerProperties().setObservationEnabled(true);
 
         // --- Spring AckMode: MANUAL_IMMEDIATE --------------------------------------------------
         // Spring Kafka's own layer on top of enable.auto.commit=false. MANUAL would let

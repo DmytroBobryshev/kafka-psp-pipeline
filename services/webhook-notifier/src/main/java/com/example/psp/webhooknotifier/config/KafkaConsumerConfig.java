@@ -5,6 +5,7 @@ import com.example.psp.common.events.avro.WebhookDeliveryRequested;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.TopicPartition;
@@ -94,11 +95,17 @@ public class KafkaConsumerConfig {
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, PaymentStatusChanged>
             plannerKafkaListenerContainerFactory(
-                    @Qualifier("plannerConsumerFactory") ConsumerFactory<String, PaymentStatusChanged> consumerFactory) {
+                    @Qualifier("plannerConsumerFactory") ConsumerFactory<String, PaymentStatusChanged> consumerFactory,
+                    ObservationRegistry observationRegistry) {
         ConcurrentKafkaListenerContainerFactory<String, PaymentStatusChanged> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        // M15: hand-built bean, so Boot's spring.kafka.template.observation-enabled /
+        // spring.kafka.listener.observation-enabled property never reaches it - see
+        // infra/compose/README.md's M15 section.
+        factory.getContainerProperties().setObservationRegistry(observationRegistry);
+        factory.getContainerProperties().setObservationEnabled(true);
 
         // No DLQ for this topic (see PaymentStatusChangedListener's javadoc) - zero retries, log
         // and skip via the default (no-recoverer) DefaultErrorHandler.
@@ -130,13 +137,19 @@ public class KafkaConsumerConfig {
                     @Qualifier("executorConsumerFactory")
                             ConsumerFactory<String, WebhookDeliveryRequested> consumerFactory,
                     @Qualifier("webhookDeliveryDlqKafkaTemplate") KafkaTemplate<String, Object> dlqKafkaTemplate,
-                    WebhookNotifierProperties properties) {
+                    WebhookNotifierProperties properties,
+                    ObservationRegistry observationRegistry) {
         ConcurrentKafkaListenerContainerFactory<String, WebhookDeliveryRequested> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);
         // The listener itself calls Acknowledgment.acknowledge() only once ExecuteWebhookDeliveryUseCase's
         // returned future completes - see WebhookDeliveryExecutorListener's javadoc.
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        // M15: hand-built bean, so Boot's spring.kafka.template.observation-enabled /
+        // spring.kafka.listener.observation-enabled property never reaches it - see
+        // infra/compose/README.md's M15 section.
+        factory.getContainerProperties().setObservationRegistry(observationRegistry);
+        factory.getContainerProperties().setObservationEnabled(true);
 
         String dlqTopic = properties.kafka().dlqTopic();
         // dlqKafkaTemplate, NOT the Avro template - a genuine poison pill's value is raw,

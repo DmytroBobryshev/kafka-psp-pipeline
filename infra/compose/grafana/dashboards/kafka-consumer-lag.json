@@ -1,0 +1,138 @@
+{
+  "title": "Kafka Consumer Lag (M15)",
+  "uid": "kafka-m15-consumer-lag",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": { "from": "now-15m", "to": "now" },
+  "tags": ["kafka", "m15", "lag"],
+  "description": "Per-group per-topic consumer lag, built entirely on the kafka-exporter metrics infra/compose already scrapes (M2) - no new exporter or principal needed. See infra/compose/README.md's M15 section for which metric backs each panel.",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Total lag, all groups (records behind)",
+      "type": "stat",
+      "description": "sum(kafka_consumergroup_lag) - the single number that answers \"is anything falling behind, anywhere\".",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(kafka_consumergroup_lag)",
+          "legendFormat": "total lag",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1000 },
+              { "color": "red", "value": 10000 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "Lag by consumer group (summed across topics and partitions)",
+      "type": "bargauge",
+      "description": "sum by (consumergroup) (kafka_consumergroup_lag) - one bar per consumer group (payment-api.replies.*, psp-connector, ledger.v1, webhook-notifier.*, analytics-streams.v1, analytics.status-audit-batch.v1, realtime-gateway.*, connect-mongo-audit-sink - docs/diagrams/topic-map.md's consumer-groups table).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 9, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (consumergroup) (kafka_consumergroup_lag)",
+          "legendFormat": "{{consumergroup}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Consumer groups reporting (kafka-exporter's own visibility)",
+      "type": "stat",
+      "description": "count(count by (consumergroup) (kafka_consumergroup_lag)) - a sanity check on the exporter itself: if this drops to 0 while services are running, kafka-exporter's Describe-only ACL or its scrape is broken, not the consumers (M14's 'reports healthy and moves nothing' trap, one layer up the metrics pipeline).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 15, "y": 0 },
+      "targets": [
+        {
+          "expr": "count(count by (consumergroup) (kafka_consumergroup_lag))",
+          "legendFormat": "groups",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "Lag by group and topic, over time",
+      "type": "timeseries",
+      "description": "sum by (consumergroup, topic) (kafka_consumergroup_lag) - the panel this dashboard exists for: per-group PER-TOPIC lag, watchable live. A group consuming more than one topic (psp-connector: payments.payment-requested.v1 + refunds.funds-reserved.v1 + psp.provider-status-query.v1) gets one line per topic, not one blended line.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 9 },
+      "targets": [
+        {
+          "expr": "sum by (consumergroup, topic) (kafka_consumergroup_lag)",
+          "legendFormat": "{{consumergroup}} · {{topic}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0 },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "title": "Lag by partition (detail - watch this during a lag-induction drill)",
+      "type": "timeseries",
+      "description": "kafka_consumergroup_lag{consumergroup,topic,partition} unaggregated - the same metric panel 4 sums, kept at full partition granularity for M19-style drills (kill a consumer instance, watch its partitions' lag climb; restart it, watch recovery).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 19 },
+      "targets": [
+        {
+          "expr": "kafka_consumergroup_lag",
+          "legendFormat": "{{consumergroup}} · {{topic}}-{{partition}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0 },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "Consumer group current offset by topic (context for the lag panels above)",
+      "type": "timeseries",
+      "description": "sum by (consumergroup, topic) (kafka_consumergroup_current_offset) - lag alone doesn't say whether a group is stuck or just behind a fast producer; this shows whether the offset is advancing at all.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 29 },
+      "targets": [
+        {
+          "expr": "sum by (consumergroup, topic) (kafka_consumergroup_current_offset)",
+          "legendFormat": "{{consumergroup}} · {{topic}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

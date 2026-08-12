@@ -4,6 +4,7 @@ import com.example.psp.common.events.avro.PaymentStatusChanged;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -110,10 +111,18 @@ public class KafkaConsumerConfig {
             paymentStatusChangedKafkaListenerContainerFactory(
                     @Qualifier("paymentStatusChangedConsumerFactory")
                             ConsumerFactory<String, PaymentStatusChanged> consumerFactory,
-                    KafkaTransactionManager<String, Object> kafkaTransactionManager) {
+                    KafkaTransactionManager<String, Object> kafkaTransactionManager,
+                    ObservationRegistry observationRegistry) {
         ConcurrentKafkaListenerContainerFactory<String, PaymentStatusChanged> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);
+
+        // M15: hand-built factory, so Boot's spring.kafka.listener.observation-enabled property
+        // never reaches it (see infra/compose/README.md's M15 section). This is what lets the
+        // container extract psp-connector's traceparent header and continue that trace into the
+        // span this listener runs under - the last hop the acceptance-bar trace needs.
+        factory.getContainerProperties().setObservationRegistry(observationRegistry);
+        factory.getContainerProperties().setObservationEnabled(true);
 
         // --- THE line that makes this consume-process-produce EOS rather than "produce in a tx" ---
         // With a KafkaAwareTransactionManager set, KafkaMessageListenerContainer switches to

@@ -1,5 +1,6 @@
 package com.example.psp.paymentapi.config;
 
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
@@ -39,7 +40,17 @@ public class KafkaProducerConfig {
      */
     @Bean
     public KafkaTemplate<String, Object> kafkaTemplate(
-            @Qualifier("paymentProducerFactory") ProducerFactory<String, Object> paymentProducerFactory) {
-        return new KafkaTemplate<>(paymentProducerFactory);
+            @Qualifier("paymentProducerFactory") ProducerFactory<String, Object> paymentProducerFactory,
+            ObservationRegistry observationRegistry) {
+        KafkaTemplate<String, Object> template = new KafkaTemplate<>(paymentProducerFactory);
+        // M15: this bean is hand-built (see class javadoc for why), so Boot's
+        // spring.kafka.template.observation-enabled property - which only wires the template Boot
+        // itself auto-configures - never reaches it. Setting both explicitly is what makes a
+        // send() through this template create a Micrometer observation and, via the OTel bridge
+        // registered on observationRegistry, inject a real W3C traceparent header into the
+        // outbound record.
+        template.setObservationRegistry(observationRegistry);
+        template.setObservationEnabled(true);
+        return template;
     }
 }

@@ -47,6 +47,26 @@
       <artifactId>spring-boot-starter-validation</artifactId>
     </dependency>
 
+    <!-- M15: Micrometer Tracing bridged to OpenTelemetry, exporting to Tempo over OTLP. No
+         <version> on either - both are managed transitively by spring-boot-dependencies' imported
+         micrometer-tracing-bom/opentelemetry-bom (ADR-0007's "versions live in the parent POM
+         only" rule holds even though these two aren't declared in THIS repo's own
+         dependencyManagement - they're already pinned one level up, by the Spring Boot BOM). Once
+         this + actuator are both on the classpath, Boot's tracing autoconfiguration activates:
+         every HTTP request gets a span (this service's root span, since payment-api is where a
+         payment's trace begins), and every hand-built KafkaTemplate/listener-container-factory
+         below is wired to participate in it once .setObservationEnabled(true) is called on it
+         explicitly (see infra/compose/README.md's M15 section for why "explicitly" is load-
+         bearing here). -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-tracing-bridge-otel</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-exporter-otlp</artifactId>
+    </dependency>
+
     <!-- Real Postgres persistence (M3, ADR-0005): JPA + Flyway-owned schema -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

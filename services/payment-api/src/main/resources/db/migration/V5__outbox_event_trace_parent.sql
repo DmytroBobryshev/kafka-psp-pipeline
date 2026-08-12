@@ -1,0 +1,32 @@
+-- V5: bridges the M15 trace across the M6 outbox hop.
+--
+-- The M6 outbox breaks the in-process span chain by construction: payment-api commits an
+-- outbox_event row and returns; Debezium publishes it to Kafka LATER, from a DIFFERENT process
+-- (Kafka Connect), that never had - and never could have had - the HTTP request's span on its
+-- call stack. Without this column, the record Debezium republishes carries no trace context at
+-- all, and psp-connector's consumer (once it extracts a traceparent header via Micrometer's
+-- observation instrumentation - see services/payment-api/README.md's M15 section) would find none
+-- and start a brand-new, disconnected trace: two spans in two different traces for what is
+-- actually one payment.
+--
+-- The fix: capture the ORIGINATING request's real W3C traceparent at the moment the outbox row is
+-- written (adapters.out.outbox.OutboxPaymentEventPublisher / OutboxRefundEventPublisher, via
+-- Micrometer's Tracer + Propagator - not hand-formatted), store it alongside the row, and have
+-- Debezium's outbox event router place it back onto the produced Kafka record as a header
+-- (infra/compose/connect/payment-outbox-connector.json's
+-- transforms.outbox.table.fields.additional.placement, extended in this module to also route
+-- trace_parent -> header "traceparent"). The relayed record therefore carries the SAME trace
+-- context it would have carried had payment-api produced it directly - the relay is a header
+-- copy, not a new span, but it is what keeps one payment's trace connected end to end despite the
+-- outbox's async hop. See the README section for the honest limit: Kafka Connect itself is not
+-- instrumented, so there is no span representing "Debezium relayed this row" - the trace has a gap
+-- in TIME (the row could sit in outbox_event for a while before Connect gets to it) but not in
+-- IDENTITY (every span downstream still shares the one traceId).
+--
+-- Nullable: a caller with no active span (e.g. a future scheduled job that stages an outbox row
+-- outside any HTTP request) simply produces a row with no trace context, exactly like today -
+-- Debezium's additional-fields placement leaves the header off when the source column is null, and
+-- the consuming service starts a fresh root span instead of continuing one. That degrades
+-- gracefully rather than failing.
+ALTER TABLE outbox_event
+    ADD COLUMN trace_parent VARCHAR(64);

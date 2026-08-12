@@ -4,6 +4,11 @@ import com.example.psp.common.events.EventEnvelope;
 import com.example.psp.paymentapi.domain.model.Refund;
 import com.example.psp.paymentapi.domain.port.RefundEventPublisher;
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,6 +50,14 @@ import org.springframework.stereotype.Component;
  * RefundAvroEventFactory} builds the generated Avro record, {@link KafkaAvroSerializer#serialize}
  * registers/looks up the schema and returns the finished wire bytes, written verbatim to
  * {@code outbox_event.payload} ({@code BYTEA}).
+ *
+ * <h2>M15 - bridging the outbox hop</h2>
+ *
+ * <p>Same bridge as {@link OutboxPaymentEventPublisher} - see that class's javadoc for the full
+ * write-up. {@link EventEnvelope#traceId()} is set from the current span (via {@link Tracer}), and
+ * that same span's context is injected (via {@link Propagator}, never hand-formatted) into
+ * {@link OutboxEventEntity#getTraceParent()}, which Debezium's outbox event router copies onto the
+ * relayed record as the {@code traceparent} header.
  */
 @Component
 public class OutboxRefundEventPublisher implements RefundEventPublisher {
@@ -57,11 +70,15 @@ public class OutboxRefundEventPublisher implements RefundEventPublisher {
     private final OutboxEventJpaRepository outboxEventJpaRepository;
     private final RefundAvroEventFactory avroEventFactory;
     private final KafkaAvroSerializer avroSerializer;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     public OutboxRefundEventPublisher(
             OutboxEventJpaRepository outboxEventJpaRepository,
             RefundAvroEventFactory avroEventFactory,
-            KafkaAvroSerializer paymentRequestedAvroSerializer) {
+            KafkaAvroSerializer paymentRequestedAvroSerializer,
+            Tracer tracer,
+            Propagator propagator) {
         this.outboxEventJpaRepository = outboxEventJpaRepository;
         this.avroEventFactory = avroEventFactory;
         // Reuses the SAME KafkaAvroSerializer bean payment-requested's outbox path uses - it is a
@@ -69,6 +86,8 @@ public class OutboxRefundEventPublisher implements RefundEventPublisher {
         // serialize(...) is what determines the subject (TopicNameStrategy, ADR-0001), so one
         // instance safely serves every Avro-outbound topic in this service.
         this.avroSerializer = paymentRequestedAvroSerializer;
+        this.tracer = tracer;
+        this.propagator = propagator;
     }
 
     @Override
@@ -77,7 +96,9 @@ public class OutboxRefundEventPublisher implements RefundEventPublisher {
         if (correlationId == null || correlationId.isBlank()) {
             correlationId = UUID.randomUUID().toString();
         }
-        String traceId = correlationId;
+
+        Span currentSpan = tracer.currentSpan();
+        String traceId = currentSpan != null ? currentSpan.context().traceId() : correlationId;
 
         String refundId = refund.getId().toString();
         EventEnvelope envelope =
@@ -98,16 +119,30 @@ public class OutboxRefundEventPublisher implements RefundEventPublisher {
         entity.setEventType(EVENT_TYPE);
         entity.setPayload(wireBytes);
         entity.setCreatedAt(envelope.occurredAt());
+        entity.setTraceParent(traceParentOf(currentSpan));
 
         outboxEventJpaRepository.save(entity);
 
         log.info(
-                "Staged outbox event outboxId={} eventType={} refundId={} paymentId={} payloadBytes={} - "
-                        + "relayed to Kafka by Debezium, not this process",
+                "Staged outbox event outboxId={} eventType={} refundId={} paymentId={} payloadBytes={} "
+                        + "traceId={} - relayed to Kafka by Debezium, not this process",
                 entity.getId(),
                 EVENT_TYPE,
                 refundId,
                 refund.getPaymentId(),
-                wireBytes.length);
+                wireBytes.length,
+                traceId);
+    }
+
+    /** See {@link OutboxPaymentEventPublisher#traceParentOf} - identical logic, duplicated rather
+     * than shared because these two adapters share no common base class (ADR-0007: each is a
+     * standalone hexagon-boundary adapter). */
+    private String traceParentOf(Span currentSpan) {
+        if (currentSpan == null) {
+            return null;
+        }
+        Map<String, String> carrier = new HashMap<>();
+        propagator.inject(currentSpan.context(), carrier, Map::put);
+        return carrier.get("traceparent");
     }
 }

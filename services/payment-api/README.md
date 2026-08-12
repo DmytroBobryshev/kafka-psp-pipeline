@@ -1017,3 +1017,66 @@ originally processed this payment, confirming the responder read the correct row
 See `services/psp-connector/README.md`'s M12 "Request-reply proof" placeholder for the
 orchestrator-owned fuller verification (latency distribution, a deliberate-outage 504 proof, and
 the multi-instance reply-routing check).
+
+## M15 - Distributed tracing: how a trace crosses the outbox
+
+`infra/compose/README.md`'s M15 section is the full write-up (tracing backend choice, W3C
+propagation mechanics, the ADR-0002 `traceId`/`correlationId` reconciliation, the Grafana lag
+dashboard). This section covers only the piece that lives in this service: **bridging a trace
+across the M6 outbox**, because that hop is the one place in the whole pipeline where distributed
+tracing's usual mechanism - Spring Kafka's Observation-based header injection/extraction - cannot
+work at all.
+
+**Why not:** `payment-api` never calls Kafka for `payments.payment-requested.v1` /
+`refunds.refund-requested.v1` (M6's whole point). `OutboxPaymentEventPublisher`/
+`OutboxRefundEventPublisher` write a row to `outbox_event` inside the HTTP request's database
+transaction and return; **Debezium**, running in the separate `kafka-connect` container, tails the
+write-ahead log and republishes the row to Kafka **later**, possibly seconds later, from a process
+that was never part of this request and is not instrumented with Micrometer at all. There is no
+`KafkaTemplate.send()` in this code path for an `ObservationHandler` to wrap.
+
+**The mechanism, concretely:**
+
+1. `OutboxPaymentEventPublisher`/`OutboxRefundEventPublisher` inject a `Tracer` and a `Propagator`
+   (both auto-configured once `micrometer-tracing-bridge-otel` is on the classpath - see the pom).
+   Before saving the outbox row, each reads `tracer.currentSpan()` - the span the inbound
+   `POST /api/payments` (or `/api/refunds`) request is already running under - and calls
+   `propagator.inject(currentSpan.context(), carrier, Map::put)` to render it as a real W3C
+   `traceparent` string. **This is the same `Propagator` Spring Kafka's own observation
+   instrumentation uses** - the outbox path is not hand-formatting anything different, it is using
+   the identical mechanism one call earlier than usual, because the usual call site (a
+   `KafkaTemplate.send()`) does not exist here.
+2. That string is stored in a new column, `outbox_event.trace_parent`
+   (`db/migration/V5__outbox_event_trace_parent.sql`), alongside the row.
+3. `infra/compose/connect/payment-outbox-connector.json`'s outbox event router SMT is configured
+   with `transforms.outbox.table.fields.additional.placement =
+   event_type:header:eventType,trace_parent:header:traceparent` - Debezium copies the
+   `trace_parent` column onto the relayed Kafka record as a header literally named `traceparent`,
+   the exact header name and format Spring Kafka's observation instrumentation would have written
+   had this producer called Kafka directly.
+4. `psp-connector`'s consumer (its listener container factory has `setObservationEnabled(true)`,
+   see `infra/compose/README.md`'s M15 section) extracts that header before invoking the listener,
+   making the original HTTP request's span the **parent** of the span this consumer's processing
+   runs under. One trace, spanning a process (Debezium) that never emitted a single span of its
+   own - the relay is a **header copy**, not a new span.
+
+**The envelope's `traceId` field is set from the same current span** (`tracer.currentSpan()`), not
+from `correlationId` - see `infra/compose/README.md`'s "Reconciling" subsection for why that
+matters: it is what makes the trace id visible in the Avro payload agree with the trace id in the
+`traceparent` header, everywhere downstream, without a second, independent value to drift out of
+sync.
+
+**What is NOT fixed, and cannot be by this mechanism:** there is still no span representing
+"Debezium relayed this row." The trace has a gap in **time** - the row can sit in `outbox_event`
+for however long it takes Connect to reach it, and nothing marks that wait as a span with a
+duration - but not in **identity**: every span downstream of the relay still carries the same
+trace id, so Tempo renders one connected trace, just with an invisible interval between
+`payment-api`'s span and `psp-connector`'s. Instrumenting Kafka Connect itself (a separate
+OpenTelemetry Java agent attached to the `kafka-connect` container) would close that gap and was
+out of scope for this module.
+
+**Degrades gracefully with no active span:** a hypothetical future caller of these publishers
+outside any HTTP request (e.g. a scheduled reconciliation job) simply produces a row with
+`trace_parent = NULL` - Debezium's additional-field placement omits the header on `NULL`, and the
+consuming service starts a fresh root span instead of continuing one, exactly like any other
+Kafka record with no `traceparent` header.
