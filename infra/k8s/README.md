@@ -777,3 +777,263 @@ on the first per-instance `group.id`.
   necessary for a real cluster of this size.
 - **The 5 GiB PVCs are not enforced.** kind's `local-path` provisioner is hostPath-backed, so a
   runaway topic fills the node's disk regardless of the claim size.
+
+---
+
+## M18 phase 2: the Spring services, and getting them Ready
+
+Phase 1 (above) is Kafka only. Phase 2 adds Helm charts for the seven Spring services plus
+in-cluster Postgres, MongoDB, Redis, Schema Registry and a Strimzi `KafkaConnect` build
+(`infra/k8s/charts/psp-platform`), deployed with `infra/k8s/scripts/build-images.sh` +
+`helm upgrade --install psp infra/k8s/charts/psp-platform -n kafka`.
+
+The chart work was committed mid-flight (WIP) after the third disk-exhaustion incident of this
+project took Docker Desktop down mid-build. What follows is what it took to get from that state -
+every service `CrashLoopBackOff`, Schema Registry `CrashLoopBackOff`, duplicate ReplicaSets from
+the interrupted rollout - to every pod `Ready` with a real payment proven to move money.
+
+### The readiness-probe design: what a shallow probe misses
+
+Spring Boot's default readiness contributor, `readinessState`, answers one question: "will this
+JVM accept an HTTP request." M15 (see `docs/PLAN.md`) proved that question is not the same as "is
+this service doing its job" - a Spring service can hold `readinessState: UP` while every one of
+its `@KafkaListener` containers has stopped. On Docker Compose that produces a misleading
+dashboard. On Kubernetes it is worse: kube-proxy keeps a pod like that in its Service's endpoint
+list, and during a rolling update the pod that consumes nothing can outlive the one that doesn't.
+
+`libs/common-health` closes that gap with two conditional `HealthIndicator` beans
+(`KafkaHealthAutoConfiguration`, wired through the standard
+`org.springframework.boot.autoconfigure.AutoConfiguration.imports` mechanism, same pattern
+`libs/common-web` already uses):
+
+- **`kafkaListeners`** (`KafkaListenerContainersHealthIndicator`) walks every container in the
+  injected `KafkaListenerEndpointRegistry` and reports `DOWN` if any container that is supposed to
+  be running (`autoStartup=true`) is not, listing every container id and its state in the health
+  detail - so `kubectl exec ... curl localhost:PORT/actuator/health` names the dead listener
+  instead of just saying `DOWN`. A container that was deliberately created stopped (the
+  DLQ-replay listener, `autoStartup=false`) is reported but never fails the check.
+- **`kafkaStreams`** (`KafkaStreamsHealthIndicator`, analytics only) reports the
+  `StreamsBuilderFactoryBean`'s own `KafkaStreams.State`. `REBALANCING` and state-restore are
+  treated as not-ready-but-not-an-error - during a rolling update that is exactly the window the
+  pod should be out of the Service's endpoints - while `ERROR`/`NOT_RUNNING` means the topology
+  died with the HTTP port still open, the exact M15 failure mode.
+
+Both beans are **off by default** (`psp.health.kafka[.streams].enabled`, both `false`) and switched
+on per service in that service's own `values.yaml`, in the same file that names the contributor in
+`readinessInclude` - so the two cannot drift apart the way they briefly did here (see below).
+`management.endpoint.health.validate-group-membership` (Spring Boot's default, left on) turns any
+future drift into a startup failure instead of a silent no-op, which is a deliberate trade: a
+service that boots with a health group naming a contributor that doesn't exist should never reach
+"Ready" pretending otherwise.
+
+**Which services get which contributor**, and why the set is not uniform:
+
+| Service | `readinessInclude` | Why |
+|---|---|---|
+| `ledger`, `webhook-notifier`, `psp-connector`, `realtime-gateway` | `readinessState,kafkaListeners` | each has real `@KafkaListener` containers a shallow probe can't see stop |
+| `analytics` | `readinessState,kafkaListeners,kafkaStreams` | has both a batch `@KafkaListener` (M13) and a Streams topology (M10) |
+| `api-gateway` | `readinessState` only | ADR-0004: commands enter over HTTP, this service has no Kafka client at all - naming `kafkaListeners` here would itself fail startup |
+| `payment-api` | `readinessState` only | has a Kafka **consumer** (M12's `ReplyingKafkaConfig`, the provider-status-reply request/response wiring) but its `KafkaMessageListenerContainer` is hand-built and handed straight to a `ReplyingKafkaTemplate` - it is never a `@KafkaListener` method, so it is never registered in the `KafkaListenerEndpointRegistry` the indicator inspects. Naming `kafkaListeners` for payment-api would not fail; it would silently report `UP` over zero containers forever - the same "green but meaningless" failure mode M15 exists to eliminate, self-inflicted this time. |
+
+### What was actually broken, and the fix
+
+The symptom on every Spring pod was identical:
+
+```
+APPLICATION FAILED TO START
+Description: Included health contributor 'kafkaListeners' in group 'readiness' does not exist
+```
+
+The obvious read is "the indicator was never implemented." It was: `libs/common-health` already
+had `KafkaListenerContainersHealthIndicator`, `KafkaStreamsHealthIndicator` and
+`KafkaHealthAutoConfiguration` fully written, unit-testable, and wired into every relevant
+service's `pom.xml`, all committed in the same WIP commit as the charts. The actual defect was
+narrower and easy to miss: **every running pod's image was built from an older commit than the one
+that added `libs/common-health`.** The disk-exhaustion incident interrupted the image build before
+the module existed on the classpath the pods were running; `readinessInclude` in the chart named a
+bean that the *deployed jar* genuinely did not contain, even though the source tree did. Rebuilding
+the images from current `HEAD` and reloading them into `kind` was the actual fix for every service
+except one:
+
+- **`payment-api`** legitimately had no listener containers (see the table above), so its
+  `values.yaml` was changed to drop `kafkaListeners` from `readinessInclude` and leave
+  `psp.health.kafka.enabled` unset, rather than switching on a bean that would monitor nothing.
+- **`analytics`**'s image needed a second, unrelated fix before it would start at all (see next
+  section) - once fixed, its `kafkaStreams` contributor (already correctly named in `values.yaml`)
+  started reporting real state.
+- Every other chart's `readinessInclude` was checked against a real `@KafkaListener` in that
+  service's source (`grep -rn "@KafkaListener" services/<svc>/src/main/java`) and matched.
+
+### The second defect: analytics couldn't start on Alpine
+
+Rebuilding surfaced a real, previously-undiscovered bug, independent of the health-indicator issue:
+analytics crashed on every start with
+
+```
+Exception in thread "...-GlobalStreamThread" java.lang.UnsatisfiedLinkError:
+Error loading shared library libstdc++.so.6: No such file or directory
+(needed by /tmp/librocksdbjni....so)
+```
+
+`services/analytics/Dockerfile` used the same `eclipse-temurin:21-jre-alpine` base as every other
+service. Every other service is fine there; analytics is the only one with a Kafka Streams
+topology (M10), and Kafka Streams' embedded RocksDB state stores load a native library
+(`org.rocksdb:rocksdbjni`) that ships in exactly one build: linked against **glibc**. Alpine's C
+library is musl - not ABI-incompatible glibc, but no glibc-compatible `libstdc++.so.6` at all, so
+`apk add libstdc++` cannot fix it (that installs musl's own build of the library, under the same
+name, which still fails to satisfy a glibc-linked `.so`). The fix was switching analytics' base
+image to `eclipse-temurin:21-jre-jammy` (Ubuntu, glibc) and installing `libstdc++6` explicitly
+rather than relying on it arriving transitively. The rest of the Dockerfile - numeric non-root
+user, `MaxRAMPercentage`, `EXPOSE` - is unchanged; only the user-creation commands changed from
+BusyBox's `addgroup -S`/`adduser -S` to Debian's `groupadd`/`useradd`, since Alpine and Ubuntu
+disagree on that tooling too.
+
+### Schema Registry: crashing on a Kubernetes-only mechanism
+
+Schema Registry's log stopped after one line: `PORT is deprecated. Please use
+SCHEMA_REGISTRY_LISTENERS instead.`, then the container exited. The chart already set
+`SCHEMA_REGISTRY_LISTENERS` explicitly - the deprecated variable was never set in the chart at
+all. The actual source was Kubernetes itself: for every Service in a namespace, Kubernetes injects
+Docker-link-style environment variables into every pod, so the Service named `schema-registry`
+became `SCHEMA_REGISTRY_PORT=tcp://10.96.x.x:8081` inside the schema-registry pod's own container.
+Confluent's images bootstrap their config from exactly that variable-name prefix, so the Service's
+own name silently poisoned its container's configuration - a pod is not required to consume its
+own Service's service-links, but gets them by default. The template's fix -
+`enableServiceLinks: false` on the pod spec - was already written and committed in the source tree
+(with a comment explaining exactly this), but had never been applied: the chart was edited *after*
+the last successful `helm upgrade` before the disk incident, so the running Deployment predated the
+fix. `kubectl get deployment schema-registry -o yaml` confirmed the live object had no
+`enableServiceLinks` field at all. Re-running `helm upgrade` (which this phase 2 pass did anyway,
+to pick up `libs/common-health`) applied it; no further code change was needed here, only
+deployment.
+
+### Duplicate ReplicaSets
+
+The interrupted rollout, plus the two redeploys this pass required (the `libs/common-health` image
+rebuild, then the analytics base-image fix), left every Deployment with several `0/0/0` historical
+ReplicaSets. `kubectl get rs -n kafka` was cleaned with:
+
+```bash
+kubectl get rs -n kafka --no-headers | awk '$2==0 && $3==0 && $4==0 {print $1}' \
+  | xargs -r kubectl delete rs -n kafka
+```
+
+leaving exactly one ReplicaSet per Deployment (verified below).
+
+### Prove it - run against this exact cluster
+
+**a. Everything Ready:**
+
+```
+$ kubectl get pods -n kafka
+NAME                                   READY   STATUS    RESTARTS   AGE
+analytics-6bc56f86db-mj8tb             1/1     Running   0          5m48s
+api-gateway-9fd47795-42dlf             1/1     Running   0          5m48s
+ledger-84568f58cb-7q8lq                1/1     Running   0          5m48s
+mongodb-57f58745cf-hclwq               1/1     Running   0          11m
+payment-api-6786577f97-hzmxv           1/1     Running   0          5m48s
+postgres-54499c7bb8-7qld2              1/1     Running   0          11m
+psp-combined-0                         1/1     Running   0          41m
+psp-combined-1                         1/1     Running   0          41m
+psp-combined-2                         1/1     Running   0          39m
+psp-connect-connect-0                  1/1     Running   0          5m44s
+psp-connector-5789665dff-9cqrz         1/1     Running   0          5m48s
+psp-entity-operator-786db8c79f-dgb47   2/2     Running   0          32m
+realtime-gateway-86f49fcbff-ndffv      1/1     Running   0          5m47s
+redis-7bfc9b47f4-qlxrv                 1/1     Running   0          11m
+schema-registry-b4dd99cdb-nmfc8        1/1     Running   0          11m
+webhook-notifier-5d9f888564-gnzsg      1/1     Running   0          5m47s
+```
+
+16/16 pods, one ReplicaSet each, `helm list -n kafka` shows revision 5 `deployed`.
+
+**b. The `kafkaListeners` contributor, actually watching something real** (`ledger`, four
+`@KafkaListener` containers: `RefundRequestedListener`, `PaymentStatusChangedListener`,
+`RefundFailedListener`, `RefundCompletedListener`):
+
+```
+$ kubectl exec -n kafka deploy/ledger -- wget -qO- http://localhost:8087/actuator/health/readiness
+{"status":"UP","components":{
+  "kafkaListeners":{"status":"UP","details":{
+    "org.springframework.kafka.KafkaListenerEndpointContainer#0":"RUNNING",
+    "org.springframework.kafka.KafkaListenerEndpointContainer#1":"RUNNING",
+    "org.springframework.kafka.KafkaListenerEndpointContainer#2":"RUNNING",
+    "org.springframework.kafka.KafkaListenerEndpointContainer#3":"RUNNING",
+    "containers":4}},
+  "readinessState":{"status":"UP"}}}
+```
+
+`analytics`, both contributors, `kafkaStreams` reporting the topology's real `KafkaStreams.State`:
+
+```
+$ kubectl exec -n kafka deploy/analytics -- wget -qO- http://localhost:8089/actuator/health
+{"status":"UP", ... ,
+  "kafkaListeners":{"status":"UP","details":{
+    "org.springframework.kafka.KafkaListenerEndpointContainer#0":"RUNNING","containers":1}},
+  "kafkaStreams":{"status":"UP","details":{"state":"RUNNING","applicationId":"analytics-streams.v1"}},
+  ...}
+```
+
+`payment-api`, confirming the contributor is genuinely absent rather than present-and-green over
+nothing:
+
+```
+$ kubectl exec -n kafka deploy/payment-api -- wget -qO- http://localhost:8085/actuator/health
+{"status":"UP","components":{"db":{...},"diskSpace":{...},"livenessState":{...},
+  "ping":{...},"readinessState":{"status":"UP"},"refreshScope":{...},"ssl":{...}}}
+```
+
+No `kafkaListeners` key at all - `psp.health.kafka.enabled` was left unset for this service, so
+`KafkaHealthAutoConfiguration`'s `@ConditionalOnProperty` never creates the bean.
+
+**c. A payment, posted through the gateway, reaching a ledger balance inside the cluster:**
+
+```bash
+kubectl port-forward -n kafka svc/api-gateway 8000:8000 &
+kubectl port-forward -n kafka svc/postgres 5432:5432 &
+
+for i in 1 2 3 4 5; do
+  curl -sS -X POST http://localhost:8000/api/payments \
+    -H 'Content-Type: application/json' \
+    -d '{"merchantId":"merchant-e2e-proof","amount":10.00,"currency":"EUR"}'
+done
+```
+
+Every POST returned `201 Created` (routed by api-gateway's `Path=/api/payments/**` rate-limited,
+circuit-broken route to `payment-api.kafka.svc.cluster.local:8085`). Each payment then flowed,
+unattended, through the full chain proven separately in M6-M10: payment-api writes an
+`outbox_event` row in the same Postgres transaction as the payment -> Debezium
+(`payment-outbox-connector`, `KafkaConnector` `Ready=True`) reads the WAL and produces
+`payments.payment-requested.v1` -> `psp-connector` consumes it, simulates a provider call
+(100 ms-5 s), and produces `payments.payment-status-changed.v1` with a random `APPROVED`/`DECLINED`
+outcome -> `ledger` consumes that (transactional producer, `ledger-tx-0-0`) and, only for
+`APPROVED`, credits `merchant_balances` and inserts a `ledger_entries` row in one transaction. One
+of the six payments run during this session was randomly `DECLINED` - the ledger correctly logged
+`Ignoring status=DECLINED ... - moves no money` and left the balance untouched, which is itself
+part of the proof: the pipeline distinguishes the two outcomes rather than crediting on delivery
+alone.
+
+```
+$ kubectl exec -n kafka deploy/postgres -- env PGPASSWORD="$LEDGER_PW" \
+    psql -U ledger -d ledger -c \
+    "SELECT merchant_id, currency, balance, entry_count, updated_at
+       FROM merchant_balances WHERE merchant_id = 'merchant-e2e-proof';"
+
+    merchant_id     | currency | balance | entry_count |          updated_at
+---------------------+----------+---------+-------------+------------------------------
+ merchant-e2e-proof  | EUR      | 50.0000 |           5 | 2026-08-12 23:07:37.00706+00
+```
+
+**50.0000 EUR, entry_count 5** - exactly 5 x 10.00 EUR `CREDIT`, matching the five `APPROVED`
+outcomes among six payments POSTed (the sixth, a 42.50 EUR payment sent first, was the one
+`DECLINED` outcome and correctly contributed nothing). Elapsed time from POST to a settled balance
+was on the order of one second per payment - fast enough that "wait 5-10s after POSTing" is a
+generous margin, not a requirement.
+
+This is the same discipline the rest of this README applies to Kafka itself: pod readiness, and
+even a `200`/`201` from the gateway, is not evidence that data moved. This project has now measured
+three separate cases of a component reporting healthy while consuming, producing, or crediting
+nothing (M15's shallow-probe finding twice over - once for `@KafkaListener` containers, once for
+Kafka Streams - and Schema Registry `CrashLoopBackOff`ing behind a readiness probe that never got
+the chance to report anything at all). The balance query above is the only claim in this section
+that is not itself a health check.

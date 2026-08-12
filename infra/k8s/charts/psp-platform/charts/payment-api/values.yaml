@@ -2,6 +2,16 @@
 # Postgres transaction as the payment, and the Debezium connector in the kafka-connect subchart is
 # what turns that row into a record. Its `Write` ACL on payments.payment-requested.v1 exists and is
 # deliberately unused - the "allowed" half of M14's proof.
+#
+# NO kafkaListeners CONTRIBUTOR, and this is not an oversight. M12 gave this service a Kafka
+# CONSUMER (config.ReplyingKafkaConfig, the provider-status-reply request/response wiring), but
+# that consumer's KafkaMessageListenerContainer is hand-built and handed straight to a
+# ReplyingKafkaTemplate - it is never a `@KafkaListener` method, so it is never registered with the
+# KafkaListenerEndpointRegistry libs/common-health's indicator inspects. Turning the indicator on
+# here would not fail loudly; it would silently report UP over zero containers forever, which is
+# the same "green but meaningless" failure mode M15 exists to eliminate, just self-inflicted this
+# time. See ledger/webhook-notifier/psp-connector/realtime-gateway/analytics for services where the
+# contributor watches something real.
 
 port: 8085
 replicas: 1
@@ -12,8 +22,9 @@ kafkaUser: "payment-api"
 # Contributors added to Spring Boot's `readiness` health group, i.e. to
 # /actuator/health/readiness, i.e. to what kube-proxy uses to decide whether this pod is in the
 # Service's endpoint list. `readinessState` alone is the servlet-level answer M15 proved can be
-# UP while nothing is consuming; the extra names come from libs/common-health.
-readinessInclude: readinessState,kafkaListeners
+# UP while nothing is consuming - but payment-api has no @KafkaListener-managed containers for the
+# extra name to watch (see the top comment), so unlike its siblings it stays at readinessState.
+readinessInclude: readinessState
 
 resources:
   requests:
@@ -52,8 +63,8 @@ config: |
   payment-api:
     schema-registry:
       url: {{ .Values.global.schemaRegistryUrl }}
-  psp:
-    health:
-      kafka:
-        enabled: true
+  # psp.health.kafka.enabled deliberately absent (defaults to false, see
+  # KafkaHealthAutoConfiguration): no @KafkaListener containers exist here for the "kafkaListeners"
+  # bean to inspect - see the top-of-file comment - so creating it would just be dead weight, and
+  # readinessInclude above does not name it.
   {{ include "psp.commonConfig" . }}

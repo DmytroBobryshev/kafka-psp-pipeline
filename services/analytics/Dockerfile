@@ -11,11 +11,28 @@
 #   mvn -pl services/analytics -am package -DskipTests
 #   docker build -t psp/analytics:<tag> services/analytics
 #   kind load docker-image psp/analytics:<tag> --name kafka-psp
-FROM eclipse-temurin:21-jre-alpine
+#
+# NOT eclipse-temurin:21-jre-alpine, unlike every other service's Dockerfile in this repo. M10's
+# Kafka Streams topology opens RocksDB state stores, and org.rocksdb:rocksdbjni ships exactly one
+# Linux native library, built against glibc. Alpine's C library is musl, which does not provide a
+# glibc-compatible libstdc++.so.6 under any package - the failure is not an ABI mismatch you can
+# paper over with `apk add libstdc++`, it is a library that plain does not exist on musl, and the
+# process dies with "Exception in thread ...-GlobalStreamThread ... UnsatisfiedLinkError: Error
+# loading shared library libstdc++.so.6" the moment the first state store initialises. jre-jammy
+# (Ubuntu, glibc) is the smallest Temurin base that satisfies it. Every other service here has no
+# RocksDB dependency and stays on Alpine for the smaller image.
+FROM eclipse-temurin:21-jre-jammy
+
+# libstdc++6 for RocksDB's JNI library - see the base-image comment above. Ubuntu's JRE base
+# usually pulls it in transitively, but that is an accident of what else is installed, not a
+# guarantee, so it is named explicitly here rather than relied upon.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Run as a non-root user. kind's containerd honours this, and it is the difference between a
 # compromised Spring service being able to write to the image filesystem and not.
-RUN addgroup -g 1001 -S psp && adduser -u 1001 -S -G psp psp
+RUN groupadd -g 1001 psp && useradd -u 1001 -g psp -M -s /usr/sbin/nologin psp
 
 WORKDIR /app
 COPY target/analytics.jar app.jar
