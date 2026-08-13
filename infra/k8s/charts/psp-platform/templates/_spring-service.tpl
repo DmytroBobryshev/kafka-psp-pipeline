@@ -71,7 +71,26 @@ metadata:
   labels:
     {{- include "psp.labels" . | nindent 4 }}
 spec:
+  {{- if (.Values.autoscaling | default dict).enabled }}
+  # replicas IS DELIBERATELY ABSENT when this service is autoscaled (M18 phase 3, psp-connector).
+  #
+  # A Deployment's replica count can only have one owner. Leave `replicas` in a Helm-managed
+  # manifest while an HPA also writes it and you get two controllers with different opinions:
+  # `helm upgrade` patches it back to the chart's value, the HPA notices the workload is
+  # under-provisioned and climbs again, and every deploy during a traffic peak is a self-inflicted
+  # capacity drop. Omitting the field means Helm's three-way merge has nothing to say about it and
+  # the HPA's value survives.
+  #
+  # The one visible cost, and it is expected: the FIRST upgrade after enabling autoscaling removes
+  # a field that was previously present, so the API server re-defaults it to 1 and the HPA scales
+  # back up on its next evaluation. Only that one upgrade.
+  #
+  # (`.Values.autoscaling | default dict` rather than `.Values.autoscaling.enabled`: six of the
+  # seven services have no autoscaling block at all, and a field lookup on a nil interface is a
+  # template error, while a missing key on an empty dict is just false.)
+  {{- else }}
   replicas: {{ .Values.replicas | default 1 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "psp.selectorLabels" . | nindent 6 }}

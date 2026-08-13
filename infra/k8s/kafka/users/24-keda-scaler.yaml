@@ -1,0 +1,59 @@
+# keda-scaler (M18 phase 3) - 2 bindings. The 12th principal; the first one that has no
+# equivalent in compose's init-security.sh, because compose had no autoscaler.
+#
+# WHY THIS FILE EXISTS AT ALL
+# KEDA's Kafka trigger is not a Kubernetes-native metric source. It is an ordinary Kafka admin
+# client that, every `pollingInterval`, asks the cluster two questions:
+#
+#   * ListOffsets on payments.payment-requested.v1        -> the end offset of each partition
+#   * OffsetFetch/DescribeGroups for group psp-connector.v1 -> that group's committed offset
+#
+# and subtracts. Both requests are authorized like any other, and this cluster is deny-by-default
+# (Kafka.spec.kafka.authorization.type=simple, allow.everyone.if.no.acl.found=false). So the
+# autoscaler needs a principal, a SCRAM credential and ACLs - exactly like the seven services.
+#
+# TWO THINGS DELIBERATELY NOT DONE
+#
+#   1. It does not reuse `admin`. The superuser would work in one line and would make the
+#      autoscaler the single most privileged client in the system, able to delete every topic it
+#      is only supposed to measure. An observer gets an observer's credential.
+#   2. It does not reuse `psp-connector`. Sharing the workload's identity with the thing that
+#      scales the workload would mean a lag reading and a payment being consumed are
+#      indistinguishable in the audit log, and the scaler would inherit Read/Write on nine topics
+#      it has no business touching.
+#
+# WHY `Describe` IS ENOUGH, AND WHY THERE IS NO `Read`
+# `Read` on a topic is the permission to fetch message bodies. Lag is arithmetic on offsets, and
+# offsets are metadata: Kafka has required `Describe` (not `Read`) for ListOffsets since 2.x, and
+# OffsetFetch has always been `Describe` on the group. So this principal can compute exactly how
+# far behind psp-connector is and cannot read one payment. That is the same shape as
+# 23-kafka-exporter.yaml, narrowed from `*` to the one topic and the one group that this module's
+# ScaledObject actually names - an exporter is a general-purpose observer, a scaler is not.
+#
+# If a second ScaledObject is ever added (say, ledger on payments.payment-status-changed.v1), the
+# honest change is two more entries here, not widening these to `*`.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: keda-scaler
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  authentication:
+    # Produces Secret/keda-scaler with `password` and `sasl.jaas.config`. KEDA's
+    # TriggerAuthentication consumes `password` (it builds its own Sarama config and has no use
+    # for a JAAS line), which is the one place in this repo where the raw password key is read -
+    # see the psp-connector chart's autoscaling.yaml for why that is unavoidable.
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      # ListOffsets + Metadata on the ONE topic the ScaledObject measures.
+      - resource: { type: topic, name: payments.payment-requested.v1, patternType: literal }
+        operations: [Describe]
+      # OffsetFetch + DescribeGroups on the ONE group whose lag is the scaling signal.
+      # patternType literal, not prefix: `psp-connector.v1` exactly, so a future
+      # `psp-connector.v2` group is a deliberate edit here rather than an accident.
+      - resource: { type: group, name: psp-connector.v1, patternType: literal }
+        operations: [Describe]

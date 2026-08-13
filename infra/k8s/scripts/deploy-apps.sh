@@ -36,6 +36,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
+# 1b. KEDA (M18 phase 3)
+# ---------------------------------------------------------------------------------------------
+# A HARD PREREQUISITE OF THE CHART, not an optional extra, because psp-connector's values.yaml
+# sets `autoscaling.enabled: true` and the chart therefore renders a ScaledObject and a
+# TriggerAuthentication. Helm does not degrade gracefully when a CRD is missing - the whole
+# release fails at apply time with `no matches for kind "ScaledObject"`, which reads as a chart
+# bug rather than a missing operator. Installing it here keeps `deploy-apps.sh` a
+# from-a-Kafka-cluster-to-a-working-platform script the way it was in phase 2.
+#
+# (To run without KEDA: `--set psp-connector.autoscaling.enabled=false`, which restores the
+# chart's static `replicas: 1`.)
+if ! kubectl get crd scaledobjects.keda.sh >/dev/null 2>&1; then
+  log "installing KEDA"
+  "$REPO_ROOT/infra/k8s/scripts/install-keda.sh"
+else
+  log "KEDA already present ($(kubectl get deploy -n keda keda-operator -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null))"
+fi
+
+# ---------------------------------------------------------------------------------------------
 # 2. images
 # ---------------------------------------------------------------------------------------------
 if [[ "$SKIP_BUILD" -eq 0 ]]; then

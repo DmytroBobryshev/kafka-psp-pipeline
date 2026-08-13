@@ -25,14 +25,21 @@ case "$MODE" in
     echo "PVCs kept:"; kubectl get pvc -n kafka
     ;;
   namespace)
+    # KEDA first, and NOT just `delete namespace keda`. A ScaledObject carries a KEDA finalizer,
+    # and the controller that removes it lives in the namespace being deleted - kill the operator
+    # first and the ScaledObject (and therefore the `kafka` namespace) hangs Terminating forever.
+    kubectl delete scaledobject --all -n kafka --ignore-not-found 2>/dev/null || true
+    kubectl delete triggerauthentication --all -n kafka --ignore-not-found 2>/dev/null || true
     kubectl delete namespace kafka --ignore-not-found
+    helm uninstall keda -n keda 2>/dev/null || true
+    kubectl delete namespace keda --ignore-not-found
     helm uninstall strimzi-cluster-operator -n strimzi-system 2>/dev/null || true
     kubectl delete namespace strimzi-system --ignore-not-found
     # Helm does NOT remove CRDs it installed. Left in place on purpose - deleting a CRD deletes
     # every CR of that kind cluster-wide, which is not something a teardown script should do
     # quietly. Remove by hand if you mean it:
-    #   kubectl get crd -o name | grep strimzi.io | xargs kubectl delete
-    echo "Strimzi CRDs left in place (see the comment in this script)."
+    #   kubectl get crd -o name | grep -E 'strimzi.io|keda.sh' | xargs kubectl delete
+    echo "Strimzi and KEDA CRDs left in place (see the comment in this script)."
     ;;
   cluster)
     kind delete cluster --name "${KIND_CLUSTER}"

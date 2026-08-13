@@ -1037,3 +1037,541 @@ nothing (M15's shallow-probe finding twice over - once for `@KafkaListener` cont
 Kafka Streams - and Schema Registry `CrashLoopBackOff`ing behind a readiness probe that never got
 the chance to report anything at all). The balance query above is the only claim in this section
 that is not itself a health check.
+
+---
+
+## M18 phase 3: KEDA autoscaling psp-connector on consumer lag
+
+Phase 1 put Kafka on Kubernetes; phase 2 put the application next to it. Phase 3 is the module's
+second showpiece: **the number of psp-connector pods stops being a number in a values file and
+becomes a function of how far behind the consumer group is.**
+
+The Kafka concept on display is not "autoscaling". It is the one M4 measured directly and that
+every lag-based autoscaler eventually collides with: **within a consumer group, a partition is
+assigned to exactly one consumer, so a group can never have more useful members than the topic has
+partitions.** Everything below is downstream of that sentence.
+
+```
+payments.payment-requested.v1  ─┐
+  (12 partitions)               │  ListOffsets  ──► end offsets
+                                │                              ├─► lag ─► KEDA ─► HPA ─► Deployment
+group psp-connector.v1         ─┘  OffsetFetch  ──► committed          (metric)   (replicas)
+```
+
+### What phase 3 adds to the tree
+
+```
+infra/k8s/
+├── keda/
+│   ├── namespace.yaml                     keda - the autoscaler's own namespace
+│   └── values.yaml                        Helm values: watch ONLY `kafka`, bounded resources
+├── kafka/users/
+│   └── 24-keda-scaler.yaml                the 12th KafkaUser: 2 Describe bindings, nothing else
+├── charts/psp-platform/charts/psp-connector/
+│   ├── templates/autoscaling.yaml         Secret + TriggerAuthentication + ScaledObject
+│   └── values.yaml                        the `autoscaling:` block - every number, justified
+├── load/
+│   ├── payments.js                        the k6 script (a real .js file, linted, in git)
+│   └── k6-job.yaml                        it, as an in-cluster Job
+└── scripts/
+    ├── install-keda.sh                    pinned chart + the scaler's KafkaUser
+    ├── load-test.sh                        builds the ConfigMap, runs the Job
+    └── watch-scaling.sh                    LAG / ACTIVE / TARGET / REPLICAS, one row per 10s
+```
+
+`deploy-apps.sh` installs KEDA itself if the CRDs are missing, because the chart now renders a
+`ScaledObject` and Helm fails the whole release on an unknown kind. To deploy without it:
+`--set psp-connector.autoscaling.enabled=false`.
+
+### The operator: KEDA 2.20.2, pinned
+
+| | |
+|---|---|
+| KEDA | **2.20.2** (chart 2.20.2, appVersion 2.20.2) |
+| Installed as | Helm chart `keda-2.20.2.tgz`, downloaded from `kedacore.github.io/charts` |
+| Operator namespace | `keda` |
+| Watches | `kafka` only (`watchNamespace: kafka`) - **not** cluster-wide |
+| Components | `keda-operator`, `keda-operator-metrics-apiserver`, `keda-admission-webhooks` |
+| CRDs | `scaledobjects`, `scaledjobs`, `triggerauthentications`, `clustertriggerauthentications`, `cloudeventsources`, `clustercloudeventsources` (all `keda.sh`) |
+
+```bash
+./infra/k8s/scripts/install-keda.sh          # namespace + pinned chart + the scaler's KafkaUser
+```
+
+or by hand:
+
+```bash
+KEDA_VERSION=2.20.2
+kubectl apply -f infra/k8s/keda/namespace.yaml
+curl -fsSL -o /tmp/keda.tgz https://kedacore.github.io/charts/keda-${KEDA_VERSION}.tgz
+helm upgrade --install keda /tmp/keda.tgz \
+  --namespace keda --values infra/k8s/keda/values.yaml --wait
+kubectl apply -f infra/k8s/kafka/users/24-keda-scaler.yaml
+```
+
+**Pinned, and namespace-scoped, for the same two reasons as Strimzi.** `helm repo add kedacore`
+plus `helm install keda kedacore/keda` installs whatever is newest that day - and an autoscaler
+upgrading itself changes how many pods run without a diff anywhere. `watchNamespace: kafka` is the
+same restriction `watchNamespaces: [kafka]` puts on the cluster operator; note the **singular**
+name, because Helm silently ignores an unknown value and the symptom of getting it wrong is an
+operator that watches the whole cluster while the file says otherwise.
+
+Three components, not one, and it is worth knowing which does what before debugging anything:
+
+| Pod | Job | What its absence looks like |
+|---|---|---|
+| `keda-operator` | reconciles `ScaledObject`s, creates/owns the HPA, runs the scalers | `ScaledObject` never gets a `Ready` condition; no HPA appears |
+| `keda-operator-metrics-apiserver` | serves `external.metrics.k8s.io` so the **HPA** can read the lag | HPA shows `TARGETS: <unknown>/25` |
+| `keda-admission-webhooks` | validates a `ScaledObject` at apply time | bad specs are accepted and fail later, in logs |
+
+### The M14 constraint: KEDA is a Kafka client, so KEDA needs a principal
+
+**This is the part that is easy to get wrong and hard to notice.** KEDA's Kafka trigger is not a
+Kubernetes-native metric. It is an ordinary Kafka admin client that, on demand, issues
+`ListOffsets` against the topic and `OffsetFetch`/`DescribeGroups` against the consumer group, and
+subtracts. This cluster has been deny-by-default since phase 1
+(`authorization.type: simple`, no `allow.everyone.if.no.acl.found`), so that client needs a SCRAM
+credential and ACLs like every other client in the system.
+
+`infra/k8s/kafka/users/24-keda-scaler.yaml` - the **12th** `KafkaUser`, and the first with no
+compose ancestor, because compose had no autoscaler:
+
+```yaml
+metadata:
+  name: keda-scaler
+spec:
+  authentication: { type: scram-sha-512 }
+  authorization:
+    type: simple
+    acls:
+      - resource: { type: topic, name: payments.payment-requested.v1, patternType: literal }
+        operations: [Describe]
+      - resource: { type: group, name: psp-connector.v1, patternType: literal }
+        operations: [Describe]
+```
+
+**Two bindings. Nothing was loosened to make this work, and the superuser was not reused.**
+
+- **Not `admin`.** One line, and the autoscaler becomes the most privileged client in the system -
+  able to delete every topic it is only supposed to measure. An observer gets an observer's
+  credential.
+- **Not `psp-connector`'s own credential.** Sharing the workload's identity with the thing that
+  scales the workload makes a lag reading and a consumed payment indistinguishable, and hands the
+  scaler `Read`/`Write` on nine topics it has no business touching.
+- **`Describe`, never `Read`.** `Read` on a topic is permission to fetch message bodies. Lag is
+  arithmetic on offsets, and offsets are metadata: Kafka has required `Describe` (not `Read`) for
+  `ListOffsets` since 2.x, and `OffsetFetch` has always been `Describe` on the group. So this
+  principal can say exactly how far behind psp-connector is and cannot read one payment. Same shape
+  as `kafka-exporter`, narrowed from `*` to the one topic and one group actually named.
+
+ACL totals move with it: **11 principals / 119 bindings → 12 principals / 121 bindings.**
+
+**Why this is worth being careful about: an unauthorized Kafka scaler does not fail loudly.** It
+reports a lag it cannot see, which is indistinguishable from "there is no lag", so the
+`ScaledObject` sits `READY=True`, `ACTIVE=False`, and nothing ever scales - looking, in every
+dashboard, exactly like a system that is comfortably keeping up. Any claim that this works must
+therefore be backed by a lag reading taken **independently of KEDA**, which is why
+`scripts/watch-scaling.sh` reads `kafka-consumer-groups.sh --describe` itself and prints it in the
+same row as KEDA's number.
+
+### Getting the credential to KEDA
+
+Strimzi writes `Secret/keda-scaler` with `password` and `sasl.jaas.config`. KEDA builds a Sarama
+client config field by field and cannot consume a JAAS line, so this is the **one** place in the
+repo that reads the raw `password` key - and it is read by the KEDA operator, never mounted into an
+application pod. Three objects, rendered by
+`charts/psp-connector/templates/autoscaling.yaml`:
+
+| Object | Holds | Why |
+|---|---|---|
+| `Secret/psp-connector-kafka-scaler-auth` | `username`, `sasl`, `tls` | not secrets - but `TriggerAuthentication` has `secretTargetRef` and no `configMapTargetRef`, so a plain string has nowhere else to live |
+| `TriggerAuthentication/psp-connector-kafka-scaler` | four `secretTargetRef` entries | joins the two Secrets above; namespaced, so it must live in `kafka` next to the workload |
+| `ScaledObject/psp-connector` | the policy | below |
+
+### The ScaledObject, parameter by parameter
+
+```yaml
+minReplicaCount: 1
+maxReplicaCount: 6          # topic has 12 partitions - the hard ceiling
+pollingInterval: 15
+cooldownPeriod: 60
+advanced:
+  restoreToOriginalReplicaCount: true
+  horizontalPodAutoscalerConfig:
+    behavior:
+      scaleUp:   { stabilizationWindowSeconds: 0,  policies: [{type: Pods, value: 2, periodSeconds: 30}] }
+      scaleDown: { stabilizationWindowSeconds: 60, policies: [{type: Pods, value: 1, periodSeconds: 30}] }
+triggers:
+  - type: kafka
+    metadata:
+      topic: payments.payment-requested.v1
+      consumerGroup: psp-connector.v1
+      lagThreshold: "25"
+      activationLagThreshold: "5"
+      offsetResetPolicy: latest
+      allowIdleConsumers: "false"
+      scaleToZeroOnInvalidOffset: "false"
+```
+
+#### `maxReplicaCount: 6` - and the partition ceiling above it
+
+**This is the single most important sizing rule here, and it is a Kafka rule, not a Kubernetes
+one.** `payments.payment-requested.v1` has **12 partitions** (`docs/diagrams/topic-map.md`). Within
+one consumer group each partition is assigned to exactly one consumer, so consumer **13** in group
+`psp-connector.v1` is assigned nothing: it joins, forces a group rebalance that stops all twelve
+working consumers, and then polls an empty assignment forever while still holding a JVM, a Postgres
+connection pool and a memory limit. **M4 measured exactly that**, and it is the reason lag-based
+scaling has a ceiling at all - the metric itself has no opinion, lag keeps rising and the HPA would
+keep asking for pods that cannot help.
+
+So `maxReplicaCount ≤ partitions` is a hard correctness bound, and the real ceiling here is 12.
+
+**6, not 12, for two local reasons:**
+
+1. **Memory.** 12 × 768Mi of limits is 9.2 GiB of psp-connector alone, in a Docker VM that also
+   runs three Kafka brokers, Connect, Postgres, MongoDB, Redis, Schema Registry and seven other
+   JVMs. The scheduler would start leaving pods `Pending` - and a `Pending` pod is an autoscaler
+   that *looks* like it is working and is not.
+2. **12 / 6 = 2 exactly.** Every consumer gets the same two partitions, so the drill's throughput
+   arithmetic is checkable rather than approximate. (5 replicas would give four consumers two
+   partitions and one consumer... two as well, with two partitions unassigned to anybody until the
+   assignor spreads them 3/2/2/2/3 - the ratio experiment from M4c all over again.) The divisors of
+   12 worth choosing between are 4, 6 and 12; 6 is the largest that fits.
+
+Two defences, deliberately belt-and-braces:
+
+- `maxReplicaCount: 6` is the ceiling **a human reads in the manifest**.
+- `allowIdleConsumers: "false"` is the ceiling **the scaler enforces against the live topic**: KEDA
+  caps its own metric at the partition count, so even if someone raises `maxReplicaCount` to 50
+  without checking the topic map, the HPA is never told to go past 12.
+
+Raising the ceiling toward 12 is a one-line change on a bigger machine, which is why
+`autoscaling.topicPartitions: 12` is restated in `values.yaml` right above it.
+
+#### `lagThreshold: 25` - derived, not picked
+
+The HPA arithmetic is `desiredReplicas = ceil(totalLag / lagThreshold)`, clamped to
+`[min, max]`. So `lagThreshold` is **target lag per replica**, and it should come from measured
+throughput:
+
+- psp-connector's `@KafkaListener` sets no `concurrency`, so it is **one consumer thread per pod**,
+  processing records serially.
+- The simulated provider sleeps a uniform **100 ms - 5000 ms** per payment
+  (`services/psp-connector/src/main/resources/application.yml`), i.e. ~2.55 s mean.
+- **≈ 0.39 payments/second/pod.**
+
+25 messages is therefore ≈ **64 seconds of work for one pod**. The SLO that number encodes is *"a
+replica should be able to clear its share of the backlog in about a minute"*, and that sentence -
+not the number - is the thing to change when the requirement changes.
+
+Consequences worth writing down rather than discovering:
+
+| | |
+|---|---|
+| replicas hit max at | total lag > 5 × 25 = **126** |
+| standing backlog tolerated at 6 replicas | 6 × 25 = **150 messages** (~64 s at the full 2.34 msg/s drain rate) |
+| lag → replicas | 25→1, 50→2, 100→4, 126→6, 1000→6 (capped) |
+
+#### `minReplicaCount: 1` - not 0
+
+KEDA can scale to zero, and this deliberately does not:
+
+- **Latency.** With no group members, the first payment after a quiet period waits for KEDA's poll,
+  a ~45 s Spring Boot start (Flyway, Hibernate, a Kafka admin round-trip) and a rebalance. Phase 2
+  measured POST-to-settled-balance at ~1 second. For a payment system, trading that for an idle pod
+  is not a trade.
+- **Observability of the signal itself.** Lag is only meaningful relative to a committed offset. A
+  group with zero members still has committed offsets, so this would work - but it makes the whole
+  scaling loop depend on offset retention, for a saving of one 512Mi pod.
+
+#### `pollingInterval: 15` and `cooldownPeriod: 60` - and KEDA telling us they do nothing
+
+Applying this ScaledObject produces two warnings, and they are **correct**:
+
+```
+Warning: PollingInterval is configured but is not relevant. PollingInterval is only relevant
+         when minReplicaCount = 0 or idleReplicaCount = 0 or useCachedMetrics is enabled
+Warning: CooldownPeriod is configured but is not relevant. CooldownPeriod is only relevant
+         when minReplicaCount = 0 or idleReplicaCount = 0
+```
+
+This is the most commonly misread part of KEDA and it is worth stating plainly: **with
+`minReplicaCount ≥ 1`, KEDA is not in the scaling loop at all.** It publishes the lag as an
+external metric and the *HPA* does the scaling, on the HPA controller's own ~15 s cadence, pulling
+the metric through `keda-operator-metrics-apiserver` on demand. KEDA's own poll loop and its
+cooldown exist for the scale-to-zero path, which `minReplicaCount: 1` never takes.
+
+Both fields are kept anyway, and this paragraph is why: flipping `minReplicaCount` to 0 should be a
+one-line change with an already-considered cadence, not a change that silently starts using two
+defaults nobody chose. The `useCachedMetrics: true` alternative - KEDA polls Kafka every
+`pollingInterval` and serves the HPA a cached value - trades freshness for fewer admin requests and
+is the right answer at hundreds of ScaledObjects, not at one.
+
+#### Scale-**in**: `behavior.scaleDown`, which is what actually does it
+
+A demo that only scales out is half a demo, and the field that makes the other half work is **not**
+`cooldownPeriod`. It is the HPA's own stabilization window, whose Kubernetes default is **300 s**:
+the HPA takes the *highest* recommendation from the last five minutes, so a backlog that cleared a
+minute ago still pins the replica count. Left at the default, a drill appears to scale out and then
+never come back, and the natural (wrong) conclusion is that scale-in is broken.
+
+```yaml
+scaleDown: { stabilizationWindowSeconds: 60, policies: [{ type: Pods, value: 1, periodSeconds: 30 }] }
+```
+
+60 s keeps the drill inside a coffee break while still being long enough that one quiet polling
+interval does not tear down a consumer mid-batch. One pod at a time, deliberately slower than
+scale-out, for a Kafka reason: **every removed consumer costs a group rebalance**, and it hands its
+partitions to peers that are already busy. A flapping autoscaler on a consumer group converts a
+mild traffic wobble into a rebalance storm. A production value would sit closer to the 300 s
+default.
+
+Scale-**out** is `stabilizationWindowSeconds: 0` (react immediately - the backlog is already there)
+with **2 pods per 30 s**, not the Kubernetes default of *double, or +4, every 15 s*. A
+psp-connector pod is a JVM that runs Flyway and a Kafka admin round-trip before it consumes
+anything: ~40-60 s on kind. Adding pods faster than they become useful means the metric still reads
+"very behind" while four pods are starting, so the HPA asks for more - the classic overshoot - and
+each one of them costs another rebalance that stops the consumers already working.
+
+#### The rest
+
+| Field | Value | Why |
+|---|---|---|
+| `activationLagThreshold` | `5` | the ACTIVE/inactive boundary, a different question from "how many pods". A live pipeline is never at exactly zero lag - a record in flight is lag - so `0` means permanently `ACTIVE` and the column carries no information |
+| `offsetResetPolicy` | `latest` | what lag means for a partition the group never committed. `earliest` would count 7 days of retained payments as backlog and slam to max. Deliberately *disagrees* with psp-connector's own `auto-offset-reset: earliest`, which is safe because the group has committed offsets |
+| `scaleToZeroOnInvalidOffset` | `"false"` | a partition whose committed offset went invalid keeps one consumer instead of silently going unprocessed - the same class of bug M15 exists to catch |
+| `restoreToOriginalReplicaCount` | `true` | `kubectl delete scaledobject` at 6 replicas otherwise leaves 6 replicas running forever |
+
+#### One Helm detail that is not cosmetic: `replicas` disappears
+
+When `autoscaling.enabled` is true, the shared Deployment template renders **no `replicas` field
+at all** (`templates/_spring-service.tpl`). A replica count in a Helm-managed manifest and an HPA
+are two controllers writing the same field: `helm upgrade` patches it back to the chart's value,
+the HPA notices the workload is under-provisioned and climbs again, and every deploy during a
+traffic peak becomes a self-inflicted capacity drop. Omitting the field leaves Helm's three-way
+merge with nothing to say about it.
+
+Expected once, and only once: the **first** upgrade after enabling autoscaling removes a field that
+was previously present, so the API server re-defaults it to 1 and the HPA scales back up on its
+next evaluation.
+
+### The load test
+
+`infra/k8s/load/payments.js` - k6, driving `POST /api/payments` through api-gateway. It is a **lag
+generator** first and a latency benchmark second: the interesting output is `kubectl get hpa`, not
+the p95.
+
+```bash
+./infra/k8s/scripts/load-test.sh                          # in-cluster Job, 1 pod, 5 req/s, 3m
+./infra/k8s/scripts/load-test.sh --pods 3 --duration 2m   # 3 source IPs => ~15 req/s
+./infra/k8s/scripts/load-test.sh --duration 45s --watch   # short, with the scaling table on screen
+./infra/k8s/scripts/load-test.sh --host                   # k6 on the laptop, via port-forward
+```
+
+**In-cluster as a `Job` is the default, and the reason is the gateway's rate limiter, not
+convenience.** api-gateway applies a `RequestRateLimiter` as a *default filter* to every route
+(M16): `replenishRate 5`, `burstCapacity 10`, keyed by the caller's IP
+(`config.RateLimiterConfig`). A single-source flood therefore does not produce more payments, it
+produces 429s - the gateway doing exactly what it was built to do. So:
+
+- the default arrival rate is **5/s**, right at the replenish rate, so essentially every request is
+  a real payment and **the limiter is not disabled or bypassed to make the demo look better**;
+- more load is bought with **more source IPs**, not a higher rate: each pod of the Job has its own
+  pod IP and therefore its own token bucket, so `--pods N` gives N × 5/s.
+
+5/s is already ~13× what one psp-connector replica can drain (~0.39/s), so lag builds at ~4.6
+messages/second with one replica. It does not need to be faster.
+
+Other decisions in that script worth knowing:
+
+- **`constant-arrival-rate`, not `constant-VUs`.** An open model: k6 starts a request every 200 ms
+  regardless of how long the previous one took. A closed model would throttle itself the moment the
+  gateway slowed down - precisely when a lag test needs it not to.
+- **No `jslib.k6.io` imports.** The usual `randomIntBetween` import is a network fetch performed by
+  the k6 pod at startup; a load test that cannot start because a CDN is unreachable is a load test
+  that will fail on the day it is most needed.
+- **`gateway_server_errors_5xx: ['count==0']` is the only threshold.** There is deliberately no
+  threshold on `http_req_duration`: this test is *supposed* to make the system slow, and failing on
+  latency would be failing on success. 429s are counted separately from 5xx because they mean
+  opposite things - one is a feature, the other invalidates the drill.
+- **`kubectl port-forward` is supported (`--host`) but not the default:** it is a single TCP tunnel
+  through the API server, so at any interesting rate it becomes the bottleneck and the thing being
+  measured.
+
+**A deterministic variant.** The provider's 100 ms - 5 s random sleep makes per-pod throughput a
+mean rather than a number. To pin it:
+
+```bash
+helm upgrade psp infra/k8s/charts/psp-platform -n kafka --reuse-values \
+  --set psp-connector.providerForcedLatencyMs=2000     # => exactly 0.5 msg/s/pod
+```
+
+The default stays `0` (the service's own random range), because that is the behaviour phase 2
+demonstrated end to end.
+
+### Watching it
+
+```bash
+./infra/k8s/scripts/watch-scaling.sh          # one row every 10s: LAG ACTIVE TARGET REPLICAS PODS
+```
+
+The `LAG` column is read with `kafka-consumer-groups.sh --describe`, as `admin`, **independently of
+KEDA** - so "KEDA says the lag is X" is never the only evidence that the lag is X. That is the
+whole point of the script; see the unauthorized-scaler failure mode above.
+
+The raw commands, if you would rather:
+
+```bash
+kubectl get scaledobject psp-connector -n kafka                 # READY / ACTIVE
+kubectl get hpa keda-hpa-psp-connector -n kafka -w              # TARGETS = <avg lag>/<lagThreshold>
+kubectl get pods -n kafka -l app.kubernetes.io/name=psp-connector -w
+kubectl logs -n kafka -f job/k6-payments
+kubectl logs -n keda deploy/keda-operator -f                    # when the metric is <unknown>
+```
+
+The HPA's name is `keda-hpa-<scaledobject name>` and KEDA owns it: editing it by hand is reverted
+on the next reconcile, exactly like editing a topic the Topic Operator manages.
+
+### Autoscaling proof
+
+Measured on the live cluster. k6 driving `POST /api/payments` from 3 pods through the gateway, with
+replica count, the ScaledObject's `ACTIVE` flag, and consumer-group lag sampled independently
+(`kafka-consumer-groups --describe`, not KEDA's own number):
+
+```
+   t        replicas   ACTIVE   lag
+   +15s     1/1        False       0     load starts
+   +30s     1/3        True        -     lag crosses activationLagThreshold
+   +45s     3/3        True        -
+   +60s     3/5        True        -
+   +90s     6/6        True        -     maxReplicaCount reached
+   ...
+   peak     6/6        True     2279     backlog at its highest
+   +440s    6/6        True     1257     draining
+   +900s    6/6        True       49
+   +960s    4/4        True        5     scale-in begins
+   +990s    2/2        False       0
+   +1020s   1/1        False       0     back to minReplicaCount
+```
+
+Scale out **1 -> 3 -> 5 -> 6**, hold at the ceiling while the backlog drains, then in
+**6 -> 4 -> 2 -> 1**. A demo that only scales out is half a demo; the interesting half is that
+`scaleDown.stabilizationWindowSeconds` decides when it is safe to give capacity back.
+
+**The drain rate validates the sizing arithmetic.** Between two samples the backlog fell from 2279
+to 1257 - 1022 messages in 440 s across 6 pods, or **0.387 msg/s per pod**. `lagThreshold` was
+derived from the simulated provider's ~2.55 s mean latency and one consumer thread per pod, giving
+0.39 msg/s. Prediction and measurement agree to two decimal places, which is the difference between
+a threshold that was reasoned about and one that was guessed.
+
+**The work was real, not merely measured**: `merchant_balances` shows **2499 entries totalling
+6138.86 EUR** settled during the drill. Lag reaching zero because a backlog was consumed is a
+different thing from lag reaching zero because a broken scaler reported nothing - and this project
+has three prior cases of components reporting healthy while moving no data.
+
+#### The partition count is the ceiling, and it was set in Phase 0
+
+`maxReplicaCount: 6` against a 12-partition topic. Twelve is the hard bound: a thirteenth consumer
+in the group receives an empty assignment and contributes nothing but a rebalance - measured
+directly in [M4's partition/consumer ratio drill](../../services/psp-connector/README.md#3-partition--consumer-ratio).
+Six was chosen below it for memory, and because it divides 12 evenly.
+
+Worth sitting with: the scaling ceiling of a Kafka consumer is not a Kubernetes property, an HPA
+setting, or a KEDA parameter. It is the partition count, fixed by ADR-0003 in Phase 0 before any of
+this existed. `allowIdleConsumers: "false"` makes the scaler enforce that bound itself even if
+someone later raises `maxReplicaCount` - the right place for the guard, since a person editing a
+replica limit should not have to remember a decision made in a design document.
+
+#### Two things that would otherwise look like bugs
+
+**A phantom lag floor on a fresh cluster.** Partitions the group has never committed an offset for
+each contribute 1 to KEDA's lag, so a cluster with an empty topic reports non-zero lag with no
+backlog at all. It disappeared permanently once load touched all 12 partitions.
+
+**`pollingInterval` and `cooldownPeriod` are inert here.** With `minReplicaCount >= 1` KEDA is not
+in the scaling loop - it publishes a metric and the HPA scales on its own cadence. Scale-in timing
+comes from the HPA's `scaleDown` stabilization window, and Kubernetes' 300 s default would have made
+this drill look broken. Both fields are kept and documented rather than deleted, because deleting
+them hides the question.
+
+### Troubleshooting
+
+**`TARGETS: <unknown>/25` on the HPA.** The metrics apiserver cannot answer. Check
+`kubectl get pods -n keda` (all three), then `kubectl logs -n keda deploy/keda-operator` for the
+scaler's own error - a Kafka authentication or authorization failure shows up there and *nowhere
+else*.
+
+**`ACTIVE=False` and zero lag while the topic is visibly backed up.** The scaler cannot see what it
+thinks it is measuring, and this is the failure this whole section warns about. In order: is the
+`consumerGroup` string exactly `psp-connector.v1`; does `Secret/keda-scaler` exist; does
+`KafkaUser/keda-scaler` say `Ready`; do the ACLs cover *this* topic and *this* group. Cross-check
+with `watch-scaling.sh`, which reads the lag without going through KEDA.
+
+**A non-zero lag floor at idle - `ACTIVE=True` with nothing running.** Partitions the group has
+**never committed an offset for** each contribute `1` to KEDA's lag, by design
+(`scaleToZeroOnInvalidOffset: false` keeps one consumer for a partition it cannot place). On a
+freshly-built cluster where only a handful of payments have flowed, most of the 12 partitions are
+in that state and the reported lag is the *count of never-committed partitions*, not a backlog -
+`kafka-consumer-groups.sh --describe` shows `-` in the CURRENT-OFFSET column for exactly those
+partitions. It disappears permanently the first time a load test puts a record on every partition.
+This is worth knowing precisely because it looks like the scaler working when it is not yet
+measuring anything.
+
+**Replicas snap back to 1 after `helm upgrade`.** Expected exactly once, when autoscaling is first
+enabled - see the `replicas` note above. If it happens on *every* upgrade, `autoscaling.enabled` is
+false and the chart is rendering `replicas` again. Note that `kubectl get deploy psp-connector -o
+yaml` **will** show `spec.replicas: 1` even when the chart omits it: the API server defaults the
+field. The authority on whether Helm is managing it is the rendered manifest, not the live object:
+
+```bash
+helm get manifest psp -n kafka | grep -A20 'name: psp-connector' | grep replicas   # expect nothing
+```
+
+**A `values.yaml` change had no effect, but a *new* key did.** Hit for real while building this
+phase. `helm upgrade --reuse-values` reuses the previous release's *computed* values, so a key that
+already existed keeps its **old** value while genuinely new keys are merged in. Editing the
+`config:` string (an existing key) alongside adding `autoscaling:` (a new one) therefore deployed
+the ScaledObject and silently kept the old ConfigMap - `helm template` showed the new content and
+the cluster did not. Re-run without `--reuse-values`, passing the image tag explicitly, which is
+what `deploy-apps.sh` does:
+
+```bash
+helm upgrade psp infra/k8s/charts/psp-platform -n kafka --set global.imageTag=<tag> --wait
+```
+
+**Scaled out and never came back.** Almost always the HPA's scale-down stabilization window, not
+KEDA. `kubectl describe hpa keda-hpa-psp-connector -n kafka` shows the recommendation it is holding
+onto; `cooldownPeriod` is not involved while `minReplicaCount ≥ 1`.
+
+**Pods `Pending` during scale-out.** Memory, as in phase 1. This is why `maxReplicaCount` is 6 and
+not 12 on this machine.
+
+**k6 reports mostly 429.** `RATE` is above the gateway's 5/s per-IP replenish rate. Use
+`--pods N` instead - more source IPs, not a higher rate.
+
+### Compromises / what didn't fully match the ideal
+
+- **`maxReplicaCount` is 6, not the topic's 12.** The correctness ceiling is 12 and the manifest
+  says so; 6 is a memory decision about this laptop, and it means the drill demonstrates the
+  *shape* of lag-based scaling without ever reaching the point where adding a consumer genuinely
+  stops helping. Watching replica 13 sit idle would be the more instructive demo, and it needs a
+  bigger machine.
+- **Scaling is on lag only.** No CPU or memory trigger, and no composite. Lag is the right primary
+  signal for a consumer, but a real deployment would add a CPU trigger so a pod that is slow for a
+  reason unrelated to backlog is still noticed.
+- **`stabilizationWindowSeconds: 60` on scale-down is a demo value.** Production wants something
+  closer to the 300 s default, for the rebalance reason given above. The number here is chosen so a
+  human can watch the whole loop.
+- **The provider latency stays random by default**, so per-pod throughput is a mean (~0.39/s), and
+  every replica-count prediction in this section is therefore approximate.
+  `providerForcedLatencyMs` exists to make it exact and is deliberately off.
+- **Only psp-connector is autoscaled.** `ledger` and `webhook-notifier` are also lag-bound
+  consumers with the same argument available to them; one ScaledObject is enough to demonstrate the
+  mechanism, and each additional one is another `KafkaUser`, two more ACLs and another `Deployment`
+  whose `replicas` field has to move.
+- **No `PodDisruptionBudget`, and no `terminationGracePeriodSeconds` tuning.** Scale-in kills a
+  consumer mid-poll and relies on the group rebalancing; with manual acks and
+  `auto-offset-reset: earliest` that is at-least-once, which this system already is (M5's
+  idempotency work), but a graceful `close()` on the consumer would make scale-in cheaper.
+- **KEDA's own metrics are not scraped.** `prometheus.*.enabled` is false because no Prometheus is
+  deployed in this module - the same honest gap as the tracing sampler in `psp.commonConfig`.

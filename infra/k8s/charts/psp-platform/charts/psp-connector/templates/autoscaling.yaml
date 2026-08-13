@@ -1,0 +1,201 @@
+{{- if .Values.autoscaling.enabled }}
+{{/*
+  M18 phase 3 - KEDA autoscaling for psp-connector, on Kafka consumer lag.
+
+  Three objects, in dependency order:
+
+    1. Secret        the non-secret half of the scaler's Kafka credential (username, mechanism)
+    2. TriggerAuthentication   glues that to the Strimzi-generated password Secret
+    3. ScaledObject  the actual policy - what to measure, and how many pods that is worth
+
+  Gated on `autoscaling.enabled` (values.yaml) so the chart still installs on a cluster where
+  KEDA's CRDs do not exist. A template referencing a missing CRD does not degrade gracefully:
+  `helm upgrade` fails at apply time with `no matches for kind "ScaledObject"`, which would make
+  KEDA a hard prerequisite of the whole platform rather than of one feature.
+*/}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Chart.Name }}-kafka-scaler-auth
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  # NOT SECRETS - a principal name and a mechanism name, both of which are already written in
+  # plain text in infra/k8s/kafka/users/24-keda-scaler.yaml and in the README.
+  #
+  # They live in a Secret because KEDA's TriggerAuthentication has exactly one way to source a
+  # parameter that is not pod identity: `secretTargetRef`. There is no `configMapTargetRef`. The
+  # alternative is putting `sasl` in the trigger's `metadata` block (KEDA still accepts it there,
+  # deprecated) and leaving `username` with nowhere to go at all.
+  #
+  # The actual secret - the SCRAM password - is NOT here. It stays in the Strimzi-generated
+  # Secret/{{ .Values.autoscaling.kafka.scalerUser }}, which this chart references by name and
+  # never copies. Same discipline as the services' `sasl.jaas.config` wiring in
+  # _spring-service.tpl: Helm names the Secret, the User Operator owns its contents, and rotation
+  # stays `kubectl delete secret {{ .Values.autoscaling.kafka.scalerUser }}`.
+  username: {{ .Values.autoscaling.kafka.scalerUser | quote }}
+  sasl: scram_sha512
+  tls: disable
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ .Chart.Name }}-kafka-scaler
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  # Namespaced, and it must live in the ScaledObject's namespace. That is why the whole
+  # autoscaling story lands in `kafka` alongside the workload rather than in `keda` alongside the
+  # operator - the credential belongs to the thing being measured.
+  secretTargetRef:
+    - parameter: username
+      name: {{ .Chart.Name }}-kafka-scaler-auth
+      key: username
+    - parameter: sasl
+      name: {{ .Chart.Name }}-kafka-scaler-auth
+      key: sasl
+    - parameter: tls
+      name: {{ .Chart.Name }}-kafka-scaler-auth
+      key: tls
+    # The one entry that points at a Secret this chart did not create. `password` is the raw
+    # SCRAM password; KEDA builds a Sarama client config field-by-field and has no way to consume
+    # the `sasl.jaas.config` line the Spring services use, so this is the single place in the
+    # repo where that key is read. It is read by the KEDA operator, never mounted into an
+    # application pod.
+    - parameter: password
+      name: {{ .Values.autoscaling.kafka.scalerUser }}
+      key: password
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    # Deployment is KEDA's default kind; named anyway, because `scaleTargetRef` on a ScaledObject
+    # and `scaleTargetRef` on a plain HPA are different schemas and the difference is invisible
+    # until something does not scale.
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Chart.Name }}
+
+  # ---------------------------------------------------------------------------------------------
+  # THE SIZING RULE THAT MATTERS MOST: maxReplicaCount <= partitions
+  # ---------------------------------------------------------------------------------------------
+  # payments.payment-requested.v1 has {{ .Values.autoscaling.topicPartitions }} partitions
+  # (docs/diagrams/topic-map.md). Within one consumer group, a partition is assigned to exactly
+  # one consumer, so consumer number {{ add1 (int .Values.autoscaling.topicPartitions) }} in group
+  # psp-connector.v1 gets nothing - it joins, triggers a rebalance, and then polls an empty
+  # assignment forever while still holding a JVM, a Postgres connection pool and a memory limit.
+  # M4 measured exactly that. Scaling past the partition count therefore costs a rebalance and
+  # buys zero throughput, and the autoscaler must know the ceiling because the metric does not:
+  # lag keeps rising and would keep asking for pods.
+  #
+  # maxReplicaCount is {{ .Values.autoscaling.maxReplicaCount }}, BELOW that hard ceiling of
+  # {{ .Values.autoscaling.topicPartitions }}, for a second, local reason - see values.yaml.
+  minReplicaCount: {{ .Values.autoscaling.minReplicaCount }}
+  maxReplicaCount: {{ .Values.autoscaling.maxReplicaCount }}
+
+  # How often KEDA asks Kafka for the lag. Not how often it scales - the HPA re-evaluates on its
+  # own 15s loop from the metric KEDA caches.
+  pollingInterval: {{ .Values.autoscaling.pollingInterval }}
+
+  # HONEST NOTE, because this field is the most commonly misread in KEDA: cooldownPeriod governs
+  # the transition to ZERO (and to `idleReplicaCount`), i.e. the period a trigger must stay
+  # inactive before KEDA itself scales the workload down. With minReplicaCount >= 1, that path is
+  # never taken and this value never fires. Scale-IN from N to minReplicaCount is done by the HPA,
+  # governed by `behavior.scaleDown` below. It is set anyway so that flipping minReplicaCount to 0
+  # is a one-line change with an already-considered cooldown, rather than a surprise.
+  cooldownPeriod: {{ .Values.autoscaling.cooldownPeriod }}
+
+  advanced:
+    # Deleting the ScaledObject puts the Deployment back to the replica count it had before KEDA
+    # took over, instead of leaving it frozen at whatever the last scale decision was. Without
+    # this, `kubectl delete scaledobject` at 6 replicas leaves 6 replicas running forever.
+    restoreToOriginalReplicaCount: true
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          # React immediately - the whole point is that a backlog is already there.
+          stabilizationWindowSeconds: 0
+          policies:
+            # Two pods per 30s, NOT the Kubernetes default (double, or +4, every 15s). A
+            # psp-connector pod is a Spring Boot JVM that runs Flyway and a Kafka admin round-trip
+            # before it consumes anything: ~40-60s on kind. Adding pods faster than they become
+            # useful means the metric still reads "very behind" while 4 pods are starting, so the
+            # HPA asks for more - the classic autoscaler overshoot, and on this cluster it also
+            # means 4 JVMs warming up simultaneously on a VM that has three Kafka brokers on it.
+            #
+            # Every added consumer also costs a group rebalance, during which the EXISTING
+            # consumers stop. Scaling out in smaller steps is not only gentler on the node, it is
+            # fewer stop-the-world pauses on the thing you are trying to speed up.
+            - type: Pods
+              value: 2
+              periodSeconds: 30
+        scaleDown:
+          # THIS is what makes scale-in observable, not cooldownPeriod above. The Kubernetes
+          # default stabilization window is 300s: the HPA takes the HIGHEST recommendation from
+          # the last 5 minutes, so a backlog that cleared 60s ago still pins the replica count.
+          # 60s here keeps the drill inside a coffee break while still being long enough that a
+          # single quiet polling interval does not tear down a consumer mid-batch.
+          #
+          # A production value would be closer to the default, for a Kafka-specific reason: every
+          # removed consumer is another rebalance, and a flapping autoscaler on a consumer group
+          # converts a mild traffic wobble into a rebalance storm.
+          stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDownStabilizationSeconds }}
+          policies:
+            # One pod at a time, deliberately slower than scale-up. Removing a consumer costs a
+            # rebalance and hands its partitions to peers that are already busy; being wrong about
+            # scale-in is more expensive than being wrong about scale-out.
+            - type: Pods
+              value: 1
+              periodSeconds: 30
+
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: {{ .Values.global.kafka.bootstrapServers }}
+        consumerGroup: {{ .Values.autoscaling.kafka.consumerGroup }}
+        topic: {{ .Values.autoscaling.kafka.topic }}
+
+        # TARGET LAG PER REPLICA. The HPA arithmetic is
+        #     desiredReplicas = ceil( totalLag / lagThreshold )
+        # clamped to [minReplicaCount, maxReplicaCount]. See values.yaml for how this number was
+        # derived from psp-connector's measured per-pod throughput rather than picked.
+        lagThreshold: {{ .Values.autoscaling.lagThreshold | quote }}
+
+        # The ACTIVE/inactive boundary, which is a different question from "how many pods".
+        # Below this, the ScaledObject reports ACTIVE=False and the workload sits at
+        # minReplicaCount. Without it, a single unconsumed message makes the scaler permanently
+        # active, and `kubectl get scaledobject` stops carrying information.
+        activationLagThreshold: {{ .Values.autoscaling.activationLagThreshold | quote }}
+
+        # What lag means for a partition the group has NEVER committed an offset for. `latest`
+        # says "assume it is caught up"; `earliest` would count the whole retained partition as
+        # backlog. psp-connector's own consumer is auto-offset-reset=earliest, so those two
+        # disagree on purpose - and the disagreement is safe here because the group has committed
+        # offsets on all 12 partitions since phase 2. Left explicit because the default flipping
+        # would silently turn 7 days of retained payments into a scale-to-max signal.
+        offsetResetPolicy: latest
+
+        # Belt and braces on the partition ceiling. With this false, KEDA caps its own metric so
+        # the HPA cannot ask for more replicas than the topic has partitions, EVEN IF
+        # maxReplicaCount were set higher. maxReplicaCount is the ceiling that is read by a human
+        # in the manifest; this is the one enforced by the scaler against the live topic, and it
+        # keeps being right if someone raises maxReplicaCount without checking the topic map.
+        allowIdleConsumers: "false"
+
+        # What to do about a partition with no valid committed offset (topic recreated, or
+        # retention ate the committed offset). `false` keeps ONE consumer assigned to it so the
+        # partition is still worked; `true` scales that partition's share to zero, i.e. a
+        # partition whose bookkeeping broke silently stops being consumed. This is KEDA's default
+        # and it is written out because the failure it prevents - a partition quietly going
+        # unprocessed with a green ScaledObject - is the same class of bug M15 exists to catch.
+        scaleToZeroOnInvalidOffset: "false"
+      authenticationRef:
+        name: {{ .Chart.Name }}-kafka-scaler
+{{- end }}

@@ -1,0 +1,58 @@
+# Helm values for KEDA. The chart version is pinned in scripts/install-keda.sh (KEDA_VERSION) and
+# must match the chart artifact downloaded there - same discipline as infra/k8s/strimzi/values.yaml.
+#
+# Why the chart and not `kubectl apply -f keda-<v>.yaml`: the flat bundle installs cluster-wide and
+# has no knob for `watchNamespace`, so restricting the operator would mean editing generated YAML.
+# The chart does it from one value, and the .tgz still comes from a pinned URL rather than
+# `helm repo add && install whatever is newest`.
+
+# Watch exactly one namespace, the same decision (and the same reasoning) as Strimzi's
+# `watchNamespaces: [kafka]`. KEDA's default is every namespace; a scaler that can scale anything
+# in the cluster is not something this module needs, and a ScaledObject dropped in the wrong
+# namespace should do nothing rather than quietly work.
+#
+# NOTE the singular: Strimzi's value is `watchNamespaces` (a list), KEDA's is `watchNamespace`
+# (a single string). Getting this wrong is silent - Helm ignores unknown values - and the symptom
+# is an operator that watches everything while the file says otherwise.
+watchNamespace: "kafka"
+
+# Images arrive from ghcr.io on first install and never change afterwards, because the tag is the
+# chart's appVersion, not `latest`. `Always` (the chart default) means a re-pull on every pod
+# restart against a registry that a laptop cluster may not be able to reach at that moment.
+image:
+  pullPolicy: IfNotPresent
+
+# Three pods: the operator (reconciles ScaledObjects, creates the HPA, polls the scalers), the
+# metrics API server (serves external.metrics.k8s.io so the HPA can read the lag), and the
+# admission webhook (rejects an invalid ScaledObject at apply time instead of at reconcile time).
+#
+# The chart's own defaults are 100m/100Mi requests and 1 CPU/1000Mi limits for each. The limits
+# are cut here: this cluster has one ScaledObject with one trigger, and 3 x 1000Mi of limits
+# against a Docker VM that also holds three Kafka brokers and eight JVMs is a ceiling nothing will
+# ever approach but every scheduler decision has to account for.
+resources:
+  operator:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 384Mi }
+  metricServer:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 384Mi }
+  webhooks:
+    requests: { cpu: 25m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+# Prometheus scraping is off: no Prometheus is deployed in this module (the `psp.commonConfig`
+# tracing block says the same about Tempo). Turning on a ServiceMonitor with no Prometheus
+# Operator installed creates a CR whose CRD does not exist, which fails the install.
+prometheus:
+  metricServer:
+    enabled: false
+  operator:
+    enabled: false
+  webhooks:
+    enabled: false
+
+logging:
+  operator:
+    level: info
+    format: console

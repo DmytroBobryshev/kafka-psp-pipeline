@@ -1,0 +1,13 @@
+# KEDA gets its OWN namespace, for the same reason strimzi-system exists: an autoscaler is a
+# controller with cluster-scoped RBAC (it reads/scales workloads and reads Secrets), and a
+# controller does not belong in the namespace holding the workload's credentials.
+#
+# The name is `keda` rather than `keda-system` only because that is what every piece of KEDA
+# documentation, every `kubectl logs -n keda` in an issue thread, and the chart's own defaults
+# assume. Divergence here would buy nothing and cost every copy-pasted debug command.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keda
+  labels:
+    app.kubernetes.io/part-of: kafka-psp

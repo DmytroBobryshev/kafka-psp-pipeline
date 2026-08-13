@@ -1,0 +1,84 @@
+# infra/k8s/load/k6-job.yaml - M18 phase 3, the load generator as a Kubernetes Job.
+#
+# Applied by infra/k8s/scripts/load-test.sh, which first creates the ConfigMap holding
+# payments.js (`kubectl create configmap k6-payments --from-file=...`) so the script lives in git
+# as a real .js file that an editor can lint, rather than as an indented string inside YAML.
+#
+# WHY IN-CLUSTER AND NOT FROM THE HOST
+# api-gateway is a ClusterIP Service. Load from the laptop means `kubectl port-forward`, which is
+# a single TCP tunnel through the API server: it becomes the bottleneck and the thing being
+# measured, and it drops connections under sustained load. A Job talks to
+# api-gateway.kafka.svc.cluster.local:8000 directly through kube-proxy - the same path every other
+# in-cluster client uses. (load-test.sh --host still offers the port-forward route, because being
+# able to point k6 at a URL from a laptop is worth having; see the README.)
+#
+# THE RATE LIMITER AND `parallelism`
+# api-gateway rate-limits per client IP (5/s replenish, 10 burst). Each pod of this Job has its own
+# pod IP and therefore its own token bucket, so `parallelism: N` multiplies the achievable payment
+# rate by N without any request being rejected. That is why load is scaled with pods here rather
+# than with the RATE env var - raising RATE past 5 just converts payments into 429s.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-payments
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: k6-payments
+    app.kubernetes.io/part-of: psp-platform
+spec:
+  # Every pod must finish for the Job to complete, and they run at the same time. `completions`
+  # equal to `parallelism` is what makes this a fixed-size fleet of identical load sources rather
+  # than a work queue.
+  completions: 1
+  parallelism: 1
+  backoffLimit: 0 # a failed load test is a result, not something to silently retry
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: k6-payments
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      containers:
+        - name: k6
+          # Pinned, like every other image in this module. 1.8.1 and not the newer 2.x line: the
+          # script uses only long-stable APIs (constant-arrival-rate, k6/metrics, handleSummary)
+          # and a load generator is not the place to find out what a major version changed.
+          image: grafana/k6:1.8.1
+          args: ["run", "/scripts/payments.js"]
+          env:
+            # Requests per second PER POD. 5 = the gateway's replenishRate, so ~zero 429s.
+            - name: RATE
+              value: "5"
+            - name: DURATION
+              value: "3m"
+            - name: BASE_URL
+              value: "http://api-gateway.kafka.svc.cluster.local:8000"
+            - name: MERCHANT_ID
+              value: "merchant-keda-drill"
+            # k6 buffers its summary; without this the pod logs stay empty until it exits, which
+            # makes a running drill look hung.
+            - name: K6_NO_USAGE_REPORT
+              value: "true"
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 12345 # the uid baked into grafana/k6
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: scripts
+          configMap:
+            name: k6-payments
