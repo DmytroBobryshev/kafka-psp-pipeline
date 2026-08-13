@@ -6,6 +6,8 @@ architecture, MapStruct + Lombok, a React + TypeScript UI, fully deployable to K
 
 Full plan: [`docs/PLAN.md`](docs/PLAN.md). Decisions and their rationale:
 [`docs/adr/`](docs/adr/). Diagrams: [`docs/diagrams/`](docs/diagrams/).
+Measured failure drills against the live cluster:
+[`docs/M19-failure-drills.md`](docs/M19-failure-drills.md).
 
 ## Overview
 
@@ -77,7 +79,7 @@ and time estimates live in [`docs/PLAN.md`](docs/PLAN.md).
 | M16 - Discovery + gateway | `services/discovery-server`, `services/api-gateway` | Eureka vs k8s-native discovery, Spring Cloud Gateway | Not started |
 | M17 - React UI | `ui/` | SSE, OpenAPI-generated types, the six showcase pages | Not started |
 | M18 - Kubernetes | `infra/k8s/` | Strimzi, Helm, KEDA | Not started |
-| M19 - Failure drills | `infra/k8s/` | ISR/acks tradeoffs, unclean leader election, reassignment | Not started |
+| M19 - Failure drills | [`docs/M19-failure-drills.md`](docs/M19-failure-drills.md) | ISR/acks trade-offs, unclean leader election, partition count vs keyed ordering, rebalance cost, static membership | **Part 1 done** |
 
 ## Stack & persistence decisions
 
