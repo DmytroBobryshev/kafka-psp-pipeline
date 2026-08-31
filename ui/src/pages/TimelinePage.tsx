@@ -15,9 +15,14 @@ type Mode = "payment" | "refund";
 
 // Sandbox convention (docs.stripe.com/testing): the amount's ending selects the outcome.
 const PAYMENT_OUTCOMES = [
-  { label: "succeed", cents: null, tone: "text-emerald-700 border-emerald-300" },
-  { label: "decline (.13)", cents: 13, tone: "text-rose-700 border-rose-300" },
-  { label: "timeout (.66)", cents: 66, tone: "text-amber-700 border-amber-300" },
+  { key: "succeed", label: "succeed", cents: null, on: "bg-emerald-600 text-white border-emerald-600", off: "text-emerald-700 border-emerald-300 hover:bg-emerald-50" },
+  { key: "decline", label: "decline", cents: 13, on: "bg-rose-600 text-white border-rose-600", off: "text-rose-700 border-rose-300 hover:bg-rose-50" },
+  { key: "timeout", label: "timeout", cents: 66, on: "bg-amber-500 text-white border-amber-500", off: "text-amber-700 border-amber-300 hover:bg-amber-50" },
+] as const;
+
+const REFUND_OUTCOMES = [
+  { key: "succeed", label: "succeed", cents: null, on: "bg-emerald-600 text-white border-emerald-600", off: "text-emerald-700 border-emerald-300 hover:bg-emerald-50" },
+  { key: "fail", label: "fail", cents: 13, on: "bg-rose-600 text-white border-rose-600", off: "text-rose-700 border-rose-300 hover:bg-rose-50" },
 ] as const;
 
 export function TimelinePage() {
@@ -39,6 +44,8 @@ export function TimelinePage() {
 
   const [merchantId, setMerchantId] = useState("");
   const [amount, setAmount] = useState("49.99");
+  const [paymentOutcome, setPaymentOutcome] = useState<(typeof PAYMENT_OUTCOMES)[number]>(PAYMENT_OUTCOMES[0]);
+  const [refundOutcome, setRefundOutcome] = useState<(typeof REFUND_OUTCOMES)[number]>(REFUND_OUTCOMES[0]);
   const [currency, setCurrency] = useState("EUR");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -193,43 +200,60 @@ export function TimelinePage() {
                   </select>
                 </label>
               </div>
-              <div className="grid grid-cols-3 gap-2">
-                {PAYMENT_OUTCOMES.map((o) => (
-                  <button
-                    key={o.label}
-                    onClick={() => simulatePayment(o.cents)}
-                    disabled={creating || !merchantId}
-                    className={`rounded-md border bg-white px-2 py-2 text-xs font-medium disabled:opacity-40 ${o.tone}`}
-                  >
-                    {o.label}
-                  </button>
-                ))}
+              <div className="mb-3">
+                <span className="mb-1 block text-xs font-medium text-slate-600">Outcome</span>
+                <div className="grid grid-cols-3 gap-2">
+                  {PAYMENT_OUTCOMES.map((o) => (
+                    <button
+                      key={o.key}
+                      onClick={() => setPaymentOutcome(o)}
+                      className={`rounded-md border px-2 py-1.5 text-xs font-medium ${
+                        paymentOutcome.key === o.key ? o.on : `bg-white ${o.off}`
+                      }`}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <p className="mt-2 text-[10px] text-slate-400">
-                The amount's ending selects the outcome — the same convention Stripe/Adyen
-                sandboxes use. Timeout never publishes a status (retry path).
+              <button
+                onClick={() => simulatePayment(paymentOutcome.cents)}
+                disabled={creating || !merchantId}
+                className="w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+              >
+                {creating
+                  ? "Sending…"
+                  : `Create payment · ${withEnding(amount, paymentOutcome.cents)} ${currency}`}
+              </button>
+              <p className="mt-2 text-[10px] leading-relaxed text-slate-400">
+                The amount's ending selects the outcome (Stripe/Adyen sandbox convention).
+                Timeout never publishes a status — it goes down the retry path.
               </p>
             </>
           ) : (
             <>
               <label className="mb-3 block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">Payment</span>
-                <select
+                <span className="mb-1 block text-sm font-medium text-slate-700">
+                  Payment ID <span className="text-xs font-normal text-slate-400">(paste, or pick from suggestions)</span>
+                </span>
+                <input
+                  list="recent-payment-ids"
                   value={refundPaymentId}
                   onChange={(e) => {
-                    setRefundPaymentId(e.target.value);
-                    const full = fullAmountOf(e.target.value);
+                    setRefundPaymentId(e.target.value.trim());
+                    const full = fullAmountOf(e.target.value.trim());
                     if (full != null) setRefundAmount(String(full));
                   }}
+                  placeholder="uuid of a succeeded payment"
                   className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-xs"
-                >
-                  <option value="">— pick a recent payment —</option>
+                />
+                <datalist id="recent-payment-ids">
                   {history.map((h) => (
                     <option key={h.id} value={h.id}>
-                      {h.id.slice(0, 8)}… · {h.merchantId} · {h.amount} {h.currency}
+                      {h.merchantId} · {h.amount} {h.currency}
                     </option>
                   ))}
-                </select>
+                </datalist>
               </label>
               <div className="mb-3 grid grid-cols-[1fr_auto] gap-2">
                 <label className="block">
@@ -250,29 +274,42 @@ export function TimelinePage() {
                   full
                 </button>
               </div>
-              <input
-                value={refundReason}
-                onChange={(e) => setRefundReason(e.target.value)}
-                placeholder="reason (optional)"
-                className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-              />
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => simulateRefund(null)}
-                  disabled={refunding || !refundPaymentId}
-                  className="rounded-md border border-emerald-300 bg-white px-2 py-2 text-xs font-medium text-emerald-700 disabled:opacity-40"
-                >
-                  refund (succeed)
-                </button>
-                <button
-                  onClick={() => simulateRefund(13)}
-                  disabled={refunding || !refundPaymentId}
-                  className="rounded-md border border-rose-300 bg-white px-2 py-2 text-xs font-medium text-rose-700 disabled:opacity-40"
-                >
-                  refund fail (.13)
-                </button>
+              <label className="mb-3 block">
+                <span className="mb-1 block text-sm font-medium text-slate-700">
+                  Reason <span className="text-xs font-normal text-slate-400">(optional)</span>
+                </span>
+                <input
+                  value={refundReason}
+                  onChange={(e) => setRefundReason(e.target.value)}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                />
+              </label>
+              <div className="mb-3">
+                <span className="mb-1 block text-xs font-medium text-slate-600">Outcome</span>
+                <div className="grid grid-cols-2 gap-2">
+                  {REFUND_OUTCOMES.map((o) => (
+                    <button
+                      key={o.key}
+                      onClick={() => setRefundOutcome(o)}
+                      className={`rounded-md border px-2 py-1.5 text-xs font-medium ${
+                        refundOutcome.key === o.key ? o.on : `bg-white ${o.off}`
+                      }`}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <p className="mt-2 text-[10px] text-slate-400">
+              <button
+                onClick={() => simulateRefund(refundOutcome.cents)}
+                disabled={refunding || !refundPaymentId}
+                className="w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+              >
+                {refunding
+                  ? "Sending…"
+                  : `Send refund · ${refundOutcome.cents == null ? refundAmount : withEnding(refundAmount, refundOutcome.cents)} EUR`}
+              </button>
+              <p className="mt-2 text-[10px] leading-relaxed text-slate-400">
                 A failed refund fires the compensating transaction — watch reservation-released
                 appear in the timeline.
               </p>
