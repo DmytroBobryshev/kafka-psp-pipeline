@@ -62,3 +62,10 @@ ledger:
   refund:
     reservation-ttl: PT2M
     sweep-interval: PT10S
+  # M17: only PRESENCE matters for a context-load test, not reachability - see
+  # src/main/resources/application.yml for what these mean.
+  dlq-replay:
+    dlq-topic: payments.payment-status-changed.v1.ledger.dlq
+    consumer-group: ledger.dlq-replay.v1
+    max-batch-size: 50
+    poll-timeout-ms: 2000

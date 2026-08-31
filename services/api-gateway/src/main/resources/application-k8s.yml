@@ -49,6 +49,14 @@ spring:
               uri: http://ledger.kafka.svc.cluster.local:8087
               predicates:
                 - Path=/api/refunds/**
+            - id: ledger-dlq
+              uri: http://ledger.kafka.svc.cluster.local:8087
+              predicates:
+                - Path=/api/ledger/**
+              filters:
+                # M17: same second route as application-docker-compose.yml - see that file's
+                # comment on this route id for why it is separate from the `ledger` route above.
+                - StripPrefix=2
             - id: webhook-notifier
               uri: http://webhook-notifier.kafka.svc.cluster.local:8088
               predicates:

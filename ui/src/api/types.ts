@@ -83,3 +83,134 @@ export const KNOWN_EVENT_TYPES = [
   "refunds.refund-failed.v1",
   "refunds.reservation-released.v1",
 ] as const;
+
+// ---------------------------------------------------------------------------------------------
+// M17 full build: wire types for the five remaining pages. payment-api and analytics now serve
+// /v3/api-docs (springdoc added in this module) - `pnpm gen:api` regenerates
+// src/api/generated/*.ts from the live services, and these hand-written mirrors are kept for
+// the services without springdoc (ledger, webhook-notifier, realtime-gateway's ops API).
+// ---------------------------------------------------------------------------------------------
+
+/** analytics GET /api/analytics/windows and /merchants/{id}/windows[?/projected] element. */
+export interface WindowMetricsResponse {
+  merchantId: string;
+  merchantDisplayName: string | null;
+  windowStart: string;
+  windowEnd: string;
+  open: boolean;
+  totalCount: number;
+  declinedCount: number;
+  declineRate: number;
+  declineRateBps: number;
+  avgPipelineLatencyMillis: number | null;
+  declineRateAlertThresholdBps: number | null;
+  declineRateAlert: boolean;
+}
+
+/** analytics GET /api/analytics/state - 503-aware "is the store queryable" probe. */
+export interface StreamsStateResponse {
+  applicationId: string;
+  stateDir: string;
+  clientState: string;
+  storeReady: boolean;
+}
+
+export type MerchantStatus = "ACTIVE" | "SUSPENDED";
+
+/** payment-api PUT body /api/merchants/{merchantId}/config (UpsertMerchantConfigRequest). */
+export interface UpsertMerchantConfigRequest {
+  displayName: string;
+  status: MerchantStatus;
+  payoutCurrency: string;
+  webhookUrl?: string | null;
+  declineRateAlertThresholdBps: number;
+}
+
+/** Shared by payment-api's PUT 200 and analytics' GET /merchants/{id}/config. */
+export interface MerchantConfigResponse {
+  merchantId: string;
+  displayName: string;
+  status: MerchantStatus;
+  payoutCurrency: string;
+  webhookUrl: string | null;
+  declineRateAlertThresholdBps: number;
+}
+
+/** payment-api POST /api/payments/{paymentId}/refunds body. */
+export interface RequestRefundRequest {
+  amount: number;
+  currency: string;
+  reason?: string;
+}
+
+/** payment-api POST refund 202 body. */
+export interface RefundResponse {
+  id: string;
+  paymentId: string;
+  merchantId: string;
+  amount: number;
+  currency: string;
+  status: string;
+  reason: string | null;
+  createdAt: string;
+}
+
+/** ledger GET /api/refunds/{refundId} - the saga's CURRENT state (single row, not history). */
+export interface RefundStateResponse {
+  refundId: string;
+  paymentId: string;
+  merchantId: string;
+  amount: number;
+  currency: string;
+  status: string;
+  reason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** realtime-gateway GET /api/realtime/cluster/topics element. */
+export interface TopicInfo {
+  name: string;
+  partitionCount: number;
+  replicationFactor: number;
+}
+
+/** realtime-gateway GET /api/realtime/cluster/groups element. */
+export interface ConsumerGroupInfo {
+  groupId: string;
+  state: string;
+  memberCount: number;
+}
+
+/** realtime-gateway GET /api/realtime/cluster/groups/{groupId}/lag. */
+export interface PartitionLag {
+  topic: string;
+  partition: number;
+  currentOffset: number;
+  endOffset: number;
+  lag: number;
+}
+export interface GroupLagResponse {
+  groupId: string;
+  totalLag: number;
+  partitions: PartitionLag[];
+}
+
+/** realtime-gateway GET /api/realtime/cluster/dlq/{topic}/records element - a non-destructive peek. */
+export interface DlqRecordView {
+  topic: string;
+  partition: number;
+  offset: number;
+  timestamp: string;
+  keyString: string | null;
+  headers: Record<string, string>;
+  valuePreview: string;
+  valueBase64: boolean;
+}
+
+/** webhook-notifier / psp-connector / ledger POST .../dlq/replay response. */
+export interface DlqReplayResponse {
+  replayedCount: number;
+  dlqTopic: string;
+  republishedToTopic: string;
+}

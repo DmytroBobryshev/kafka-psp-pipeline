@@ -150,23 +150,32 @@ topic_acl payment-api literal  "psp.provider-status-reply.v1"          Read Desc
 group_acl payment-api prefixed "payment-api.replies."                  Read Describe
 
 # --- psp-connector (:8086) -------------------------------------------------------------------
-topic_acl psp-connector literal  "payments.payment-requested.v1"                Read Describe
+# M17: also Write - adapters.out.kafka.KafkaDlqRepublisher republishes DLQ records back onto this
+# same topic (POST /api/psp-connector/dlq/replay), so the DLQ replay path needs Write here in
+# addition to the normal consumer's Read.
+topic_acl psp-connector literal  "payments.payment-requested.v1"                Read Write Describe
 topic_acl psp-connector literal  "refunds.funds-reserved.v1"                    Read Describe
 topic_acl psp-connector literal  "psp.provider-status-query.v1"                 Read Describe
 topic_acl psp-connector literal  "payments.payment-status-changed.v1"           Write Describe
 topic_acl psp-connector literal  "refunds.refund-completed.v1"                  Write Describe
 topic_acl psp-connector literal  "refunds.refund-failed.v1"                     Write Describe
 topic_acl psp-connector literal  "psp.provider-status-reply.v1"                 Write Describe
-# Its DeadLetterPublishingRecoverer target (ADR-0006). Write only: ADR-0006 is explicit that a
-# DLQ is not a queue, and this service has no replay consumer.
-topic_acl psp-connector literal  "payments.payment-requested.v1.psp-connector.dlq" Write Describe
+# Its DeadLetterPublishingRecoverer target (ADR-0006), and (M17) its own replay source: Read added
+# for adapters.out.kafka.KafkaDlqReader, which polls this topic under the
+# psp-connector.dlq-replay.v1 group (covered by the group prefix grant below) for
+# POST /api/psp-connector/dlq/replay.
+topic_acl psp-connector literal  "payments.payment-requested.v1.psp-connector.dlq" Read Write Describe
 # Prefixed, not literal `psp-connector.v1`: the duplicates-vs-loss drill overrides group.id from
 # the command line (--spring.kafka.consumer.group-id=psp-connector.autocommit...), and those
-# throwaway groups are still this principal's.
+# throwaway groups are still this principal's. Also covers psp-connector.dlq-replay.v1 (M17).
 group_acl psp-connector prefixed "psp-connector"                                Read Describe
 
 # --- ledger (:8087) --------------------------------------------------------------------------
-topic_acl ledger literal  "payments.payment-status-changed.v1"        Read Describe
+# M17: also Write - adapters.out.kafka.KafkaDlqRepublisher republishes DLQ records back onto this
+# same topic (POST /api/ledger/dlq/replay) through its own PLAIN, non-transactional producer
+# (never ledgerEntryProducerFactory / the TransactionalId grant below), so the DLQ replay path
+# needs Write here in addition to the normal consumer's Read.
+topic_acl ledger literal  "payments.payment-status-changed.v1"        Read Write Describe
 topic_acl ledger literal  "refunds.refund-requested.v1"               Read Describe
 topic_acl ledger literal  "refunds.refund-completed.v1"               Read Describe
 # refunds.refund-failed.v1 is BOTH consumed and produced here - the documented saga exception
@@ -175,8 +184,15 @@ topic_acl ledger literal  "refunds.refund-failed.v1"                  Read Write
 topic_acl ledger literal  "ledger.ledger-entry-recorded.v1"           Write Describe
 topic_acl ledger literal  "refunds.funds-reserved.v1"                 Write Describe
 topic_acl ledger literal  "refunds.reservation-released.v1"           Write Describe
-topic_acl ledger literal  "payments.payment-status-changed.v1.ledger.dlq" Write Describe
-group_acl ledger prefixed "ledger.v1"                                 Read Describe
+# Its DeadLetterPublishingRecoverer target, and (M17) its own replay source: Read added for
+# adapters.out.kafka.KafkaDlqReader, which polls this topic under the ledger.dlq-replay.v1 group
+# (covered by the widened group prefix below) for POST /api/ledger/dlq/replay.
+topic_acl ledger literal  "payments.payment-status-changed.v1.ledger.dlq" Read Write Describe
+# Widened from "ledger.v1" to "ledger." (M17): a prefix grant of "ledger.v1" only ever matched
+# that exact group id (a genuine prefix match needs the granted string to actually be a prefix of
+# the checked one), so it did not cover the new ledger.dlq-replay.v1 group. "ledger." covers both
+# - same shape as webhook-notifier's "webhook-notifier." prefix grant below.
+group_acl ledger prefixed "ledger."                                   Read Describe
 # THE ONE PRINCIPAL WITH TRANSACTIONS. ledger's producer is transactional
 # (transactional.id = ledger-tx-<instance-id>-<n>), and a transactional producer authorizes
 # against a TransactionalId resource that has nothing to do with topics: without this it fails at
@@ -229,6 +245,23 @@ topic_acl realtime-gateway prefixed "refunds."                           Read De
 # Unique group.id per instance (realtime-gateway.<host>.<suffix>, M12) - prefixed for the same
 # reason as payment-api's reply group.
 group_acl realtime-gateway prefixed "realtime-gateway."                  Read Describe
+
+# M17: cluster-ops API (GET /api/realtime/cluster/**) - page 5 "Cluster ops" (topics/groups/lag)
+# plus page 3's generic DLQ browse. listTopics/describeTopics/listConsumerGroups/
+# describeConsumerGroups/listConsumerGroupOffsets/listOffsets are all metadata-only Admin calls,
+# satisfied by Describe alone - same "cluster-wide but read-only by construction" shape as akhq's
+# and kafka-exporter's grants below. group gets Read too (not just Describe) per the M17 spec.
+topic_acl realtime-gateway literal  "*"                                  Describe
+group_acl realtime-gateway literal  "*"                                  Describe Read
+cluster_acl realtime-gateway Describe
+# The ONE place this principal gets topic Read: the DLQ peek actually polls record bytes off a
+# *.dlq topic (still non-destructive - it never commits an offset, see KafkaDlqBrowser's javadoc).
+# kafka-acls has no "*.dlq" SUFFIX pattern (literal or PREFIX only), so every DLQ topic in this
+# matrix is enumerated individually - mirror this list if a new DLQ topic is added above.
+topic_acl realtime-gateway literal  "payments.payment-requested.v1.psp-connector.dlq"      Read Describe
+topic_acl realtime-gateway literal  "payments.payment-status-changed.v1.ledger.dlq"        Read Describe
+topic_acl realtime-gateway literal  "webhooks.webhook-delivery-requested.v2.dlq"           Read Describe
+topic_acl realtime-gateway literal  "ledger.ledger-entry-recorded.v1.mongo-audit-sink.dlq" Read Describe
 
 # --- Kafka Connect (worker + both connectors, one principal) ----------------------------------
 # The worker's own bookkeeping topics. It CREATES these itself on first start via its AdminClient

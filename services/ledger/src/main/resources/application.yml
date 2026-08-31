@@ -132,6 +132,23 @@ ledger:
     reservation-ttl: PT2M
     sweep-interval: PT10S
 
+  # M17: DLQ replay - see adapters.in.web.DlqReplayController, application.ReplayDlqUseCase, and
+  # adapters.out.kafka.KafkaDlqReader/KafkaDlqRepublisher. Naming mirrors webhook-notifier's M8
+  # webhook-notifier.dlq-replay.* block. Deliberately its own plain (non-transactional) producer/
+  # consumer pair, kept off ledgerEntryProducerFactory/paymentStatusChangedConsumerFactory above -
+  # see KafkaDlqRepublisher's javadoc.
+  dlq-replay:
+    # docs/diagrams/topic-map.md: ledger's own DLQ, produced by its error handler.
+    dlq-topic: payments.payment-status-changed.v1.ledger.dlq
+    # Dedicated group.id for adapters.out.kafka.KafkaDlqReader - separate from ledger.v1 so replay
+    # reads never interact with normal saga consumption.
+    consumer-group: ledger.dlq-replay.v1
+    # The hard ceiling on one POST /api/ledger/dlq/replay call, regardless of the caller's
+    # ?maxRecords= query param - see adapters.in.web.DlqReplayController and
+    # adapters.out.kafka.KafkaDlqReader for the guard.
+    max-batch-size: 50
+    poll-timeout-ms: 2000
+
 # No datasource configured here on purpose - see application-docker-compose.yml. Running this
 # service without an active profile and without a database will fail to start
 # (spring-boot-starter-data-jpa requires a DataSource).

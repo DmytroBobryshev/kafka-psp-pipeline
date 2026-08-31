@@ -2,8 +2,11 @@ package com.example.psp.ledger.config;
 
 import io.micrometer.observation.ObservationRegistry;
 import jakarta.persistence.EntityManagerFactory;
+import java.util.HashMap;
 import java.util.Map;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -185,5 +188,36 @@ public class KafkaProducerConfig {
         // @Transactional in this service names its manager anyway; this is belt and braces against
         // a future annotation that forgets to.
         return new JpaTransactionManager(entityManagerFactory);
+    }
+
+    // ============================================================================================
+    // M17: DLQ replay republisher (adapters.out.kafka.KafkaDlqRepublisher) - a dedicated, PLAIN
+    // (non-transactional) byte-array producer. Deliberately NOT built from
+    // ledgerEntryProducerFactory above: that factory's setTransactionIdPrefix(...) call is exactly
+    // what makes its KafkaTemplate transactional, and a transactional KafkaTemplate only sends
+    // successfully from inside a transaction the listener container already opened - see
+    // KafkaDlqRepublisher's javadoc, "Why this must NOT be the transactional producer". This
+    // factory sets no transactional.id at all, so DefaultKafkaProducerFactory builds a plain
+    // producer that sends immediately, exactly what a REST-triggered replay call needs.
+    // ============================================================================================
+
+    @Bean
+    public ProducerFactory<String, byte[]> dlqReplayProducerFactory(KafkaProperties kafkaProperties) {
+        Map<String, Object> producerProps = new HashMap<>(kafkaProperties.buildProducerProperties(null));
+        // Byte-array producer, not KafkaAvroSerializer: replay republishes the DLQ record's raw
+        // value bytes unchanged (see KafkaDlqRepublisher's javadoc) - the same "cannot re-encode
+        // what it never decoded" reasoning psp-connector's identical M17 producer uses.
+        producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class);
+        return new DefaultKafkaProducerFactory<>(producerProps);
+    }
+
+    @Bean
+    public KafkaTemplate<String, byte[]> dlqReplayKafkaTemplate(
+            @Qualifier("dlqReplayProducerFactory") ProducerFactory<String, byte[]> dlqReplayProducerFactory,
+            ObservationRegistry observationRegistry) {
+        KafkaTemplate<String, byte[]> template = new KafkaTemplate<>(dlqReplayProducerFactory);
+        template.setObservationRegistry(observationRegistry);
+        template.setObservationEnabled(true);
+        return template;
     }
 }

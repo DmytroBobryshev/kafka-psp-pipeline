@@ -1,4 +1,4 @@
-# ui (M17 slice 1 — create-payment form + live event timeline)
+# ui (M17 — the six showcase pages)
 
 The minimal first slice of `docs/PLAN.md`'s M17, pulled forward per the plan's "Order
 exceptions allowed" note ("pull a minimal M17 (payment form + live timeline) forward right
@@ -147,11 +147,23 @@ non-field problem (e.g. a `500`).
 
 ## What's not built yet
 
-Per the task's scope, deliberately absent (full M17, later): merchant dashboard (live windowed
-metrics), DLQ console, merchant config editor, cluster ops (consumer lag / topic list), refund
-tracker (saga visualization). Also not built: TanStack Router (one page doesn't need routing),
-shadcn/ui (Tailwind alone was enough for this surface), and the `openapi-typescript` codegen
-step noted above.
+Nothing from the M17 page list - the full build (drill 9's follow-up sessions) added the five
+remaining pages on top of slice 1: merchant dashboard (`/dashboard`, analytics interactive
+queries + Mongo projection), merchant config editor (`/merchants`, PUT/tombstone through
+payment-api with a live "picked up by the GlobalKTable in N s" badge), refund tracker
+(`/refunds`, the saga choreography reconstructed from the SSE stream), DLQ console (`/dlq`,
+non-destructive peek via realtime-gateway's ops API + per-owner replay buttons), and cluster
+ops (`/cluster`, AdminClient-backed topics/groups/lag). TanStack Router carries the six routes
+(code-based - six static routes don't earn the file-based plugin); `pnpm gen:api` generates
+`src/api/generated/*.ts` from payment-api's and analytics' springdoc `/v3/api-docs`. Still
+deliberately absent: shadcn/ui - plain Tailwind proved enough for every page, so the extra
+dependency never earned its place.
+
+The UI now also deploys to the cluster: `ui/Dockerfile` (pnpm build inside the builder stage,
+nginx serving `dist/` with an SPA fallback), the `charts/ui` subchart, and an ingress path `/`
+- same-origin with the API, so CORS never applies. `http://localhost/` after
+`infra/k8s/scripts/deploy-apps.sh`.
+
 
 ## Verified against the live stack
 

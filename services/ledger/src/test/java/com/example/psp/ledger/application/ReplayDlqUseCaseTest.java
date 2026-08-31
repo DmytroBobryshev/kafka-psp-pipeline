@@ -1,0 +1,102 @@
+package com.example.psp.ledger.application;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.example.psp.ledger.domain.model.DlqHeader;
+import com.example.psp.ledger.domain.model.DlqRecord;
+import com.example.psp.ledger.domain.port.DlqReader;
+import com.example.psp.ledger.domain.port.DlqRepublisher;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Plain JUnit against {@code application/} + {@code domain/} - fakes for both ports, no Kafka, no
+ * Spring transaction machinery (matches
+ * {@code architecture.HexagonalArchitectureTest#applicationMustNotDependOnKafkaOrTransactionApis}).
+ * Exercises M17's DLQ replay endpoint: every record read off the DLQ is republished byte-for-byte
+ * unchanged (key, raw value bytes, and headers all preserved - see
+ * {@code domain.model.DlqRecord}'s javadoc for why nothing here decodes the Avro payload), and the
+ * requested batch size is passed straight through to {@link DlqReader#pollBatch} (the actual bound
+ * is {@code adapters.out.kafka.KafkaDlqReader}'s job, exercised separately since it needs a real
+ * consumer factory) - same shape as webhook-notifier's {@code ReplayDlqUseCaseTest} and
+ * psp-connector's identical M17 test.
+ */
+class ReplayDlqUseCaseTest {
+
+    @Test
+    void replayRepublishesEachRecordByteForByteUnchanged() {
+        byte[] value = "avro-wire-bytes".getBytes(StandardCharsets.UTF_8);
+        DlqHeader header = new DlqHeader("event-id", "abc-123".getBytes(StandardCharsets.UTF_8));
+        DlqRecord record = new DlqRecord("merchant-1", value, List.of(header));
+        FakeDlqReader reader = new FakeDlqReader(List.of(record));
+        RecordingRepublisher republisher = new RecordingRepublisher();
+        ReplayDlqUseCase useCase = new ReplayDlqUseCase(reader, republisher);
+
+        int replayedCount = useCase.replay(10);
+
+        assertThat(replayedCount).isEqualTo(1);
+        assertThat(reader.lastRequestedMax).isEqualTo(10);
+
+        assertThat(republisher.published).hasSize(1);
+        DlqRecord published = republisher.published.get(0);
+        assertThat(published.key()).isEqualTo("merchant-1");
+        assertThat(published.value()).isEqualTo(value);
+        assertThat(published.headers()).containsExactly(header);
+        // Content-based equality (not the record default's array-reference equality) - see
+        // DlqRecord's javadoc for why equals() is overridden by hand.
+        assertThat(published)
+                .isEqualTo(
+                        new DlqRecord(
+                                "merchant-1",
+                                "avro-wire-bytes".getBytes(StandardCharsets.UTF_8),
+                                List.of(new DlqHeader("event-id", "abc-123".getBytes(StandardCharsets.UTF_8)))));
+    }
+
+    @Test
+    void emptyDlqReplaysNothing() {
+        FakeDlqReader reader = new FakeDlqReader(List.of());
+        RecordingRepublisher republisher = new RecordingRepublisher();
+        ReplayDlqUseCase useCase = new ReplayDlqUseCase(reader, republisher);
+
+        assertThat(useCase.replay(10)).isZero();
+        assertThat(republisher.published).isEmpty();
+    }
+
+    @Test
+    void replaysMultipleRecordsInOrder() {
+        DlqRecord first = new DlqRecord("merchant-1", "a".getBytes(StandardCharsets.UTF_8), List.of());
+        DlqRecord second = new DlqRecord("merchant-2", "b".getBytes(StandardCharsets.UTF_8), List.of());
+        FakeDlqReader reader = new FakeDlqReader(List.of(first, second));
+        RecordingRepublisher republisher = new RecordingRepublisher();
+        ReplayDlqUseCase useCase = new ReplayDlqUseCase(reader, republisher);
+
+        assertThat(useCase.replay(10)).isEqualTo(2);
+        assertThat(republisher.published).containsExactly(first, second);
+    }
+
+    private static final class FakeDlqReader implements DlqReader {
+        private final List<DlqRecord> records;
+        private int lastRequestedMax = -1;
+
+        private FakeDlqReader(List<DlqRecord> records) {
+            this.records = records;
+        }
+
+        @Override
+        public List<DlqRecord> pollBatch(int maxRecords) {
+            lastRequestedMax = maxRecords;
+            return records;
+        }
+    }
+
+    private static final class RecordingRepublisher implements DlqRepublisher {
+        private final List<DlqRecord> published = new ArrayList<>();
+
+        @Override
+        public void republish(DlqRecord record) {
+            published.add(record);
+        }
+    }
+}

@@ -20,12 +20,11 @@
 
   Remove any link in that chain and you get a connection refused that looks like DNS.
 
-  ADDING THE UI (M17, out of scope for this phase): it is a static React bundle behind nginx, so
-  it is one more Deployment + Service plus a second `paths` entry here - `/` to the ui Service,
-  with the `/api` and `/sse` prefixes below matched first (nginx-ingress sorts by prefix length,
-  so ordering in this list does not matter). The only application-side change is the gateway's
-  CORS `allowedOrigins`, currently http://localhost:5173 for the Vite dev server, which would
-  become the ingress origin - or disappear, because same-origin requests need no CORS at all.
+  THE UI (M17, full build): a static React bundle behind nginx (charts/ui), published at "/"
+  below. The `/api`, `/actuator` and `/fallback` prefixes are matched first (nginx-ingress sorts
+  by prefix length, so ordering in this list does not matter). Served same-origin with the API,
+  so the gateway's CORS allowedOrigins (still http://localhost:5173 for the Vite dev server)
+  never applies to it - same-origin requests need no CORS at all.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -73,4 +72,11 @@ spec:
                 name: api-gateway
                 port:
                   number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ui
+                port:
+                  number: 80
 {{- end }}

@@ -1,6 +1,7 @@
-# realtime-gateway (:8090) - 8 bindings, matching init-security.sh's
-# "--- realtime-gateway ---" block. Read-only BY CONSTRUCTION: it fans events out over SSE and
-# produces nothing at all, and the ACL set says so - there is not one Write in this file.
+# realtime-gateway (:8090) - 11 bindings, matching init-security.sh's
+# "--- realtime-gateway ---" block (M12's original 4, plus M17's 7 cluster-ops bindings below).
+# Read-only BY CONSTRUCTION: it fans events out over SSE, produces nothing at all, and (as of M17)
+# also serves a read-only cluster-ops/DLQ-browse API - there is not one Write in this file.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -24,4 +25,32 @@ spec:
       # same reason as payment-api's reply group. Consumer groups load-split, they do not fan out,
       # so every gateway instance needs its own group to see every event.
       - resource: { type: group, name: realtime-gateway., patternType: prefix }
+        operations: [Read, Describe]
+
+      # ---- M17: cluster-ops API (GET /api/realtime/cluster/**) ---------------------------------
+      # Page 5 "Cluster ops" (topics/groups/lag) and page 3's generic DLQ browse. Every AdminClient
+      # call these endpoints make - listTopics, describeTopics, listConsumerGroups,
+      # describeConsumerGroups, listConsumerGroupOffsets, listOffsets - is metadata-only and is
+      # satisfied by Describe alone, so the topic/group grants below stay wildcarded-but-Describe-only,
+      # the same "cluster-wide but read-only by construction" shape as AKHQ's and kafka-exporter's
+      # grants further down this matrix (see init-security.sh) - never Read, never Write.
+      - resource: { type: topic, name: "*", patternType: literal }
+        operations: [Describe]
+      - resource: { type: group, name: "*", patternType: literal }
+        operations: [Describe, Read]
+      - resource: { type: cluster }
+        operations: [Describe]
+      # The ONE place this principal gets Read: the DLQ peek (GET /dlq/{topic}/records) actually
+      # polls record bytes off a *.dlq topic (still non-destructive - domain.port.DlqBrowser never
+      # commits an offset). Kafka ACL patterns are literal-or-PREFIX only, so a "*.dlq" SUFFIX
+      # wildcard cannot be expressed - every DLQ topic that exists today in this matrix
+      # (init-security.sh) is enumerated individually below. Mirror this list if a new DLQ topic is
+      # ever added elsewhere in the matrix.
+      - resource: { type: topic, name: payments.payment-requested.v1.psp-connector.dlq, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: payments.payment-status-changed.v1.ledger.dlq, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: webhooks.webhook-delivery-requested.v2.dlq, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: ledger.ledger-entry-recorded.v1.mongo-audit-sink.dlq, patternType: literal }
         operations: [Read, Describe]

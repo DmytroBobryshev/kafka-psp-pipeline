@@ -63,23 +63,23 @@ and time estimates live in [`docs/PLAN.md`](docs/PLAN.md).
 | Module | Path(s) | Teaches | Status |
 |---|---|---|---|
 | M1 - Repo scaffold | `libs/common-events`, `libs/common-web`, `services/payment-api` | Maven multi-module, Lombok/MapStruct wiring, hexagonal layout, ArchUnit enforcement | **Done** |
-| M2 - Infra baseline | `infra/compose/` | KRaft, `advertised.listeners`, broker vs topic config precedence | Not started |
-| M3 - First producer | `services/payment-api` | `ProducerRecord`, acks, idempotence, batching, key choice | Not started |
-| M4 - First consumer | `services/psp-connector` | Consumer groups, poll loop, manual ack, rebalancing | Not started |
-| M5 - Idempotency & dedup | `services/psp-connector` | At-least-once + idempotent consumer dedup | Not started |
-| M6 - Transactional outbox | `services/payment-api` | Dual-write problem, outbox, Debezium/Connect | Not started |
-| M7 - Ledger: exactly-once | `services/ledger` | Kafka transactions, EOS boundary, zombie fencing | Not started |
-| M8 - Retries, DLQ | `services/webhook-notifier` | Non-blocking retry topics, `DefaultErrorHandler`, DLQ | Not started |
-| M9 - Schemas & evolution | `libs/common-events` (Avro) | Schema Registry, compatibility modes | Not started |
-| M10 - Compacted topics & Streams | `services/analytics` | `KTable`/`GlobalKTable`, RocksDB, windows | Not started |
-| M11 - Refund saga | `services/ledger`, `services/psp-connector` | Choreography, compensating transactions | Not started |
-| M12 - Request-reply + realtime-gateway | `services/realtime-gateway` | `ReplyingKafkaTemplate`, the broadcast problem | Not started |
-| M13 - Feature grab-bag | multiple | Streams joins, batch listener, claim check, quotas, Connect sink | Not started |
-| M14 - Security | all services | SASL/SCRAM, ACLs, TLS | Not started |
-| M15 - Observability | all services | Trace propagation via Kafka headers, lag dashboards | Not started |
-| M16 - Discovery + gateway | `services/discovery-server`, `services/api-gateway` | Eureka vs k8s-native discovery, Spring Cloud Gateway | Not started |
-| M17 - React UI | `ui/` | SSE, OpenAPI-generated types, the six showcase pages | Not started |
-| M18 - Kubernetes | `infra/k8s/` | Strimzi, Helm, KEDA | Not started |
+| M2 - Infra baseline | `infra/compose/` | KRaft, `advertised.listeners`, broker vs topic config precedence | **Done** |
+| M3 - First producer | `services/payment-api` | `ProducerRecord`, acks, idempotence, batching, key choice | **Done** |
+| M4 - First consumer | `services/psp-connector` | Consumer groups, poll loop, manual ack, rebalancing | **Done** |
+| M5 - Idempotency & dedup | `services/psp-connector` | At-least-once + idempotent consumer dedup | **Done** |
+| M6 - Transactional outbox | `services/payment-api` | Dual-write problem, outbox, Debezium/Connect | **Done** |
+| M7 - Ledger: exactly-once | `services/ledger` | Kafka transactions, EOS boundary, zombie fencing | **Done** |
+| M8 - Retries, DLQ | `services/webhook-notifier` | Non-blocking retry topics, `DefaultErrorHandler`, DLQ | **Done** |
+| M9 - Schemas & evolution | `libs/common-events` (Avro) | Schema Registry, compatibility modes | **Done** |
+| M10 - Compacted topics & Streams | `services/analytics` | `KTable`/`GlobalKTable`, RocksDB, windows | **Done** |
+| M11 - Refund saga | `services/ledger`, `services/psp-connector` | Choreography, compensating transactions | **Done** |
+| M12 - Request-reply + realtime-gateway | `services/realtime-gateway` | `ReplyingKafkaTemplate`, the broadcast problem | **Done** |
+| M13 - Feature grab-bag | multiple | Streams joins, batch listener, claim check, quotas, Connect sink | **Partial** - 3/5 (claim check, quotas pending) |
+| M14 - Security | all services | SASL/SCRAM, ACLs, TLS | **Done** |
+| M15 - Observability | all services | Trace propagation via Kafka headers, lag dashboards | **Done** (compose stack; not yet on k8s) |
+| M16 - Discovery + gateway | `services/discovery-server`, `services/api-gateway` | Eureka vs k8s-native discovery, Spring Cloud Gateway | **Done** |
+| M17 - React UI | `ui/` | SSE, OpenAPI-generated types, the six showcase pages | **Done** |
+| M18 - Kubernetes | `infra/k8s/` | Strimzi, Helm, KEDA | **Done** |
 | M19 - Failure drills | [`docs/M19-failure-drills.md`](docs/M19-failure-drills.md), [`part 2`](docs/M19-failure-drills-part2.md) | ISR/acks trade-offs, unclean leader election, partition count vs keyed ordering, rebalance cost, static membership, throttled reassignment, retention semantics, timestamp offset reset, chaos (a false alarm that surfaced a real latent loss window, fixed + regression-proven) | **Done** |
 
 ## Stack & persistence decisions

@@ -43,6 +43,13 @@ psp-connector:
   # this value only needs to be present, not reachable.
   schema-registry:
     url: http://localhost:8081
+  # M17: only PRESENCE matters for a context-load test, not reachability - see
+  # src/main/resources/application.yml for what these mean.
+  dlq-replay:
+    dlq-topic: payments.payment-requested.v1.psp-connector.dlq
+    consumer-group: psp-connector.dlq-replay.v1
+    max-batch-size: 50
+    poll-timeout-ms: 2000
   provider:
     min-latency-ms: 0
     max-latency-ms: 1

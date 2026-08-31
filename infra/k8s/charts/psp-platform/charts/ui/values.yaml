@@ -1,0 +1,3 @@
+# Everything image-related comes from the umbrella chart's global values (imageRepository,
+# imageTag) - same contract as every Spring subchart, same build-images.sh tag.
+replicas: 1

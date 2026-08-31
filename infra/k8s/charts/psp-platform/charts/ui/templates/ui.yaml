@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "psp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psp.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: ui
+          image: "{{ .Values.global.imageRepository }}/{{ .Chart.Name }}:{{ .Values.global.imageTag }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "psp.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: 80
+      targetPort: 80

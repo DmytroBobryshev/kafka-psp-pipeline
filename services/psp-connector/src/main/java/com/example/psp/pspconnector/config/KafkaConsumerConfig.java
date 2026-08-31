@@ -8,6 +8,7 @@ import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
 import io.micrometer.observation.ObservationRegistry;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -194,5 +195,31 @@ public class KafkaConsumerConfig {
         factory.setCommonErrorHandler(errorHandler);
 
         return factory;
+    }
+
+    // ============================================================================================
+    // M17: DLQ replay reader (adapters.out.kafka.KafkaDlqReader) - NOT a @KafkaListener container;
+    // a plain Consumer created from this factory, on demand, per REST call
+    // (POST /api/psp-connector/dlq/replay). Same shape as webhook-notifier's M8
+    // dlqReplayConsumerFactory, with one difference: this one reads raw bytes, not a typed Avro
+    // record - see KafkaDlqReader's javadoc for why, and for why that means no
+    // ErrorHandlingDeserializer is needed here either.
+    // ============================================================================================
+
+    @Bean
+    public ConsumerFactory<String, byte[]> dlqReplayConsumerFactory(
+            KafkaProperties kafkaProperties,
+            @Value("${psp-connector.dlq-replay.consumer-group}") String consumerGroup,
+            @Value("${psp-connector.dlq-replay.max-batch-size}") int maxBatchSize) {
+        Map<String, Object> props = kafkaProperties.buildConsumerProperties(null);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, consumerGroup);
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        // The hard ceiling on one poll(), independent of what a caller requests - see
+        // KafkaDlqReader's javadoc "The guard, mechanically".
+        props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, maxBatchSize);
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class);
+        return new DefaultKafkaConsumerFactory<>(props);
     }
 }

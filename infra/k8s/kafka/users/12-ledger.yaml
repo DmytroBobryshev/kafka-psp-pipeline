@@ -1,4 +1,7 @@
-# ledger (:8087) - 21 bindings, matching init-security.sh's "--- ledger ---" block.
+# ledger (:8087) - 23 bindings, matching init-security.sh's "--- ledger ---" block.
+# M17: was 21 - DLQ replay added Write on payments.payment-status-changed.v1 and Read on its own
+# DLQ (the group prefix was also widened from ledger.v1 to ledger. to cover the new
+# ledger.dlq-replay.v1 group, which does not change the binding count).
 # The only principal in the system with a TransactionalId grant.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
@@ -14,8 +17,12 @@ spec:
     type: simple
     acls:
       # --- consumes ---
+      # M17: also Write - adapters.out.kafka.KafkaDlqRepublisher republishes DLQ records back onto
+      # this same topic (POST /api/ledger/dlq/replay), through its own PLAIN, non-transactional
+      # producer (never ledgerEntryProducerFactory/the TransactionalId grant below) - so the DLQ
+      # replay principal needs Write here in addition to the normal consumer's Read.
       - resource: { type: topic, name: payments.payment-status-changed.v1, patternType: literal }
-        operations: [Read, Describe]
+        operations: [Read, Write, Describe]
       - resource: { type: topic, name: refunds.refund-requested.v1, patternType: literal }
         operations: [Read, Describe]
       - resource: { type: topic, name: refunds.refund-completed.v1, patternType: literal }
@@ -31,9 +38,18 @@ spec:
         operations: [Write, Describe]
       - resource: { type: topic, name: refunds.reservation-released.v1, patternType: literal }
         operations: [Write, Describe]
+      # Its DeadLetterPublishingRecoverer target, and (M17) its own replay source: Read added for
+      # adapters.out.kafka.KafkaDlqReader, which polls this topic under the ledger.dlq-replay.v1
+      # group (covered by the widened group prefix below) for POST /api/ledger/dlq/replay.
       - resource: { type: topic, name: payments.payment-status-changed.v1.ledger.dlq, patternType: literal }
-        operations: [Write, Describe]
-      - resource: { type: group, name: ledger.v1, patternType: prefix }
+        operations: [Read, Write, Describe]
+      # Widened from literal-acting `ledger.v1` to `ledger.` (M17): a prefix grant of `ledger.v1`
+      # only ever matched that exact group id (a genuine PREFIX match needs the granted string to
+      # actually be a prefix of the checked one), so it did not cover the new
+      # ledger.dlq-replay.v1 group used by adapters.out.kafka.KafkaDlqReader. `ledger.` covers
+      # both - same shape as webhook-notifier's `webhook-notifier.` prefix grant, which already
+      # covers three consumer identities the same way.
+      - resource: { type: group, name: ledger., patternType: prefix }
         operations: [Read, Describe]
       # THE TRANSACTIONAL GRANT. A transactional producer authorizes against a TransactionalId
       # resource that has nothing to do with topics: without this, ledger fails at

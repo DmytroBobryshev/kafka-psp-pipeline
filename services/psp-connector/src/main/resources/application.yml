@@ -117,6 +117,21 @@ psp-connector:
   # Read by config.KafkaConsumerConfig to build the payments.payment-requested.v1 consumer's
   # KafkaAvroDeserializer. Outbound payments.payment-status-changed.v1 stays JSON (unaffected).
 
+  # M17: DLQ replay - see adapters.in.web.DlqReplayController, application.ReplayDlqUseCase, and
+  # adapters.out.kafka.KafkaDlqReader/KafkaDlqRepublisher. Naming mirrors webhook-notifier's M8
+  # webhook-notifier.dlq-replay.* block.
+  dlq-replay:
+    # docs/diagrams/topic-map.md: psp-connector's own DLQ, produced by its error handler.
+    dlq-topic: payments.payment-requested.v1.psp-connector.dlq
+    # Dedicated group.id for adapters.out.kafka.KafkaDlqReader - separate from psp-connector.v1 so
+    # replay reads never interact with normal payment processing.
+    consumer-group: psp-connector.dlq-replay.v1
+    # The hard ceiling on one POST /api/psp-connector/dlq/replay call, regardless of the caller's
+    # ?maxRecords= query param - see adapters.in.web.DlqReplayController and
+    # adapters.out.kafka.KafkaDlqReader for the guard.
+    max-batch-size: 50
+    poll-timeout-ms: 2000
+
   provider:
     # Steady-state simulation: 100ms-5s latency, ~10% declines, ~5% timeouts (module brief).
     min-latency-ms: 100

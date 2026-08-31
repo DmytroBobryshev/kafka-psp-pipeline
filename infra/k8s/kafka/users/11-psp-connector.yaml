@@ -1,4 +1,5 @@
-# psp-connector (:8086) - 18 bindings, matching init-security.sh's "--- psp-connector ---" block.
+# psp-connector (:8086) - 20 bindings, matching init-security.sh's "--- psp-connector ---" block.
+# M17: was 18 - DLQ replay added Write on payments.payment-requested.v1 and Read on its own DLQ.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -13,8 +14,11 @@ spec:
     type: simple
     acls:
       # --- consumes ---
+      # M17: also Read+Write - adapters.out.kafka.KafkaDlqRepublisher republishes DLQ records back
+      # onto this same topic (POST /api/psp-connector/dlq/replay), so the DLQ replay principal
+      # needs Write here in addition to the normal consumer's Read.
       - resource: { type: topic, name: payments.payment-requested.v1, patternType: literal }
-        operations: [Read, Describe]
+        operations: [Read, Write, Describe]
       - resource: { type: topic, name: refunds.funds-reserved.v1, patternType: literal }
         operations: [Read, Describe]
       - resource: { type: topic, name: psp.provider-status-query.v1, patternType: literal }
@@ -28,10 +32,12 @@ spec:
         operations: [Write, Describe]
       - resource: { type: topic, name: psp.provider-status-reply.v1, patternType: literal }
         operations: [Write, Describe]
-      # Its DeadLetterPublishingRecoverer target. WRITE ONLY: ADR-0006 is explicit that a DLQ is
-      # not a queue, and this service has no replay consumer of its own.
+      # Its DeadLetterPublishingRecoverer target, and (M17) its own replay source: Read added for
+      # adapters.out.kafka.KafkaDlqReader, which polls this topic under the
+      # psp-connector.dlq-replay.v1 group (covered by the group prefix grant below) for
+      # POST /api/psp-connector/dlq/replay.
       - resource: { type: topic, name: payments.payment-requested.v1.psp-connector.dlq, patternType: literal }
-        operations: [Write, Describe]
+        operations: [Read, Write, Describe]
       # Prefixed, not literal `psp-connector.v1`: the duplicates-vs-loss drill overrides group.id
       # from the command line (--spring.kafka.consumer.group-id=psp-connector.autocommit...) and
       # those throwaway groups are still this principal's.

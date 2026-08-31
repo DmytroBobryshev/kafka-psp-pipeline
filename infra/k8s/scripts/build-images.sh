@@ -137,6 +137,11 @@ for svc in "${SERVICES[@]}"; do
   docker build -q -t "${IMAGE_REPO}/${svc}:${IMAGE_TAG}" "$REPO_ROOT/services/${svc}" >/dev/null
 done
 
+# M17: the UI is not a Maven module - its Dockerfile runs pnpm install + vite build inside the
+# builder stage, so it needs no jar precheck and ignores --skip-maven by design.
+log "docker build ui"
+docker build -q -t "${IMAGE_REPO}/ui:${IMAGE_TAG}" "$REPO_ROOT/ui" >/dev/null
+
 # ---------------------------------------------------------------------------------------------
 # 5. Load them into kind
 # ---------------------------------------------------------------------------------------------
@@ -144,7 +149,7 @@ done
 # of re-archiving per image. On a 3-node cluster with eight ~200 MB images that is the difference
 # between about a minute and about four.
 log "kind load docker-image -> cluster '${CLUSTER_NAME}' (all 3 nodes)"
-IMAGES=("${IMAGE_REPO}/kafka-connect:${IMAGE_TAG}")
+IMAGES=("${IMAGE_REPO}/kafka-connect:${IMAGE_TAG}" "${IMAGE_REPO}/ui:${IMAGE_TAG}")
 for svc in "${SERVICES[@]}"; do IMAGES+=("${IMAGE_REPO}/${svc}:${IMAGE_TAG}"); done
 kind load docker-image --name "$CLUSTER_NAME" "${IMAGES[@]}"
 

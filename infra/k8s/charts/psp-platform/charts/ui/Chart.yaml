@@ -1,0 +1,9 @@
+apiVersion: v2
+name: ui
+description: >-
+  M17 - the React UI as a static bundle behind nginx. Not a Spring service, so it does not use
+  templates/_spring-service.tpl: no actuator, no ConfigMap, no Kafka - just a Deployment and a
+  Service the umbrella chart's Ingress publishes at "/".
+type: application
+version: 0.1.0
+appVersion: "0.1.0-SNAPSHOT"
