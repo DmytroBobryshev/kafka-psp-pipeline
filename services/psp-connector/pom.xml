@@ -141,6 +141,29 @@
       <artifactId>h2</artifactId>
       <scope>test</scope>
     </dependency>
+
+    <!-- M19 "Plus": Testcontainers for RebalanceLossIT / CrashRedeliveryIT (src/test/java/.../
+         integration). Versions come from the testcontainers-bom in the parent POM.
+         junit-jupiter brings @Testcontainers/@Container; kafka brings
+         org.testcontainers.kafka.KafkaContainer (apache/kafka, KRaft); postgresql brings the
+         real database Flyway V1-V4 migrate against. The postgresql JDBC driver above is
+         runtime-scoped, which is enough - Testcontainers only needs the driver on the classpath
+         at test runtime, and Spring Boot resolves it from spring.datasource.url. -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>kafka</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

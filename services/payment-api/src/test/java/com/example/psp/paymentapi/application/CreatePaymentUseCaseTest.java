@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.psp.paymentapi.domain.model.Money;
 import com.example.psp.paymentapi.domain.model.Payment;
+import com.example.psp.paymentapi.domain.model.PaymentPage;
 import com.example.psp.paymentapi.domain.model.PaymentStatus;
 import com.example.psp.paymentapi.domain.port.PaymentEventPublisher;
 import com.example.psp.paymentapi.domain.port.PaymentRepository;
@@ -49,6 +50,25 @@ class CreatePaymentUseCaseTest {
         @Override
         public Optional<Payment> findById(UUID id) {
             return Optional.ofNullable(store.get(id));
+        }
+
+        /**
+         * Neither of the two methods below is exercised by this test - CreatePaymentUseCase only
+         * saves. They are implemented because the port declares them, and they throw rather than
+         * fake anything: an in-memory filter/paginate would be a second, untested implementation of
+         * PaymentQueryUseCase's contract living in a test file, and a silent no-op updateStatus
+         * would let a future test pass while asserting nothing.
+         */
+        @Override
+        public PaymentPage search(String merchantId, PaymentStatus status, int page, int size) {
+            throw new UnsupportedOperationException(
+                    "search() is not part of the create-payment use case under test");
+        }
+
+        @Override
+        public void updateStatus(UUID paymentId, PaymentStatus status) {
+            throw new UnsupportedOperationException(
+                    "updateStatus() is not part of the create-payment use case under test");
         }
     }
 

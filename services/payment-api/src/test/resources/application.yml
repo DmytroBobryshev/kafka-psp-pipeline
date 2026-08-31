@@ -47,6 +47,12 @@ payment-api:
     # DOES need to exist on the embedded broker - declared in @EmbeddedKafka above.
     provider-status-query-topic: psp.provider-status-query.v1
     provider-status-reply-topic: psp.provider-status-reply.v1
+    # M19: same lazy-connection reasoning as every other topic/group property in this file - only
+    # PRESENCE matters for context load; the topic itself is declared on the embedded broker below
+    # because config.PaymentStatusViewKafkaConfig's listener container subscribes to it at
+    # context-refresh time (same requirement as the M12 reply topic above).
+    payment-status-changed-topic: payments.payment-status-changed.v1
+    payment-status-view-group-id: payment-api.status-view.test.v1
   # M9 Phase 1: KafkaAvroSerializer#configure never connects eagerly (lazy on first serialize(),
   # which this context-load test never triggers - same lazy-connection reasoning as
   # bootstrap-servers above), so this value only needs to be present, not reachable.

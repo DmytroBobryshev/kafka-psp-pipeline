@@ -20,6 +20,10 @@ import org.springframework.kafka.test.context.EmbeddedKafka;
         partitions = 1,
         topics = {
             "payments.payment-status-changed.v1",
+            // M19: config.KafkaConsumerConfig's refundCompletedKafkaListenerContainerFactory /
+            // refundFailedKafkaListenerContainerFactory also subscribe at context-refresh time.
+            "refunds.refund-completed.v1",
+            "refunds.refund-failed.v1",
             "webhooks.webhook-delivery-requested.v1",
             "webhooks.webhook-delivery-requested.v1.retry.5s",
             "webhooks.webhook-delivery-requested.v1.retry.1m",

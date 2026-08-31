@@ -8,6 +8,7 @@ import com.example.psp.webhooknotifier.domain.model.DeliveryResult;
 import com.example.psp.webhooknotifier.domain.model.RecordCoordinates;
 import com.example.psp.webhooknotifier.domain.model.RetryChain;
 import com.example.psp.webhooknotifier.domain.model.RetryEnvelope;
+import com.example.psp.webhooknotifier.domain.model.WebhookDelivery;
 import com.example.psp.webhooknotifier.domain.model.WebhookDeliveryCommand;
 import com.example.psp.webhooknotifier.domain.port.DeliveryAttemptLogRepository;
 import com.example.psp.webhooknotifier.domain.port.MerchantWebhookClient;
@@ -147,7 +148,17 @@ class ExecuteWebhookDeliveryUseCaseTest {
 
     private static WebhookDeliveryCommand command() {
         return new WebhookDeliveryCommand(
-                UUID.randomUUID(), "merchant-1", BigDecimal.TEN, "EUR", "SUCCEEDED", null, UUID.randomUUID(), "trace-1", "corr-1");
+                UUID.randomUUID(),
+                "merchant-1",
+                BigDecimal.TEN,
+                "EUR",
+                "SUCCEEDED",
+                null,
+                UUID.randomUUID(),
+                "trace-1",
+                "corr-1",
+                "PAYMENT_STATUS_CHANGED",
+                null);
     }
 
     private static RecordCoordinates coordinates(String topic) {
@@ -176,6 +187,18 @@ class ExecuteWebhookDeliveryUseCaseTest {
         @Override
         public void record(DeliveryAttempt attempt) {
             recorded.add(attempt);
+        }
+
+        /**
+         * The M19 read side ({@code GET /api/webhooks/deliveries}) is not part of the delivery use
+         * case under test - ExecuteWebhookDeliveryUseCase only ever writes attempts. Throwing rather
+         * than returning an empty list keeps that honest: an empty list would let a future test
+         * assert against this fake and silently pass.
+         */
+        @Override
+        public List<WebhookDelivery> search(UUID paymentId, UUID refundId, String merchantId, int limit) {
+            throw new UnsupportedOperationException(
+                    "search() is not part of the execute-webhook-delivery use case under test");
         }
     }
 

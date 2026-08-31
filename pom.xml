@@ -42,8 +42,22 @@
     <avro.version>1.11.3</avro.version>
     <confluent.version>7.7.1</confluent.version>
 
+    <!-- M19 "Plus": Testcontainers. 1.20.6 is the last 1.20.x line; org.testcontainers.kafka.
+         KafkaContainer (the KRaft-mode apache/kafka wrapper that replaced the ZooKeeper-era
+         org.testcontainers.containers.KafkaContainer) landed in 1.20.1, so this line has it.
+         Every module gets its versions from the testcontainers-bom imported below - child POMs
+         declare org.testcontainers:{kafka,postgresql,mongodb,junit-jupiter} WITHOUT a <version>,
+         exactly like every other dependency in this build (ADR-0007). -->
+    <testcontainers.version>1.20.6</testcontainers.version>
+
     <!-- Plugin versions -->
     <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
+    <!-- M19 "Plus": maven-failsafe-plugin runs the Testcontainers integration tests (*IT.java) in
+         the `integration-test`/`verify` phases. Surefire is deliberately left alone: its default
+         includes are Test*.java / *Test.java / *Tests.java / *TestCase.java, none of which match
+         *IT.java, so `mvn test` still runs ONLY the fast unit + ArchUnit tests and never starts a
+         container. `mvn verify` runs both. -->
+    <maven-failsafe-plugin.version>3.5.2</maven-failsafe-plugin.version>
   </properties>
 
   <!-- Confluent's artifacts (kafka-avro-serializer, kafka-schema-registry-client) are not on
@@ -80,6 +94,31 @@
   -->
   <dependencyManagement>
     <dependencies>
+      <!--
+        M19 "Plus": Testcontainers BOM - manages org.testcontainers:* (core, junit-jupiter, kafka,
+        postgresql, mongodb) plus the Docker client stack they pull in, so a service POM only ever
+        names the artifact (ADR-0007).
+
+        Declared BEFORE spring-boot-dependencies on purpose, breaking the "framework BOM first,
+        then extensions" ordering used by the Spring Cloud import below. The reason is mechanical:
+        spring-boot-dependencies ALSO manages org.testcontainers:* (3.5.3 pins the 1.21.x line),
+        and for <scope>import</scope> the FIRST declaration that manages a given artifact wins.
+        Imported after Boot, this BOM would be silently inert and ${testcontainers.version} would
+        have no effect at all. Ordering it first is what makes the pin real - verify with
+        `mvn -pl services/psp-connector dependency:tree -Dincludes=org.testcontainers`.
+
+        There is no artifact overlap between the two BOMs other than org.testcontainers itself, so
+        putting this one first costs nothing else; drop this block entirely if you would rather
+        track whatever Testcontainers release the Spring Boot BOM was tested against.
+      -->
+      <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers-bom</artifactId>
+        <version>${testcontainers.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
       <!-- Spring Boot BOM - manages spring-boot-starter-*, spring-kafka, etc. -->
       <dependency>
         <groupId>org.springframework.boot</groupId>
@@ -224,7 +263,63 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
         </plugin>
+
+        <!--
+          M19 "Plus": Testcontainers integration tests.
+
+          Surefire (above) and Failsafe split the suite by FILE NAME, not by annotation:
+
+            surefire  -> **/Test*.java, **/*Test.java, **/*Tests.java, **/*TestCase.java
+            failsafe  -> **/IT*.java,   **/*IT.java,   **/*ITCase.java
+
+          The two sets are disjoint, which is the whole point: `mvn test` keeps running exactly
+          what it ran before (unit tests + the per-service ArchUnit hexagon check) and never
+          starts Docker, while `mvn verify` additionally runs the *IT.java classes that spin up
+          real Kafka/Postgres/Mongo containers.
+
+          `verify` is bound too, not just `integration-test`: failsafe deliberately records
+          failures instead of throwing during integration-test (so post-integration-test teardown
+          always runs), and it is the verify goal that turns a recorded failure into a red build.
+          Binding only the first would make every IT failure silent.
+        -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-failsafe-plugin</artifactId>
+          <version>${maven-failsafe-plugin.version}</version>
+          <configuration>
+            <!--
+              REQUIRED with spring-boot-maven-plugin:repackage. Failsafe's default
+              <classesDirectory> is ${project.build.directory}/${project.build.finalName}.jar, and
+              by the time integration-test runs, repackage has already replaced that jar with a
+              Spring Boot fat jar whose application classes live under BOOT-INF/classes. Component
+              scanning against that layout finds nothing, and every @SpringBootTest fails with
+              "Unable to find a @SpringBootConfiguration by searching packages upwards from the
+              test" - which looks like a package-layout bug and is not one. Pointing failsafe at
+              the plain target/classes directory is the documented fix.
+            -->
+            <classesDirectory>${project.build.outputDirectory}</classesDirectory>
+          </configuration>
+          <executions>
+            <execution>
+              <id>integration-tests</id>
+              <goals>
+                <goal>integration-test</goal>
+                <goal>verify</goal>
+              </goals>
+            </execution>
+          </executions>
+        </plugin>
       </plugins>
     </pluginManagement>
+
+    <plugins>
+      <!-- Inherited by every module. Modules without an *IT.java simply have nothing to run -
+           failsafe is a no-op there, so this stays a single declaration instead of being
+           repeated in each service POM. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+      </plugin>
+    </plugins>
   </build>
 </project>

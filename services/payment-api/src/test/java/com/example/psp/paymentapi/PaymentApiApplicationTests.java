@@ -25,7 +25,10 @@ import org.springframework.kafka.test.context.EmbeddedKafka;
             // producer factory (constructed but never sent from in this test), but the reply
             // topic DOES - the reply container subscribes to it at context-refresh time.
             "psp.provider-status-query.v1",
-            "psp.provider-status-reply.v1"
+            "psp.provider-status-reply.v1",
+            // M19: config.PaymentStatusViewKafkaConfig's status-view listener container also
+            // subscribes at context-refresh time - same requirement as the M12 reply topic above.
+            "payments.payment-status-changed.v1"
         })
 class PaymentApiApplicationTests {
 

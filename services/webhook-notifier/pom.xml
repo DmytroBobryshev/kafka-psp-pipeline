@@ -121,6 +121,27 @@
       <artifactId>archunit-junit5</artifactId>
       <scope>test</scope>
     </dependency>
+
+    <!-- M19 "Plus": Testcontainers for RetryChainIT. Versions come from the testcontainers-bom in
+         the parent POM. mongodb (not h2/an embedded fake) because the delivery attempt log is a
+         real Mongo write on EVERY hop of the retry chain - application.ExecuteWebhookDeliveryUseCase
+         records the attempt before it decides where to republish, so a missing Mongo would make
+         the chain fail for the wrong reason. -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>kafka</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>mongodb</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

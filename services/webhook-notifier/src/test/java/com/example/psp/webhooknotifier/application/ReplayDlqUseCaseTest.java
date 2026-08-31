@@ -91,7 +91,17 @@ class ReplayDlqUseCaseTest {
 
     private static WebhookDeliveryCommand command() {
         return new WebhookDeliveryCommand(
-                UUID.randomUUID(), "merchant-1", BigDecimal.TEN, "EUR", "SUCCEEDED", null, UUID.randomUUID(), "trace-1", "corr-1");
+                UUID.randomUUID(),
+                "merchant-1",
+                BigDecimal.TEN,
+                "EUR",
+                "SUCCEEDED",
+                null,
+                UUID.randomUUID(),
+                "trace-1",
+                "corr-1",
+                "PAYMENT_STATUS_CHANGED",
+                null);
     }
 
     private record Published(String topic, WebhookDeliveryCommand command, RetryEnvelope envelope) {}

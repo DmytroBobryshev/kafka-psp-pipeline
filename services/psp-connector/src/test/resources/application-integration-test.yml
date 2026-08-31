@@ -1,0 +1,45 @@
+# M19 "Plus" - the `integration-test` profile, activated by @ActiveProfiles on
+# integration.PspConnectorIntegrationSupport (and therefore by both *IT classes).
+#
+# WHY THIS FILE EXISTS
+#
+# src/test/resources/application.yml sits earlier on the classpath than
+# src/main/resources/application.yml, so under `mvn test`/`mvn verify` it does not merge with the
+# production file - it REPLACES it. That is deliberate and correct for the context-load unit test
+# (PspConnectorApplicationTests needs H2, no Flyway, no Eureka, an unreachable registry URL), but it
+# also silently drops the whole `spring.kafka.producer` block, leaving Spring Boot's default
+# StringSerializer in place. An integration test that publishes an Avro record against a real broker
+# then fails with:
+#
+#   SerializationException: Can't convert value of class ...avro.PaymentStatusChanged to class
+#   org.apache.kafka.common.serialization.StringSerializer specified in value.serializer
+#
+# which looks like a test bug and is really a "the profile you are running under is not the profile
+# you are testing" bug. Profile-specific files ARE additive on top of application.yml, so this file
+# restores exactly the production settings the ITs exercise - and nothing else. Keep it in sync with
+# src/main/resources/application.yml's producer block; anything not listed here is either
+# environment-specific (bootstrap-servers, datasource, schema-registry URL - all injected by
+# @DynamicPropertySource from the containers) or genuinely irrelevant to the ITs.
+spring:
+  kafka:
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # THE line this file exists for - see above. Encodes payments.payment-status-changed.v1 in
+      # the Confluent wire format against the mock:// registry the ITs point at.
+      value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        linger.ms: 10
+        # Interpolated from psp-connector.schema-registry.url, which
+        # PspConnectorIntegrationSupport sets to a mock:// scope - see its javadoc for why there
+        # is no Schema Registry container.
+        schema.registry.url: ${psp-connector.schema-registry.url}
+        auto.register.schemas: true
+
+# Off for the same reason src/main/resources/application.yml turns it off (M16/ADR-0009): without
+# this the ITs spend their first seconds retrying a Eureka server that is not part of this test.
+eureka:
+  client:
+    enabled: false

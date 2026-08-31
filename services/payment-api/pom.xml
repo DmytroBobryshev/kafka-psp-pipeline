@@ -162,6 +162,20 @@
       <artifactId>h2</artifactId>
       <scope>test</scope>
     </dependency>
+
+    <!-- M19 "Plus": Testcontainers for OutboxAtomicityIT. Postgres ONLY - no org.testcontainers:
+         kafka here on purpose: the outbox row is relayed to Kafka by Debezium in production, so
+         no Kafka broker takes part in the behaviour this IT asserts (see the IT's javadoc). -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

@@ -31,6 +31,11 @@ webhook-notifier:
     url: http://localhost:8081
   kafka:
     payment-status-changed-topic: payments.payment-status-changed.v1
+    # M19: only PRESENCE matters for context load, same reasoning as every other topic property
+    # in this file - the listener containers DO subscribe at context-refresh time though, so the
+    # topics are also declared on the embedded broker below.
+    refund-completed-topic: refunds.refund-completed.v1
+    refund-failed-topic: refunds.refund-failed.v1
     delivery-requested-topic: webhooks.webhook-delivery-requested.v2
     retry-5s-topic: webhooks.webhook-delivery-requested.v2.retry.5s
     retry-1m-topic: webhooks.webhook-delivery-requested.v2.retry.1m

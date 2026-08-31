@@ -1,0 +1,35 @@
+# M19 "Plus" - the `integration-test` profile, activated by @ActiveProfiles on RetryChainIT.
+#
+# WHY THIS FILE EXISTS
+#
+# src/test/resources/application.yml sits earlier on the classpath than
+# src/main/resources/application.yml and REPLACES it rather than merging, which drops the entire
+# spring.kafka.producer block. WebhookNotifierApplicationTests never notices - it only loads the
+# context - but RetryChainIT publishes on every hop of the chain, and would fail with
+# "Can't convert value of class ... to class ...StringSerializer" on the first one.
+#
+# Both of webhook-notifier's producers are built from these settings
+# (config.KafkaProducerConfig#webhookDeliveryDlqProducerFactory uses them as-is for the JSON DLQ
+# record; #webhookDeliveryAvroProducerFactory copies them and swaps in KafkaAvroSerializer +
+# schema.registry.url for the Avro retry topics), so the JSON serializer below is the DLQ's, not a
+# leftover.
+spring:
+  kafka:
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        linger.ms: 10
+        # The DLQ record carries no __TypeId__ header - RetryChainIT reads it as raw bytes and
+        # parses the JSON, and config.KafkaConsumerConfig's dlqReplayConsumerFactory sets
+        # JsonDeserializer.VALUE_DEFAULT_TYPE instead. Leaving type headers on would make the DLQ
+        # payload depend on a producer-side class name.
+        spring.json.add.type.headers: false
+
+# Off for the same reason src/main/resources/application.yml turns it off (M16/ADR-0009).
+eureka:
+  client:
+    enabled: false

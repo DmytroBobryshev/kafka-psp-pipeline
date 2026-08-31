@@ -1,0 +1,32 @@
+# M19 "Plus" - the `integration-test` profile, activated by @ActiveProfiles on LedgerEosIT.
+#
+# WHY THIS FILE EXISTS
+#
+# src/test/resources/application.yml sits earlier on the classpath than
+# src/main/resources/application.yml, so it REPLACES it rather than merging with it. That is right
+# for LedgerApplicationTests (H2, no Flyway, an unreachable registry URL, a JSON serializer that is
+# never exercised because nothing is ever published), but it means the production producer wiring -
+# the Avro serializer above all - is simply absent. Publishing a real
+# ledger.ledger-entry-recorded.v1 against a real broker under that config fails with
+# "Can't convert value of class ...avro.LedgerEntryRecorded to class ...StringSerializer".
+#
+# Profile files ARE additive on top of application.yml, so this restores exactly what LedgerEosIT
+# exercises. Note what is deliberately NOT here: acks/enable.idempotence/transactional.id. A
+# transactional producer implies all of them, and config.KafkaProducerConfig sets them in Java on
+# purpose (see its javadoc) - repeating them here would create a second, competing source of truth
+# for the settings this module exists to teach.
+spring:
+  kafka:
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
+      properties:
+        # Interpolated from ledger.schema-registry.url, which LedgerEosIT points at a mock://
+        # scope - see the IT's javadoc for why there is no Schema Registry container.
+        schema.registry.url: ${ledger.schema-registry.url}
+        auto.register.schemas: true
+
+# Off for the same reason src/main/resources/application.yml turns it off (M16/ADR-0009).
+eureka:
+  client:
+    enabled: false
