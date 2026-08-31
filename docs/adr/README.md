@@ -19,6 +19,7 @@ wrong, the fix is a new ADR that supersedes it, not an edit to the old one.
 | [0007](0007-monorepo-maven-hexagonal.md) | Monorepo, Maven multi-module, package-by-hexagon | Accepted | M1, all |
 | [0008](0008-saga-choreography.md) | Refund saga uses choreography, not orchestration | Accepted | M11, M17 |
 | [0009](0009-service-discovery-per-profile.md) | Eureka in `compose`, native Kubernetes discovery in `k8s` | Accepted | M16, M18 |
+| [0010](0010-kafka-security-model.md) | SASL/SCRAM per-service principals, deny-by-default ACLs | Accepted | M14, M17, M18 |
 
 ## How these fit together
 
@@ -52,6 +53,4 @@ naming preferences inside one service do not need one.
 
 - Schema Registry compatibility mode (`BACKWARD` is assumed by 0001 and 0002) is confirmed in
   M9 and should get its own ADR if the choice turns out to be non-obvious.
-- Kafka security model (SASL/SCRAM principals, ACL granularity) is decided in M14 and should be
-  recorded as an ADR then; 0001's prefix-friendly names and 0006's per-consumer DLQs both
-  assume per-service principals.
+- ~~Kafka security model~~ - recorded as [ADR-0010](0010-kafka-security-model.md).
