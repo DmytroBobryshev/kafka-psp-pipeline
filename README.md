@@ -7,7 +7,8 @@ architecture, MapStruct + Lombok, a React + TypeScript UI, fully deployable to K
 Full plan: [`docs/PLAN.md`](docs/PLAN.md). Decisions and their rationale:
 [`docs/adr/`](docs/adr/). Diagrams: [`docs/diagrams/`](docs/diagrams/).
 Measured failure drills against the live cluster:
-[`docs/M19-failure-drills.md`](docs/M19-failure-drills.md).
+[`docs/M19-failure-drills.md`](docs/M19-failure-drills.md) (part 1),
+[`docs/M19-failure-drills-part2.md`](docs/M19-failure-drills-part2.md) (part 2).
 
 ## Overview
 
@@ -79,7 +80,7 @@ and time estimates live in [`docs/PLAN.md`](docs/PLAN.md).
 | M16 - Discovery + gateway | `services/discovery-server`, `services/api-gateway` | Eureka vs k8s-native discovery, Spring Cloud Gateway | Not started |
 | M17 - React UI | `ui/` | SSE, OpenAPI-generated types, the six showcase pages | Not started |
 | M18 - Kubernetes | `infra/k8s/` | Strimzi, Helm, KEDA | Not started |
-| M19 - Failure drills | [`docs/M19-failure-drills.md`](docs/M19-failure-drills.md) | ISR/acks trade-offs, unclean leader election, partition count vs keyed ordering, rebalance cost, static membership | **Part 1 done** |
+| M19 - Failure drills | [`docs/M19-failure-drills.md`](docs/M19-failure-drills.md), [`part 2`](docs/M19-failure-drills-part2.md) | ISR/acks trade-offs, unclean leader election, partition count vs keyed ordering, rebalance cost, static membership, throttled reassignment, retention semantics, timestamp offset reset, chaos (found a real scale-in data-loss bug) | **Done** |
 
 ## Stack & persistence decisions
 

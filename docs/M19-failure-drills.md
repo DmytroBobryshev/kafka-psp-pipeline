@@ -17,7 +17,8 @@ the run; nothing is reconstructed.
 | 5 | Static membership (`group.instance.id`) | dynamic: survivors own nothing for 23.0 s. static: zero rebalances |
 
 **Not covered here (part 2):** `kafka-reassign-partitions`, retention and segment rolling,
-offset reset to a timestamp, node cordoning.
+offset reset to a timestamp, node cordoning — now done, measured in
+[`M19-failure-drills-part2.md`](M19-failure-drills-part2.md).
 
 **Not possible in this cluster:** anything requiring Grafana or Prometheus. They lived in the
 `infra/compose` stack, which is stopped; there is no metrics stack in the kind cluster. The lag
