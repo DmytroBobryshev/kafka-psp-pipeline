@@ -1778,3 +1778,48 @@ Two things to know about the values that come back:
 - **No `kube-state-metrics`, so replica counts are not a metric.** Drill 10's replica trajectory
   is sampled with `kubectl get deploy`, not queried; correlating it with the lag curve is done by
   timestamp, by hand.
+
+## Client quotas (M13), measured on this cluster
+
+The last of M13's grab-bag: `producer_byte_rate`, applied and observed. Three findings, each
+worth more than the feature itself:
+
+**1. On a Strimzi cluster, quotas belong to the `KafkaUser` CR — a hand-set quota evaporates.**
+`kafka-configs.sh --alter --add-config producer_byte_rate=...` on a UO-managed principal is
+undone by the User Operator's next reconcile, within seconds; the follow-up `--delete-config`
+then fails with `Invalid config(s)` because the quota is already gone. The drill therefore ran
+as a throwaway CR-native user:
+
+```yaml
+spec:
+  quotas:
+    producerByteRate: 1048576   # 1 MiB/s
+```
+
+**2. Short bursts sail through — the quota is a rolling window, not a valve.** An 8 MB produce
+finished in 0.7 s at **11.68 MB/s** with `produce-throttle-time = 0.000`: it fit entirely inside
+the enforcement window (`quota.window.num` x `quota.window.size.seconds`, ~11 s by default), so
+the broker never delayed a response. A quota does not cap a burst; it caps a *rate sustained
+past the window*.
+
+**3. Sustained load hits the quota almost exactly, and both sides can see it.** 40,000 x 1 KiB
+against the same 1 MiB/s quota (baseline unquoted: **11.50 MB/s**):
+
+```
+40000 records sent, 1145.11 records/sec (1.12 MB/sec), 15260 ms avg latency, 34293 ms max
+producer-metrics:produce-throttle-time-avg: 12.043
+producer-metrics:produce-throttle-time-max: 1017.000
+```
+
+Prometheus, from the broker (the metrics stack above):
+
+```
+max(kafka_network_requestmetrics_throttletimems{request="Produce",quantile="0.99"}) = 1008.42 ms
+```
+
+The 34-second max latency is the quota's real mechanism showing through: the broker throttles
+by **delaying responses**, the producer's buffer fills behind the delayed acks, and every
+record queued behind the window pays the wait. A quota protects the broker by exporting the
+pain to the client - which is exactly its job.
+
+The drill topic (`drill.m13.quota`, ~70 MB) and the `drill-quota` user were removed afterwards.
