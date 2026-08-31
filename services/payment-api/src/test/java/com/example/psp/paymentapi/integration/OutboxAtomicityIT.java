@@ -14,8 +14,11 @@ import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
 import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -80,7 +83,13 @@ import org.testcontainers.utility.DockerImageName;
 @ActiveProfiles("integration-test")
 @EmbeddedKafka(
         partitions = 1,
-        topics = {"psp.provider-status-query.v1", "psp.provider-status-reply.v1"})
+        topics = {
+            "psp.provider-status-query.v1",
+            "psp.provider-status-reply.v1",
+            // config.MerchantViewKafkaConfig's merchant-view listener container subscribes at
+            // context-refresh time, same requirement as the two topics above.
+            "merchants.merchant-config-changed.v1"
+        })
 class OutboxAtomicityIT {
 
     /**
@@ -121,6 +130,30 @@ class OutboxAtomicityIT {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
         registry.add("payment-api.schema-registry.url", () -> SCHEMA_REGISTRY_URL);
+    }
+
+    /**
+     * {@code POST /api/payments} now requires an {@code ACTIVE} merchant in the local projection
+     * (see {@code CreatePaymentUseCase}); this IT never runs the Kafka listener that would
+     * populate it, so it seeds the row directly - a Postgres-only shortcut this test can take
+     * because it asserts on the outbox write, not on the projection itself.
+     */
+    @BeforeEach
+    void seedActiveMerchants() {
+        // Timestamp.from(...), not the raw Instant: the driver cannot infer a SQL type for
+        // java.time.Instant through JdbcTemplate's varargs update() (no column type info to
+        // consult, unlike a PreparedStatementSetter).
+        Timestamp now = Timestamp.from(Instant.now());
+        for (String merchantId : new String[] {MERCHANT_ID, "merchant-outbox-it-rollback"}) {
+            jdbcTemplate.update(
+                    "INSERT INTO merchant_configs "
+                            + "(merchant_id, display_name, status, payout_currency, decline_rate_alert_threshold_bps, updated_at) "
+                            + "VALUES (?, ?, 'ACTIVE', 'EUR', 1500, ?) "
+                            + "ON CONFLICT (merchant_id) DO NOTHING",
+                    merchantId,
+                    merchantId,
+                    now);
+        }
     }
 
     @Test

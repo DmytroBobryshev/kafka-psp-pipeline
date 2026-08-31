@@ -28,7 +28,7 @@ export function DlqConsolePage() {
   });
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-8">
+    <main className="mx-auto max-w-[1500px] px-6 py-8">
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <label className="block">
           <span className="mb-1 block text-sm font-medium text-slate-700">DLQ topic</span>

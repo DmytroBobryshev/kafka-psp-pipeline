@@ -1,4 +1,4 @@
-# payment-api (:8085) - 17 bindings, matching init-security.sh's "--- payment-api ---" block.
+# payment-api (:8085) - 18 bindings, matching init-security.sh's "--- payment-api ---" block.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -13,9 +13,11 @@ spec:
     type: simple
     acls:
       # Merchant config, produced DIRECTLY (M10) - the one topic this service does not reach
-      # through the outbox.
+      # through the outbox. Read added for the merchant-view projection listener
+      # (adapters.in.kafka.MerchantConfigChangedListener) - a second, independent consumer of the
+      # same topic this principal also produces to.
       - resource: { type: topic, name: merchants.merchant-config-changed.v1, patternType: literal }
-        operations: [Write, Describe]
+        operations: [Write, Read, Describe]
       # Request-reply (M12): sends the query, reads the reply.
       - resource: { type: topic, name: psp.provider-status-query.v1, patternType: literal }
         operations: [Write, Describe]
@@ -47,4 +49,8 @@ spec:
       # an ordinary work-sharing consumer, so a prefix grant here is just this service's usual
       # "don't break on the next group-id suffix bump" convention, not a per-instance necessity.
       - resource: { type: group, name: payment-api.status-view., patternType: prefix }
+        operations: [Read, Describe]
+      # Merchant read-model listener (adapters.in.kafka.MerchantConfigChangedListener) - fixed
+      # group id (payment-api.merchant-view.v1), prefixed per this service's usual convention.
+      - resource: { type: group, name: payment-api.merchant-view., patternType: prefix }
         operations: [Read, Describe]

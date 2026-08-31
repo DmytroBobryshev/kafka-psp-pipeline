@@ -8,7 +8,9 @@ import com.example.psp.pspconnector.domain.model.RefundOutcome;
 import com.example.psp.pspconnector.domain.model.RefundProviderResult;
 import com.example.psp.pspconnector.domain.port.PaymentProviderPort;
 import com.example.psp.pspconnector.domain.port.RefundProviderPort;
+import java.math.RoundingMode;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -59,11 +61,28 @@ import org.springframework.stereotype.Component;
  * services/psp-connector/README.md's M11 section for the forceable property the orchestrator uses
  * to drive the happy-path and compensation proofs deterministically, and for why a refund timeout
  * is not modelled (the module brief only needs the two decisive outcomes).
+ *
+ * <h2>Magic amounts ({@code psp-connector.provider.magic-amounts.enabled})</h2>
+ *
+ * <p>Mirrors the real-PSP-sandbox convention (Stripe: docs.stripe.com/testing) of letting the
+ * request itself pick its outcome via the amount's trailing digits, checked in both
+ * {@link #resolveOutcome} and {@link #resolveRefundOutcome} before {@code forcedOutcome}/{@code
+ * refundForcedOutcome} and before the dice roll. See services/psp-connector/README.md's "Forcing
+ * outcomes (amount endings)" section for the full table and the precedence rationale.
  */
 @Component
 public class SimulatedPaymentProviderAdapter implements PaymentProviderPort, RefundProviderPort {
 
     private static final Logger log = LoggerFactory.getLogger(SimulatedPaymentProviderAdapter.class);
+
+    // Amount-ending -> outcome, keyed on the last two digits of the amount (cents). See this
+    // class's "Magic amounts" javadoc section and README's "Forcing outcomes (amount endings)".
+    private static final Map<Integer, ProviderOutcome> PAYMENT_MAGIC_ENDINGS =
+            Map.of(13, ProviderOutcome.DECLINED, 66, ProviderOutcome.TIMEOUT);
+
+    // .13 is this simulation's own; .01/.05/.55/.65/.75 are Stripe's real refund-decline endings
+    // (docs.stripe.com/testing) - both accepted so the sandbox convention matches the real one.
+    private static final Set<Integer> REFUND_MAGIC_DECLINE_ENDINGS = Set.of(1, 5, 13, 55, 65, 75);
 
     private final ProviderSimulationProperties properties;
     private final Map<UUID, ProviderResult> lastResultByPaymentId = new ConcurrentHashMap<>();
@@ -89,7 +108,7 @@ public class SimulatedPaymentProviderAdapter implements PaymentProviderPort, Ref
         long latencyMs = resolveLatencyMs();
         sleep(latencyMs);
 
-        ProviderOutcome outcome = resolveOutcome();
+        ProviderOutcome outcome = resolveOutcome(amount);
         UUID providerEventId = UUID.randomUUID();
         ProviderResult result = new ProviderResult(providerEventId, outcome, latencyMs);
         lastResultByPaymentId.put(paymentId, result);
@@ -117,7 +136,7 @@ public class SimulatedPaymentProviderAdapter implements PaymentProviderPort, Ref
         long latencyMs = resolveLatencyMs();
         sleep(latencyMs);
 
-        RefundOutcome outcome = resolveRefundOutcome();
+        RefundOutcome outcome = resolveRefundOutcome(amount);
         UUID providerReference = UUID.randomUUID();
 
         log.info(
@@ -133,10 +152,12 @@ public class SimulatedPaymentProviderAdapter implements PaymentProviderPort, Ref
         return new RefundProviderResult(providerReference, outcome, latencyMs);
     }
 
-    private RefundOutcome resolveRefundOutcome() {
-        // refundForcedOutcome > 0 overrides the dice roll entirely - THE property the orchestrator
-        // forces to drive the two deterministic saga proofs (happy path / compensation). See
-        // ProviderSimulationProperties's javadoc and README.
+    private RefundOutcome resolveRefundOutcome(Money amount) {
+        // Precedence: magic amount ending (request selects its own outcome) > refundForcedOutcome
+        // (cluster-wide override for drills) > dice roll. See this class's "Magic amounts" javadoc.
+        if (properties.magicAmounts().enabled() && REFUND_MAGIC_DECLINE_ENDINGS.contains(lastTwoDigits(amount))) {
+            return RefundOutcome.DECLINED;
+        }
         if (properties.refundForcedOutcome() != RefundForcedOutcome.NONE) {
             return properties.refundForcedOutcome().toRefundOutcome();
         }
@@ -159,9 +180,15 @@ public class SimulatedPaymentProviderAdapter implements PaymentProviderPort, Ref
                 .nextLong(properties.minLatencyMs(), properties.maxLatencyMs() + 1);
     }
 
-    private ProviderOutcome resolveOutcome() {
-        // forcedOutcome overrides the dice roll entirely - used by experiments/tests that need a
-        // deterministic result instead of a probabilistic one.
+    private ProviderOutcome resolveOutcome(Money amount) {
+        // Precedence: magic amount ending (request selects its own outcome) > forcedOutcome
+        // (cluster-wide override for drills) > dice roll. See this class's "Magic amounts" javadoc.
+        if (properties.magicAmounts().enabled()) {
+            ProviderOutcome magic = PAYMENT_MAGIC_ENDINGS.get(lastTwoDigits(amount));
+            if (magic != null) {
+                return magic;
+            }
+        }
         if (properties.forcedOutcome() != ForcedOutcome.NONE) {
             return properties.forcedOutcome().toProviderOutcome();
         }
@@ -174,6 +201,13 @@ public class SimulatedPaymentProviderAdapter implements PaymentProviderPort, Ref
             return ProviderOutcome.DECLINED;
         }
         return ProviderOutcome.APPROVED;
+    }
+
+    // Last two digits of the amount, e.g. 10.13 -> 13. Scale is fixed to 2 first so unscaledValue()
+    // is exactly "total cents" regardless of how many fractional digits the caller passed in.
+    private static int lastTwoDigits(Money amount) {
+        long totalCents = amount.amount().setScale(2, RoundingMode.HALF_UP).unscaledValue().longValueExact();
+        return (int) (totalCents % 100);
     }
 
     private void sleep(long millis) {

@@ -60,3 +60,5 @@ psp-connector:
     duplicate-rate: 0.0
     refund-decline-rate: 0.0
     refund-forced-outcome: NONE
+    magic-amounts:
+      enabled: true

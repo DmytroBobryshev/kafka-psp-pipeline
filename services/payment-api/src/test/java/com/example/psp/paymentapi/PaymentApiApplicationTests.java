@@ -28,7 +28,9 @@ import org.springframework.kafka.test.context.EmbeddedKafka;
             "psp.provider-status-reply.v1",
             // M19: config.PaymentStatusViewKafkaConfig's status-view listener container also
             // subscribes at context-refresh time - same requirement as the M12 reply topic above.
-            "payments.payment-status-changed.v1"
+            "payments.payment-status-changed.v1",
+            // config.MerchantViewKafkaConfig's merchant-view listener container, same requirement.
+            "merchants.merchant-config-changed.v1"
         })
 class PaymentApiApplicationTests {
 

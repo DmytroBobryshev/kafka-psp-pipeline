@@ -21,12 +21,6 @@ import { RefundTrackerPage } from "./pages/RefundTrackerPage";
  * so per-page components own only their content, keeping page 1 byte-identical in behaviour
  * to the pre-router slice.
  */
-/**
- * The nav is grouped by what a page is FOR, not by which Kafka feature backs it: Operations is
- * where money is looked at and acted on, Simulation is where demo traffic is made, the last two
- * groups are the knobs and the engine room. Requested directly by the user: "split where is
- * configuration and where is simulation and where is another things".
- */
 const NAV_GROUPS = [
   {
     label: "Operations",
@@ -56,7 +50,7 @@ function Shell() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-4">
+        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center justify-between gap-3 px-6 py-4">
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Kafka PSP Pipeline</h1>
             <p className="mt-0.5 text-sm text-slate-500">
@@ -70,10 +64,6 @@ function Shell() {
                   {group.label}
                 </span>
                 {group.items.map((item) => (
-              // One className, styled off the data-status attribute the router sets - never two
-              // class lists merged (activeProps.className CONCATENATES with className, which let
-              // hover:bg-slate-100 win over the active bg while the text stayed white: white on
-              // white).
               <Link
                 key={item.to}
                 to={item.to}
@@ -97,7 +87,15 @@ const rootRoute = createRootRoute({ component: Shell });
 
 const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/", component: TimelinePage }),
-  createRoute({ getParentRoute: () => rootRoute, path: "/payments", component: PaymentsPage }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/payments",
+    component: PaymentsPage,
+    validateSearch: (search: Record<string, unknown>) => ({
+      merchantId: typeof search.merchantId === "string" ? search.merchantId : undefined,
+      paymentId: typeof search.paymentId === "string" ? search.paymentId : undefined,
+    }),
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: "/dashboard", component: DashboardPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/merchants", component: MerchantConfigPage }),
   createRoute({

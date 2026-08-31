@@ -161,6 +161,10 @@ payment-api:
     # are exactly what's wanted.
     payment-status-changed-topic: payments.payment-status-changed.v1
     payment-status-view-group-id: payment-api.status-view.v1
+    # Merchant read-model listener (adapters.in.kafka.MerchantConfigChangedListener,
+    # config.MerchantViewKafkaConfig) - a second, independent consumer group on the same
+    # merchant-config-changed-topic the write side above produces to.
+    merchant-view-group-id: payment-api.merchant-view.v1
     # M13: the claim-check demo's topic - produced directly, same as merchant-config-changed-topic
     # above (see domain.port.DisputeEventPublisher's javadoc for why it skips the outbox).
     dispute-opened-topic: disputes.dispute-opened.v1

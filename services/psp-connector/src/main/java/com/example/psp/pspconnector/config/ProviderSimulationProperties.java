@@ -39,6 +39,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *                        {@code COMPLETED}/{@code DECLINED} force every {@code refund()} call to
  *                        that outcome. See services/psp-connector/README.md's M11 section.
  *                        Override: {@code --psp-connector.provider.refund-forced-outcome=DECLINED}.
+ * @param magicAmounts    amount-ending overrides (the real-PSP-sandbox convention - see README's
+ *                        "Forcing outcomes (amount endings)" section). Checked before {@code
+ *                        forcedOutcome}/{@code refundForcedOutcome} and before the dice roll.
  */
 @ConfigurationProperties(prefix = "psp-connector.provider")
 public record ProviderSimulationProperties(
@@ -50,7 +53,8 @@ public record ProviderSimulationProperties(
         ForcedOutcome forcedOutcome,
         double duplicateRate,
         double refundDeclineRate,
-        RefundForcedOutcome refundForcedOutcome) {
+        RefundForcedOutcome refundForcedOutcome,
+        MagicAmounts magicAmounts) {
 
     public ProviderSimulationProperties {
         if (minLatencyMs < 0 || maxLatencyMs < minLatencyMs) {
@@ -81,5 +85,16 @@ public record ProviderSimulationProperties(
         if (refundForcedOutcome == null) {
             refundForcedOutcome = RefundForcedOutcome.NONE;
         }
+        if (magicAmounts == null) {
+            magicAmounts = new MagicAmounts(true);
+        }
     }
+
+    /**
+     * {@code psp-connector.provider.magic-amounts.enabled} (default {@code true}). {@code false}
+     * disables amount-ending overrides entirely, falling back to {@code forcedOutcome}/{@code
+     * refundForcedOutcome} and the dice roll only - for an experiment that needs the historical
+     * (pre-amount-ending) behaviour.
+     */
+    public record MagicAmounts(boolean enabled) {}
 }

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getPaymentRefunds,
@@ -27,7 +28,8 @@ const STATUS_BADGE: Record<string, string> = {
  * status (M12 request-reply over Kafka) and webhook delivery attempts (M8's Mongo log).
  */
 export function PaymentsPage() {
-  const [merchantId, setMerchantId] = useState("");
+  const search = useSearch({ strict: false }) as { merchantId?: string };
+  const [merchantId, setMerchantId] = useState(search.merchantId ?? "");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<PaymentResponse | null>(null);
@@ -43,7 +45,7 @@ export function PaymentsPage() {
   const totalPages = payments.data ? Math.max(1, Math.ceil(payments.data.total / size)) : 1;
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-8">
+    <main className="mx-auto max-w-[1500px] px-6 py-8">
       <div className="mb-5 flex flex-wrap items-end gap-4">
         <label className="block">
           <span className="mb-1 block text-sm font-medium text-slate-700">Merchant</span>
@@ -74,7 +76,7 @@ export function PaymentsPage() {
         )}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
+      <div className="grid gap-6 xl:grid-cols-[1fr_500px]">
         <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
@@ -188,7 +190,6 @@ function RefundRow({ refund }: { refund: RefundResponse }) {
   );
 }
 
-/** The refund form, IN the panel - one place for everything, per the user's redesign ask. */
 function InlineRefundForm({ paymentId, onDone }: { paymentId: string; onDone: () => void }) {
   const queryClient = useQueryClient();
   const [amount, setAmount] = useState("10.00");

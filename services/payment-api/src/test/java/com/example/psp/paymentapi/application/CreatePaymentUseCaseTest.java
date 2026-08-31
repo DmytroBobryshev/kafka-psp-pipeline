@@ -1,14 +1,20 @@
 package com.example.psp.paymentapi.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.psp.paymentapi.domain.model.MerchantPage;
+import com.example.psp.paymentapi.domain.model.MerchantStatus;
+import com.example.psp.paymentapi.domain.model.MerchantView;
 import com.example.psp.paymentapi.domain.model.Money;
 import com.example.psp.paymentapi.domain.model.Payment;
 import com.example.psp.paymentapi.domain.model.PaymentPage;
 import com.example.psp.paymentapi.domain.model.PaymentStatus;
+import com.example.psp.paymentapi.domain.port.MerchantViewRepository;
 import com.example.psp.paymentapi.domain.port.PaymentEventPublisher;
 import com.example.psp.paymentapi.domain.port.PaymentRepository;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -27,7 +33,8 @@ class CreatePaymentUseCaseTest {
     void createsPersistsAndPublishesAPayment() {
         InMemoryFakeRepository repository = new InMemoryFakeRepository();
         RecordingFakePublisher publisher = new RecordingFakePublisher();
-        CreatePaymentUseCase useCase = new CreatePaymentUseCase(repository, publisher);
+        CreatePaymentUseCase useCase =
+                new CreatePaymentUseCase(repository, activeMerchant("merchant-1"), publisher);
 
         Payment result =
                 useCase.execute(new CreatePaymentCommand("merchant-1", new Money(BigDecimal.TEN, "EUR")));
@@ -36,6 +43,74 @@ class CreatePaymentUseCaseTest {
         assertThat(repository.findById(result.getId())).contains(result);
         assertThat(publisher.publishedCount.get()).isEqualTo(1);
         assertThat(publisher.lastPublished).isEqualTo(result);
+    }
+
+    @Test
+    void rejectsAPaymentForAMerchantAbsentFromTheProjection() {
+        InMemoryFakeRepository repository = new InMemoryFakeRepository();
+        CreatePaymentUseCase useCase =
+                new CreatePaymentUseCase(repository, new StubMerchantViewRepository(null), new RecordingFakePublisher());
+
+        assertThatThrownBy(
+                        () ->
+                                useCase.execute(
+                                        new CreatePaymentCommand("merchant-unknown", new Money(BigDecimal.TEN, "EUR"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unknown merchant merchant-unknown");
+        assertThat(repository.store).isEmpty();
+    }
+
+    @Test
+    void rejectsAPaymentForASuspendedMerchant() {
+        InMemoryFakeRepository repository = new InMemoryFakeRepository();
+        MerchantView suspended =
+                new MerchantView(
+                        "merchant-2", "Suspended Co", MerchantStatus.SUSPENDED, "EUR", null, 1500, Instant.now());
+        CreatePaymentUseCase useCase =
+                new CreatePaymentUseCase(
+                        repository, new StubMerchantViewRepository(suspended), new RecordingFakePublisher());
+
+        assertThatThrownBy(
+                        () ->
+                                useCase.execute(
+                                        new CreatePaymentCommand("merchant-2", new Money(BigDecimal.TEN, "EUR"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("merchant-2 is not active (status=SUSPENDED)");
+    }
+
+    private static MerchantViewRepository activeMerchant(String merchantId) {
+        return new StubMerchantViewRepository(
+                new MerchantView(
+                        merchantId, "Test Merchant", MerchantStatus.ACTIVE, "EUR", null, 1500, Instant.now()));
+    }
+
+    /** Fake port: returns the fixed {@link MerchantView} passed at construction, or empty. */
+    private static final class StubMerchantViewRepository implements MerchantViewRepository {
+        private final MerchantView view;
+
+        private StubMerchantViewRepository(MerchantView view) {
+            this.view = view;
+        }
+
+        @Override
+        public void upsert(MerchantView view) {
+            throw new UnsupportedOperationException("not exercised by this use case");
+        }
+
+        @Override
+        public void delete(String merchantId) {
+            throw new UnsupportedOperationException("not exercised by this use case");
+        }
+
+        @Override
+        public Optional<MerchantView> findById(String merchantId) {
+            return Optional.ofNullable(view);
+        }
+
+        @Override
+        public MerchantPage search(MerchantStatus status, int page, int size) {
+            throw new UnsupportedOperationException("not exercised by this use case");
+        }
     }
 
     private static final class InMemoryFakeRepository implements PaymentRepository {

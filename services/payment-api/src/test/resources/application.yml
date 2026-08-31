@@ -53,6 +53,8 @@ payment-api:
     # context-refresh time (same requirement as the M12 reply topic above).
     payment-status-changed-topic: payments.payment-status-changed.v1
     payment-status-view-group-id: payment-api.status-view.test.v1
+    # Only PRESENCE matters for context load, same reasoning as payment-status-view-group-id above.
+    merchant-view-group-id: payment-api.merchant-view.test.v1
     # M13: same "only PRESENCE matters, never sent from in this context-load test" reasoning.
     dispute-opened-topic: disputes.dispute-opened.test.v1
   # M9 Phase 1: KafkaAvroSerializer#configure never connects eagerly (lazy on first serialize(),

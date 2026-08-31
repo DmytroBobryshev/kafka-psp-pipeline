@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-
-import { PaymentForm } from "../components/PaymentForm";
+import { useQuery } from "@tanstack/react-query";
 import { EventTimeline } from "../components/EventTimeline";
 import { ConnectionStatus } from "../components/ConnectionStatus";
 import { useEventStream } from "../hooks/useEventStream";
@@ -8,24 +7,50 @@ import { recordPayment, usePaymentHistory } from "../hooks/usePaymentHistory";
 import { useCopy } from "../lib/clipboard";
 import { createPayment } from "../api/paymentApi";
 import { requestRefund } from "../api/refundApi";
+import { listMerchants } from "../api/merchantsApi";
+import { ApiError } from "../api/client";
 import type { PaymentResponse } from "../api/types";
 
-/**
- * Page 1: create a payment, watch its events arrive live. Every created payment also lands in
- * the local history below the form, so its id survives navigation/refresh and feeds the refund
- * page - the SSE stream itself only carries NEW events (auto-offset-reset=latest by design),
- * so re-selecting an old payment arms the stream for its future events (e.g. a refund), it
- * does not replay the past.
- */
+type Mode = "payment" | "refund";
+
+// Sandbox convention (docs.stripe.com/testing): the amount's ending selects the outcome.
+const PAYMENT_OUTCOMES = [
+  { label: "succeed", cents: null, tone: "text-emerald-700 border-emerald-300" },
+  { label: "decline (.13)", cents: 13, tone: "text-rose-700 border-rose-300" },
+  { label: "timeout (.66)", cents: 66, tone: "text-amber-700 border-amber-300" },
+] as const;
+
 export function TimelinePage() {
+  const [mode, setMode] = useState<Mode>("payment");
   const [payment, setPayment] = useState<PaymentResponse | null>(null);
   const { events, state, reconnect } = useEventStream(payment?.id ?? null);
   const { history } = usePaymentHistory();
   const { copy, copiedKey } = useCopy();
-  const [refunding, setRefunding] = useState<string | null>(null);
 
-  // Auto-run: one simulated payment every N seconds ("operation with idle"). Interval-driven,
-  // uses a fixed demo merchant, follows each new payment's live timeline as it lands.
+  // Only ACTIVE merchants may transact; the picker enforces it client-side, payment-api
+  // enforces it for real.
+  const merchants = useQuery({
+    queryKey: ["merchants", "ACTIVE"],
+    queryFn: () => listMerchants({ status: "ACTIVE" }),
+    refetchInterval: 15000,
+    retry: false,
+  });
+  const activeMerchants = merchants.data?.items ?? [];
+
+  const [merchantId, setMerchantId] = useState("");
+  const [amount, setAmount] = useState("49.99");
+  const [currency, setCurrency] = useState("EUR");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!merchantId && activeMerchants.length > 0) setMerchantId(activeMerchants[0].merchantId);
+  }, [activeMerchants, merchantId]);
+
+  const [refundPaymentId, setRefundPaymentId] = useState("");
+  const [refundAmount, setRefundAmount] = useState("5.00");
+  const [refundReason, setRefundReason] = useState("");
+  const [refunding, setRefunding] = useState(false);
+
   const [autoRunning, setAutoRunning] = useState(false);
   const [idleSeconds, setIdleSeconds] = useState(5);
   const [autoCount, setAutoCount] = useState(0);
@@ -36,15 +61,56 @@ export function TimelinePage() {
     setPayment(p);
   };
 
+  const withEnding = (base: string, cents: number | null) => {
+    const n = Math.max(1, Math.floor(Number(base) || 10));
+    return cents == null ? `${n}.00` : `${n}.${String(cents).padStart(2, "0")}`;
+  };
+
+  const simulatePayment = async (cents: number | null) => {
+    setError(null);
+    setCreating(true);
+    try {
+      const p = await createPayment({
+        merchantId,
+        amount: Number(withEnding(amount, cents)),
+        currency,
+      });
+      onCreated(p);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const simulateRefund = async (cents: number | null) => {
+    if (!refundPaymentId) return;
+    setError(null);
+    setRefunding(true);
+    try {
+      const h = history.find((x) => x.id === refundPaymentId);
+      if (h) setPayment({ ...h, status: "", createdAt: h.createdAt } as PaymentResponse);
+      await requestRefund(refundPaymentId, {
+        amount: Number(cents == null ? refundAmount : withEnding(refundAmount, cents)),
+        currency: "EUR",
+        reason: refundReason.trim() || undefined,
+      });
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setRefunding(false);
+    }
+  };
+
   useEffect(() => {
-    if (!autoRunning) {
+    if (!autoRunning || !merchantId) {
       window.clearInterval(autoTimer.current);
       return;
     }
     const tick = async () => {
       try {
         const p = await createPayment({
-          merchantId: "merchant-simulator",
+          merchantId,
           amount: Math.round((5 + Math.random() * 95) * 100) / 100,
           currency: "EUR",
         });
@@ -58,26 +124,162 @@ export function TimelinePage() {
     autoTimer.current = window.setInterval(tick, Math.max(2, idleSeconds) * 1000);
     return () => window.clearInterval(autoTimer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRunning, idleSeconds]);
+  }, [autoRunning, idleSeconds, merchantId]);
 
-  const refundNow = async (paymentId: string) => {
-    setRefunding(paymentId);
-    try {
-      // Track this payment FIRST so the saga's events land in the live timeline on the right.
-      const h = history.find((x) => x.id === paymentId);
-      if (h) setPayment({ ...h, status: "", createdAt: h.createdAt } as PaymentResponse);
-      await requestRefund(paymentId, { amount: 5.0, currency: "EUR", reason: "simulator refund" });
-    } catch (e) {
-      console.error("refund failed", e);
-    } finally {
-      setRefunding(null);
-    }
-  };
+  const fullAmountOf = (id: string) => history.find((h) => h.id === id)?.amount;
 
   return (
-    <main className="mx-auto grid max-w-6xl gap-8 px-6 py-8 lg:grid-cols-[360px_1fr]">
+    <main className="mx-auto grid max-w-[1500px] gap-8 px-6 py-8 lg:grid-cols-[400px_1fr]">
       <div className="space-y-6">
-        <PaymentForm onCreated={onCreated} />
+        <section className="rounded-lg border border-slate-200 bg-white p-5">
+          <div className="mb-4 flex rounded-lg border border-slate-200 p-0.5">
+            {(["payment", "refund"] as Mode[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium capitalize ${
+                  mode === m ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                simulate {m}
+              </button>
+            ))}
+          </div>
+
+          {mode === "payment" ? (
+            <>
+              <label className="mb-3 block">
+                <span className="mb-1 block text-sm font-medium text-slate-700">
+                  Merchant <span className="text-xs font-normal text-slate-400">(ACTIVE only)</span>
+                </span>
+                {activeMerchants.length > 0 ? (
+                  <select
+                    value={merchantId}
+                    onChange={(e) => setMerchantId(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    {activeMerchants.map((m) => (
+                      <option key={m.merchantId} value={m.merchantId}>
+                        {m.displayName} ({m.merchantId})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    No ACTIVE merchants{merchants.error ? " (list unavailable)" : ""} — create one on
+                    the Merchants page first.
+                  </div>
+                )}
+              </label>
+              <div className="mb-3 grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-slate-700">Amount (base)</span>
+                  <input
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-slate-700">Currency</span>
+                  <select
+                    value={currency}
+                    onChange={(e) => setCurrency(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    <option>EUR</option>
+                    <option>USD</option>
+                    <option>GBP</option>
+                  </select>
+                </label>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {PAYMENT_OUTCOMES.map((o) => (
+                  <button
+                    key={o.label}
+                    onClick={() => simulatePayment(o.cents)}
+                    disabled={creating || !merchantId}
+                    className={`rounded-md border bg-white px-2 py-2 text-xs font-medium disabled:opacity-40 ${o.tone}`}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-[10px] text-slate-400">
+                The amount's ending selects the outcome — the same convention Stripe/Adyen
+                sandboxes use. Timeout never publishes a status (retry path).
+              </p>
+            </>
+          ) : (
+            <>
+              <label className="mb-3 block">
+                <span className="mb-1 block text-sm font-medium text-slate-700">Payment</span>
+                <select
+                  value={refundPaymentId}
+                  onChange={(e) => {
+                    setRefundPaymentId(e.target.value);
+                    const full = fullAmountOf(e.target.value);
+                    if (full != null) setRefundAmount(String(full));
+                  }}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-xs"
+                >
+                  <option value="">— pick a recent payment —</option>
+                  {history.map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {h.id.slice(0, 8)}… · {h.merchantId} · {h.amount} {h.currency}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="mb-3 grid grid-cols-[1fr_auto] gap-2">
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-slate-700">Amount</span>
+                  <input
+                    value={refundAmount}
+                    onChange={(e) => setRefundAmount(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </label>
+                <button
+                  onClick={() => {
+                    const full = fullAmountOf(refundPaymentId);
+                    if (full != null) setRefundAmount(String(full));
+                  }}
+                  className="mt-6 rounded-md border border-slate-300 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
+                >
+                  full
+                </button>
+              </div>
+              <input
+                value={refundReason}
+                onChange={(e) => setRefundReason(e.target.value)}
+                placeholder="reason (optional)"
+                className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => simulateRefund(null)}
+                  disabled={refunding || !refundPaymentId}
+                  className="rounded-md border border-emerald-300 bg-white px-2 py-2 text-xs font-medium text-emerald-700 disabled:opacity-40"
+                >
+                  refund (succeed)
+                </button>
+                <button
+                  onClick={() => simulateRefund(13)}
+                  disabled={refunding || !refundPaymentId}
+                  className="rounded-md border border-rose-300 bg-white px-2 py-2 text-xs font-medium text-rose-700 disabled:opacity-40"
+                >
+                  refund fail (.13)
+                </button>
+              </div>
+              <p className="mt-2 text-[10px] text-slate-400">
+                A failed refund fires the compensating transaction — watch reservation-released
+                appear in the timeline.
+              </p>
+            </>
+          )}
+          {error && <p className="mt-3 text-xs text-rose-600">{error}</p>}
+        </section>
 
         <section className="rounded-lg border border-slate-200 bg-white p-4">
           <h3 className="mb-2 text-sm font-semibold text-slate-700">Auto-run (operation + idle)</h3>
@@ -96,7 +298,8 @@ export function TimelinePage() {
             </label>
             <button
               onClick={() => setAutoRunning(!autoRunning)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium ${
+              disabled={!merchantId}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium disabled:opacity-40 ${
                 autoRunning ? "bg-rose-600 text-white" : "bg-slate-900 text-white"
               }`}
             >
@@ -107,8 +310,7 @@ export function TimelinePage() {
             </span>
           </div>
           <p className="mt-2 text-[10px] text-slate-400">
-            Creates a payment (random 5–100 EUR, merchant-simulator) each interval and follows its
-            live timeline. Stop before leaving the page.
+            Random 5–100 EUR payments for the selected merchant, one per interval.
           </p>
         </section>
 
@@ -144,11 +346,14 @@ export function TimelinePage() {
                       track
                     </button>
                     <button
-                      onClick={() => refundNow(h.id)}
-                      disabled={refunding === h.id}
-                      className="font-medium text-slate-700 underline-offset-2 hover:underline disabled:opacity-40"
+                      className="font-medium text-slate-700 underline-offset-2 hover:underline"
+                      onClick={() => {
+                        setMode("refund");
+                        setRefundPaymentId(h.id);
+                        setRefundAmount(String(h.amount));
+                      }}
                     >
-                      {refunding === h.id ? "refunding…" : "refund"}
+                      refund
                     </button>
                   </span>
                 </div>

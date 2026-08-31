@@ -75,6 +75,27 @@ psp-connector.provider.decline-rate / timeout-rate
 psp-connector.provider.forced-latency-ms / forced-outcome   # NONE | APPROVED | DECLINED | TIMEOUT
 ```
 
+## Forcing outcomes (amount endings)
+
+Sandbox convention borrowed from real PSP test suites - see
+[docs.stripe.com/testing](https://docs.stripe.com/testing) for Stripe's actual magic-number
+scheme (e.g. `10.05` declines a payment; refunds decline on amounts ending `.01`/`.05`/`.55`/
+`.65`/`.75`), which this mirrors. **Precedence: the amount ending is checked before
+`forced-outcome`/`refund-forced-outcome` and before the dice roll** - the request itself selects
+its own outcome, same as the real sandboxes; `forced-outcome`/`refund-forced-outcome` remain the
+cluster-wide override for drills that need every call to resolve the same way regardless of
+amount.
+
+| Path | Amount ends in | Outcome |
+|---|---|---|
+| Payment (`authorize`) | `.13` | `DECLINED` |
+| Payment (`authorize`) | `.66` | `TIMEOUT` (ADR-0006 category A - throws `ProviderTimeoutException`) |
+| Refund (`refund`) | `.13` | `DECLINED` -> `refunds.refund-failed.v1` |
+| Refund (`refund`) | `.01` / `.05` / `.55` / `.65` / `.75` | `DECLINED` -> `refunds.refund-failed.v1` (Stripe's real refund-decline endings) |
+
+Toggle: `psp-connector.provider.magic-amounts.enabled` (default `true`). Set to `false` to disable
+amount-ending overrides entirely and fall back to `forced-outcome`/`refund-forced-outcome`/dice.
+
 ## Integration tests (M19 "Plus")
 
 Two Testcontainers ITs, in `src/test/java/.../integration/`. They run under `verify`, never under
@@ -691,6 +712,9 @@ proofs below, mirroring the payment path's `psp-connector.provider.forced-outcom
 run. Both reuse the payment path's latency knobs (`min-latency-ms` / `max-latency-ms` /
 `forced-latency-ms`) - one simulated acquirer, one latency model
 (`adapters.out.http.SimulatedPaymentProviderAdapter#refund`).
+
+Per-request amount-ending overrides (`.13`, and Stripe's `.01`/`.05`/`.55`/`.65`/`.75`) are
+checked before this property - see "Forcing outcomes (amount endings)" near the top of this file.
 
 **Deliberately no refund timeout.** `RefundOutcome` is two-way (`COMPLETED` / `DECLINED`), unlike
 the payment path's three-way `ProviderOutcome`. The module brief's saga needs exactly the two

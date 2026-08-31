@@ -21,7 +21,7 @@ export function ClusterOpsPage() {
   });
 
   return (
-    <main className="mx-auto grid max-w-6xl gap-8 px-6 py-8 lg:grid-cols-2">
+    <main className="mx-auto grid max-w-[1500px] gap-8 px-6 py-8 lg:grid-cols-2">
       <section>
         <h2 className="mb-3 text-base font-semibold">
           Topics {topics.data && <span className="text-sm font-normal text-slate-400">({topics.data.length})</span>}

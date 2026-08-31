@@ -76,7 +76,7 @@ export function RefundTrackerPage() {
   }, [refundEvents]);
 
   return (
-    <main className="mx-auto grid max-w-6xl gap-8 px-6 py-8 lg:grid-cols-[360px_1fr]">
+    <main className="mx-auto grid max-w-[1500px] gap-8 px-6 py-8 lg:grid-cols-[360px_1fr]">
       <section className="rounded-lg border border-slate-200 bg-white p-6">
         <h2 className="mb-4 text-base font-semibold">Request a refund</h2>
         <p className="mb-4 text-xs text-slate-500">

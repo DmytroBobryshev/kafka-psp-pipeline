@@ -140,7 +140,7 @@ echo "==> Applying ACLs (deny-by-default is ON: anything not below is refused) .
 # is the "allowed" half of docs/PLAN.md's M14 proof ("payment-api may write payments.requested but
 # not ledger.entries - prove it by trying"): a denial demo is only honest if the permitted write
 # genuinely succeeds with the same credential. See README's "ACL denial proof".
-topic_acl payment-api literal  "merchants.merchant-config-changed.v1"  Write Describe
+topic_acl payment-api literal  "merchants.merchant-config-changed.v1"  Write Read Describe
 topic_acl payment-api literal  "psp.provider-status-query.v1"          Write Describe
 topic_acl payment-api literal  "payments.payment-requested.v1"         Write Describe
 topic_acl payment-api literal  "refunds.refund-requested.v1"           Write Describe
@@ -159,6 +159,9 @@ topic_acl payment-api literal  "payments.payment-status-changed.v1"    Read Desc
 # Fixed group id (payment-api.status-view.v1) - an ordinary work-sharing consumer, unlike the
 # per-instance replies group above. Prefixed anyway, matching this principal's usual convention.
 group_acl payment-api prefixed "payment-api.status-view."              Read Describe
+# Merchant read-model listener (adapters.in.kafka.MerchantConfigChangedListener) - a second,
+# independent consumer group on the topic this principal also produces to above.
+group_acl payment-api prefixed "payment-api.merchant-view."            Read Describe
 
 # --- psp-connector (:8086) -------------------------------------------------------------------
 # M17: also Write - adapters.out.kafka.KafkaDlqRepublisher republishes DLQ records back onto this

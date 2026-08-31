@@ -160,6 +160,13 @@ psp-connector:
     #   --psp-connector.provider.refund-forced-outcome=DECLINED    (compensation proof)
     refund-forced-outcome: NONE
 
+    # Sandbox convention (docs.stripe.com/testing): specific amount endings force a deterministic
+    # outcome, checked BEFORE forced-outcome/refund-forced-outcome above and BEFORE the dice roll -
+    # see README's "Forcing outcomes (amount endings)" section for the table. true (default) keeps
+    # this on; set to false for an experiment that needs the pre-amount-ending behaviour.
+    magic-amounts:
+      enabled: true
+
 # No datasource configured here on purpose - see application-docker-compose.yml. Running this
 # service without an active profile and without a database will fail to start
 # (spring-boot-starter-data-jpa requires a DataSource).

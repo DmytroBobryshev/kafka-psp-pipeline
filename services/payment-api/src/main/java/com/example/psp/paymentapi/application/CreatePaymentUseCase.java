@@ -1,6 +1,10 @@
 package com.example.psp.paymentapi.application;
 
+import com.example.psp.paymentapi.domain.exception.MerchantNotEligibleException;
+import com.example.psp.paymentapi.domain.model.MerchantStatus;
+import com.example.psp.paymentapi.domain.model.MerchantView;
 import com.example.psp.paymentapi.domain.model.Payment;
+import com.example.psp.paymentapi.domain.port.MerchantViewRepository;
 import com.example.psp.paymentapi.domain.port.PaymentEventPublisher;
 import com.example.psp.paymentapi.domain.port.PaymentRepository;
 import org.springframework.stereotype.Service;
@@ -18,11 +22,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class CreatePaymentUseCase {
 
     private final PaymentRepository paymentRepository;
+    private final MerchantViewRepository merchantViewRepository;
     private final PaymentEventPublisher paymentEventPublisher;
 
     public CreatePaymentUseCase(
-            PaymentRepository paymentRepository, PaymentEventPublisher paymentEventPublisher) {
+            PaymentRepository paymentRepository,
+            MerchantViewRepository merchantViewRepository,
+            PaymentEventPublisher paymentEventPublisher) {
         this.paymentRepository = paymentRepository;
+        this.merchantViewRepository = merchantViewRepository;
         this.paymentEventPublisher = paymentEventPublisher;
     }
 
@@ -47,6 +55,17 @@ public class CreatePaymentUseCase {
      */
     @Transactional
     public Payment execute(CreatePaymentCommand command) {
+        // The merchant-config listener applies a PUT ~1s after it commits, via its own Kafka
+        // round trip - a payment attempted inside that window correctly sees "unknown merchant",
+        // not a bug in either use case.
+        MerchantView merchant =
+                merchantViewRepository
+                        .findById(command.merchantId())
+                        .orElseThrow(() -> MerchantNotEligibleException.unknown(command.merchantId()));
+        if (merchant.status() != MerchantStatus.ACTIVE) {
+            throw MerchantNotEligibleException.notActive(command.merchantId(), merchant.status());
+        }
+
         Payment payment = Payment.create(command.merchantId(), command.amount());
         Payment saved = paymentRepository.save(payment);
         paymentEventPublisher.publishPaymentCreated(saved);

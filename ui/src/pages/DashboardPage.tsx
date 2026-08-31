@@ -40,8 +40,6 @@ export function DashboardPage() {
     enabled: !projected || trimmed.length > 0,
   });
 
-  // Operations overview: totals straight from the transactions panel's own API (size=1 per
-  // status - the total field is all we need), plus the latest transactions for one-click entry.
   const totals = useQuery({
     queryKey: ["op-totals", trimmed],
     queryFn: async () => {
@@ -67,7 +65,7 @@ export function DashboardPage() {
     (windows.error instanceof ApiError && windows.error.status === 503);
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-8">
+    <main className="mx-auto max-w-[1500px] px-6 py-8">
       <div className="mb-6 flex flex-wrap items-end gap-4">
         <label className="block">
           <span className="mb-1 block text-sm font-medium text-slate-700">Merchant ID (empty = all)</span>
@@ -125,7 +123,7 @@ export function DashboardPage() {
       <div className="mb-6 rounded-lg border border-slate-200 bg-white p-4">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-slate-700">Latest operations</h3>
-          <Link to="/payments" className="text-xs text-slate-500 underline-offset-2 hover:underline">
+          <Link to="/payments" search={{ merchantId: undefined, paymentId: undefined }} className="text-xs text-slate-500 underline-offset-2 hover:underline">
             open transactions panel →
           </Link>
         </div>
