@@ -1,4 +1,4 @@
-# payment-api (:8085) - 12 bindings, matching init-security.sh's "--- payment-api ---" block.
+# payment-api (:8085) - 16 bindings, matching init-security.sh's "--- payment-api ---" block.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -32,4 +32,14 @@ spec:
       # group.id is minted per instance (payment-api.replies.<host>.<suffix>, M12), so a literal
       # ACL would break on every restart. This is what prefixed resource patterns are for.
       - resource: { type: group, name: payment-api.replies., patternType: prefix }
+        operations: [Read, Describe]
+      # M19: the transactions panel's status-view listener - the same event ledger and
+      # webhook-notifier already read, consumed here too as a third independent local projection
+      # (ADR-0005).
+      - resource: { type: topic, name: payments.payment-status-changed.v1, patternType: literal }
+        operations: [Read, Describe]
+      # Fixed group id (payment-api.status-view.v1), unlike the per-instance replies group above -
+      # an ordinary work-sharing consumer, so a prefix grant here is just this service's usual
+      # "don't break on the next group-id suffix bump" convention, not a per-instance necessity.
+      - resource: { type: group, name: payment-api.status-view., patternType: prefix }
         operations: [Read, Describe]

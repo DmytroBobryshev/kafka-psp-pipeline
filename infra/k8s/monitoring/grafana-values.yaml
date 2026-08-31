@@ -1,0 +1,128 @@
+# Helm values for grafana/grafana. Chart version pinned in scripts/install-monitoring.sh
+# (GRAFANA_CHART_VERSION), same discipline as every other chart in this module.
+#
+# The whole point of this file is that NOTHING here is clicked in the UI. The datasource, the
+# dashboard provider and the two dashboards are all provisioned from disk at startup, exactly as
+# infra/compose/grafana/provisioning/ does it for the compose stack - the compose files and these
+# values are two renderings of the same three decisions.
+
+# emptyDir, deliberately - same reasoning as Prometheus's persistentVolume.enabled: false. There
+# is no hand-made state in this Grafana to lose: every dashboard comes from a ConfigMap built out
+# of git, and the datasource comes from this file. A restart rebuilds all of it. (The one thing
+# that IS lost is UI edits, which is a feature: a dashboard tweak that survives a restart is a
+# dashboard tweak that is not in git.)
+persistence:
+  enabled: false
+
+# The chart's default is 1 CPU / 1 GiB of limits, on a Docker VM already holding three brokers,
+# eight JVMs, Postgres, Mongo and Redis.
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi
+
+# No plugin downloads, no phone-home, no "check for updates" banner: this cluster is expected to
+# work with the laptop offline, and a Grafana that blocks startup on grafana.com is a Grafana
+# that fails at the worst moment.
+plugins: []
+grafana.ini:
+  analytics:
+    reporting_enabled: false
+    check_for_updates: false
+  news:
+    news_feed_enabled: false
+  auth.anonymous:
+    # Off. Access is through `kubectl port-forward`, which already requires a kubeconfig with
+    # rights on the monitoring namespace - but "already authenticated at the tunnel" is not a
+    # reason to leave the app itself open, and anonymous Viewer would silently become the way
+    # everyone reads it.
+    enabled: false
+
+# One replica; there is nothing to be highly available for.
+replicas: 1
+
+# The `helm test` pod (a busybox that curls /api/health) pulls another image for a check the
+# install script already does with `kubectl wait` + an API call.
+testFramework:
+  enabled: false
+
+# The dashboard/datasource sidecars watch every ConfigMap in the cluster for a label. Not needed:
+# the dashboards are mounted directly from a named ConfigMap below, which means the set of
+# dashboards changes only when someone runs the install script.
+sidecar:
+  dashboards:
+    enabled: false
+  datasources:
+    enabled: false
+
+# ---------------------------------------------------------------------------------------------
+# Datasource.
+# ---------------------------------------------------------------------------------------------
+# `uid: prometheus` IS LOAD-BEARING. Every panel in both dashboard JSONs refers to its datasource
+# as {"type": "prometheus", "uid": "prometheus"} - a fixed id, chosen back in M15 precisely so the
+# JSON would be portable between Grafana instances. Provisioning the datasource with any other
+# uid (including letting Grafana generate one) imports both dashboards successfully and renders
+# every panel as "Datasource prometheus was not found". That is the single most likely way this
+# install goes wrong, and it fails as a per-panel error rather than as an install failure.
+#
+# The URL is the in-cluster Service the prometheus chart creates: <release>-server in the same
+# namespace, on the servicePort set in prometheus-values.yaml.
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://prometheus-server.monitoring.svc.cluster.local:9090
+        isDefault: true
+        editable: true
+        jsonData:
+          # Matches server.global.scrape_interval; without it Grafana picks $__interval values
+          # finer than the data actually has and draws gaps between real points.
+          timeInterval: 10s
+
+# ---------------------------------------------------------------------------------------------
+# Dashboards.
+# ---------------------------------------------------------------------------------------------
+# The JSON is NOT duplicated into this directory. scripts/install-monitoring.sh builds the
+# ConfigMap `grafana-dashboards-kafka` straight out of infra/compose/grafana/dashboards/*.json
+# with `kubectl create configmap --from-file`, so the compose stack and the kind cluster show
+# byte-identical dashboards and there is exactly one copy of each to maintain. Nothing in those
+# files needed adapting: they were written against kafka-exporter's metric names
+# (kafka_consumergroup_lag, kafka_brokers, kafka_topic_partition_in_sync_replica, ...), and
+# Strimzi's `spec.kafkaExporter` runs that same exporter, so the queries match unchanged.
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: kafka
+        orgId: 1
+        folder: Kafka
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards/kafka
+
+dashboardsConfigMaps:
+  # key = the provider name above, value = the ConfigMap the install script builds.
+  kafka: grafana-dashboards-kafka
+
+# ---------------------------------------------------------------------------------------------
+# Admin credentials.
+# ---------------------------------------------------------------------------------------------
+# There is deliberately no `adminPassword:` in this file. The chart's behaviour when the key is
+# absent is to GENERATE a random password on first install and store it in the
+# `grafana` Secret in the monitoring namespace - so the password exists exactly once, in the
+# cluster, and never in git. The install script prints the command that reads it back:
+#
+#   kubectl get secret grafana -n monitoring -o jsonpath='{.data.admin-password}' | base64 -d
+#
+# Note the chart only generates it ONCE: `helm upgrade` keeps the existing Secret, so the
+# password survives re-running the installer. Deleting the Secret and upgrading rotates it.

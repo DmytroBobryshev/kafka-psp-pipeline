@@ -20,10 +20,18 @@ the run; nothing is reconstructed.
 offset reset to a timestamp, node cordoning — now done, measured in
 [`M19-failure-drills-part2.md`](M19-failure-drills-part2.md).
 
-**Not possible in this cluster:** anything requiring Grafana or Prometheus. They lived in the
-`infra/compose` stack, which is stopped; there is no metrics stack in the kind cluster. The lag
-drill from `docs/PLAN.md` is therefore deferred, and every number below comes from the Kafka
-protocol itself (AdminClient, `kafka-verifiable-*`, broker logs) rather than from a dashboard.
+**Not possible in this cluster — *at the time part 1 was written*:** anything requiring Grafana or
+Prometheus. They lived in the `infra/compose` stack, which is stopped; there was no metrics stack
+in the kind cluster. The lag drill from `docs/PLAN.md` was deferred on those grounds, and every
+number below comes from the Kafka protocol itself (AdminClient, `kafka-verifiable-*`, broker logs)
+rather than from a dashboard.
+
+**Since revisited — see [part 2, drill 10](M19-failure-drills-part2.md#drill-10--the-deferred-lag-drill-metrics-stack-on-kubernetes).**
+The gap was closed by turning on `Kafka.spec.kafka.metricsConfig` and `Kafka.spec.kafkaExporter`
+and installing Prometheus + Grafana into a `monitoring` namespace
+([`infra/k8s/README.md` → Monitoring](../infra/k8s/README.md#monitoring-prometheus--grafana-on-the-cluster-m19-revisit)),
+and the deferred drill was then run and measured. Everything below still stands as written: it
+was captured before that existed, from the protocol, which is why it needed no dashboard.
 
 ---
 

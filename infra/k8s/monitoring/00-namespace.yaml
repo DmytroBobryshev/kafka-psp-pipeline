@@ -1,0 +1,20 @@
+# Prometheus and Grafana get their own namespace, for the same reason `keda` and `strimzi-system`
+# exist: a monitoring stack is infrastructure that OBSERVES the workload, not part of it. Two
+# concrete consequences of that split on this cluster:
+#
+#   * Prometheus needs cluster-wide RBAC (it discovers targets by listing pods and endpoints).
+#     Granting that to a ServiceAccount living next to the SCRAM credentials in `kafka` would be
+#     handing read access on that namespace's Secrets to a component that has no business with
+#     them.
+#   * `kubectl delete ns monitoring` removes the whole stack and nothing else. Metrics are the
+#     most disposable thing in this cluster; they should be the easiest to throw away.
+#
+# It is NOT called `monitoring-system`: unlike `strimzi-system` there is no operator here, just
+# two deployments, and `monitoring` is the name every Helm chart's docs and every port-forward
+# snippet assumes.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: kafka-psp

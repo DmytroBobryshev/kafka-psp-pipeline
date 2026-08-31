@@ -328,7 +328,9 @@ W3C trace context propagated through Kafka headers (Micrometer Tracing + OTel), 
 - Unclean leader election on vs off - force it, observe divergence
 - Add partitions to a live topic - explain why keyed ordering just broke
 - `kafka-reassign-partitions` to move a partition across brokers
-- Consumer lag dashboards in Grafana; deliberately induce lag, watch recovery
+- Consumer lag dashboards in Grafana; deliberately induce lag, watch recovery — **done**, after a
+  detour to put a metrics stack on the kind cluster first:
+  [part 2, drill 10](M19-failure-drills-part2.md#drill-10---the-deferred-lag-drill-a-metrics-stack-on-kubernetes)
 - `RangeAssignor` vs `CooperativeStickyAssignor` - measure rebalance stop-the-world time under both
 - `group.instance.id` static membership - restart a pod and observe no rebalance
 - Retention: `retention.ms` vs `retention.bytes`, segment rolling, `log.segment.bytes`

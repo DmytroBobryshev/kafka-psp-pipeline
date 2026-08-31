@@ -1,0 +1,188 @@
+# Helm values for prometheus-community/prometheus. The chart version is pinned in
+# scripts/install-monitoring.sh (PROMETHEUS_CHART_VERSION) and must match the .tgz downloaded
+# there - the same discipline as strimzi/values.yaml and keda/values.yaml.
+#
+# WHY THIS CHART AND NOT kube-prometheus-stack. kube-prometheus-stack is the default answer, and
+# it is the wrong one here. It installs the Prometheus Operator plus ~10 CRDs, and then every
+# scrape target has to be expressed as a ServiceMonitor/PodMonitor CR rather than as a scrape
+# job. That indirection pays for itself when dozens of teams each own their own targets; this
+# cluster has exactly two Kafka targets and one self-scrape, so it would buy a controller, a
+# CRD-versioning dependency and ~1 GiB of Grafana/alerting/kube-state defaults in exchange for
+# nothing. Plain `prometheus` + plain `grafana` is two deployments, one ConfigMap of scrape
+# config, and a `helm uninstall` that actually removes everything.
+#
+# The cost of that choice, stated honestly: no ServiceMonitor means new targets are edited into
+# THIS file and require a `helm upgrade`, not a CR apply. On a cluster whose target list changes
+# once a milestone, that is the cheaper side of the trade.
+
+# ---------------------------------------------------------------------------------------------
+# Subcharts: all off.
+# ---------------------------------------------------------------------------------------------
+# Every one of these is a real component with a real purpose, and none of them has a consumer on
+# this cluster:
+#   alertmanager           - nothing here routes alerts; there are no alerting rules.
+#   kube-state-metrics     - Deployment/Pod object state. `kubectl get` is the interface used in
+#                            every drill in docs/; nothing plots it.
+#   prometheus-node-exporter - a DaemonSet on every kind node exporting host CPU/disk/network,
+#                            which on macOS are the Docker VM's numbers, not the laptop's, and
+#                            therefore actively misleading.
+#   prometheus-pushgateway - for batch jobs that exit before a scrape. The k6 Job could in
+#                            principle use it; it doesn't, and an unused pushgateway is a metric
+#                            source that silently keeps serving stale series forever.
+alertmanager:
+  enabled: false
+kube-state-metrics:
+  enabled: false
+prometheus-node-exporter:
+  enabled: false
+prometheus-pushgateway:
+  enabled: false
+
+server:
+  # 6 hours. The drill this stack exists for (docs/M19-failure-drills-part2.md, drill 10) is a
+  # ~10 minute window; 15d (the chart default) on an emptyDir would just be a bigger heap of
+  # series to lose on the next restart.
+  retention: 6h
+
+  persistentVolume:
+    # emptyDir. THIS IS DELIBERATE AND IT HAS A CONSEQUENCE: deleting the Prometheus pod deletes
+    # every sample it holds. That is acceptable because the metrics here are evidence for a drill
+    # that is captured to a document while it runs, not a system of record - and a 8 GiB PVC on a
+    # laptop with ~5 GiB free is not a trade this cluster can make. If a drill's numbers matter,
+    # they get queried out through the HTTP API and pasted into docs/, which is exactly what
+    # drill 10 does.
+    enabled: false
+
+  # Sized for three scrape targets. The chart ships no requests at all, which on a cluster this
+  # oversubscribed means the scheduler treats Prometheus as free and the kubelet evicts it first.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+
+  # The port-forward in scripts/install-monitoring.sh and in infra/k8s/README.md targets this.
+  service:
+    servicePort: 9090
+
+  global:
+    # 10s, matching infra/compose/prometheus/prometheus.yml. Lag during the drill moves in
+    # hundreds of records per second; a 60s default would render the rise as three points.
+    scrape_interval: 10s
+    evaluation_interval: 10s
+
+configmapReload:
+  prometheus:
+    resources:
+      requests: { cpu: 10m, memory: 24Mi }
+      limits: { cpu: 100m, memory: 64Mi }
+
+# ---------------------------------------------------------------------------------------------
+# Scrape targets.
+# ---------------------------------------------------------------------------------------------
+# The chart ships ten default jobs as a MAP, each with its own `enabled` flag, so switching one
+# off is a value and not a wholesale override of prometheus.yml. Everything cluster-infrastructural
+# is off for the same reason the subcharts are: nothing plots it, and each one is a per-node or
+# per-pod discovery loop running every 10s on a laptop.
+#
+# `kubernetes-pods` is off too, and that is worth a sentence because it is the annotation-driven
+# job (`prometheus.io/scrape: "true"`) most people reach for. Strimzi does not put those
+# annotations on the broker or exporter pods, so it would discover nothing; and leaving an
+# annotation-driven job enabled means the target list can change because someone edited an
+# unrelated Deployment. The two jobs that matter are written out below, explicitly, by label.
+scrapeConfigs:
+  prometheus:
+    enabled: true
+  kubernetes-api-servers:
+    enabled: false
+  kubernetes-nodes:
+    enabled: false
+  kubernetes-nodes-cadvisor:
+    enabled: false
+  kubernetes-service-endpoints:
+    enabled: false
+  kubernetes-service-endpoints-slow:
+    enabled: false
+  kubernetes-services:
+    enabled: false
+  kubernetes-pods:
+    enabled: false
+  kubernetes-pods-slow:
+    enabled: false
+  prometheus-pushgateway:
+    enabled: false
+
+  # ---- the brokers' JMX exporter agent -------------------------------------------------------
+  # Discovered as PODS, not through the bootstrap Service, on purpose: `psp-kafka-bootstrap` load
+  # balances, so scraping it would hit a random broker each time and produce one incoherent series
+  # instead of three. Pod discovery gives three targets whose `instance` label is the pod IP and
+  # whose `kafka_broker` label (relabelled below) is psp-combined-0/1/2 - which is what makes
+  # "broker 2 is the one with the growing request queue" a readable statement.
+  #
+  # The keep filter is on the port NAME (`tcp-prometheus`, which the operator only creates when
+  # `metricsConfig` is set) rather than on the number 9404. If metrics are ever turned off in the
+  # Kafka CR, this job goes to zero targets instead of scraping a port that now belongs to
+  # something else.
+  #
+  # It pairs the port name with `strimzi.io/name=psp-kafka` and NOT with the more obvious
+  # `strimzi.io/kind=Kafka`, which was the first attempt and was wrong: the operator stamps
+  # `kind=Kafka` on the kafka-exporter pod too, AND names its port `tcp-prometheus` as well, so
+  # the broker job silently swallowed the exporter and both jobs reported the same target. The
+  # `strimzi.io/name` label is per-component (`psp-kafka` vs `psp-kafka-exporter`) and is the one
+  # that actually separates them.
+  kafka-brokers:
+    enabled: true
+    job_name: kafka-brokers
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [kafka]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_strimzi_io_name,
+                        __meta_kubernetes_pod_container_port_name]
+        action: keep
+        regex: psp-kafka;tcp-prometheus
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: kafka_broker
+      - source_labels: [__meta_kubernetes_pod_label_strimzi_io_cluster]
+        target_label: cluster
+
+  # ---- kafka-exporter: consumer group lag ----------------------------------------------------
+  # A separate job from the brokers because it is a separate KIND of measurement, not just a
+  # separate pod - see 20-kafka.yaml's kafkaExporter comment. One replica, one target.
+  #
+  # Discovery is by POD and not by Service because Strimzi does not create a Service for the
+  # exporter at all (`kubectl get svc -n kafka` lists psp-kafka-bootstrap, -brokers,
+  # -external-bootstrap and the three per-broker cluster-ips; there is no psp-kafka-exporter).
+  # The exporter is reachable only at its pod IP on 9404. A static_configs target would therefore
+  # break the first time the pod is rescheduled.
+  #
+  # The `cluster` label is set by hand to `kafka-psp` so a series from this cluster is
+  # distinguishable from the compose stack's `kafka-psp-compose` (infra/compose/prometheus/
+  # prometheus.yml sets the same label) if both are ever loaded into the same Grafana.
+  kafka-exporter:
+    enabled: true
+    job_name: kafka-exporter
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [kafka]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_strimzi_io_name,
+                        __meta_kubernetes_pod_container_port_name]
+        action: keep
+        regex: psp-kafka-exporter;tcp-prometheus
+      - target_label: cluster
+        replacement: kafka-psp
+
+# NOT SCRAPED: the eight Spring services. They carry spring-boot-starter-actuator and expose
+# health,info,metrics - but NOT `prometheus`, because no service has `micrometer-registry-prometheus`
+# on its classpath (`grep -rl micrometer-registry-prometheus --include=pom.xml .` returns nothing).
+# Actuator's /actuator/metrics is a browsable JSON tree, one metric per request; it is not a
+# Prometheus exposition format and Prometheus cannot read it. Adding the registry dependency to
+# eight POMs and rebuilding eight images is a real change to the applications, out of scope for a
+# metrics-infrastructure milestone, so it is written down here rather than half-done: Kafka-side
+# metrics only. Business counters (ledger.entries.applied and friends) stay reachable exactly as
+# every drill in docs/ already reaches them, with `curl /actuator/metrics/<name>`.

@@ -36,6 +36,7 @@ infra/k8s/
 ├── kafka/
 │   ├── 00-namespace.yaml            kafka - cluster, topics, users, generated Secrets
 │   ├── 10-nodepool-combined.yaml    3 nodes, combined controller+broker, storage, sizing
+│   ├── 15-metrics-configmap.yaml    jmx_exporter rules for the brokers (M19 revisit)
 │   ├── 20-kafka.yaml                the Kafka CR: version, listeners, authz, broker config
 │   ├── topics/                      26 KafkaTopic CRs, generated from docs/diagrams/topic-map.md
 │   │   ├── 00-business.yaml         9  business topics
@@ -47,10 +48,15 @@ infra/k8s/
 │       ├── 00-admin.yaml            superuser, no ACLs
 │       ├── 10-payment-api.yaml      … 15-realtime-gateway.yaml   the six services
 │       └── 20-connect.yaml          … 23-kafka-exporter.yaml     the four platform principals
+├── monitoring/                      M19 revisit: Prometheus + Grafana (see "Monitoring" below)
+│   ├── 00-namespace.yaml            monitoring - the metrics stack's own namespace
+│   ├── prometheus-values.yaml       Helm values: subcharts off, 3 explicit scrape jobs
+│   └── grafana-values.yaml          Helm values: provisioned datasource + M15's dashboards
 └── scripts/
     ├── up.sh                        bring everything up from nothing, idempotent
     ├── down.sh                      workload | namespace | cluster
     ├── smoke-test.sh                produce + consume as real principals, plus the denial half
+    ├── install-monitoring.sh        pinned Prometheus + Grafana charts, dashboards from git
     └── port-forward.sh              reach the cluster from the host on localhost:29092-29094
 ```
 
@@ -1575,3 +1581,200 @@ not 12 on this machine.
   idempotency work), but a graceful `close()` on the consumer would make scale-in cheaper.
 - **KEDA's own metrics are not scraped.** `prometheus.*.enabled` is false because no Prometheus is
   deployed in this module - the same honest gap as the tracing sampler in `psp.commonConfig`.
+
+---
+
+## Monitoring: Prometheus + Grafana on the cluster (M19 revisit)
+
+M15 built a metrics stack — kafka-exporter, Prometheus, Grafana, two dashboards — and it lived
+entirely in `infra/compose`. When the platform moved to Kubernetes it did not come along, and
+part 1 of the failure drills had to open with a disclaimer: *"Not possible in this cluster:
+anything requiring Grafana or Prometheus."* The lag drill from `docs/PLAN.md` was deferred on
+those grounds. This section is that gap closed; the drill it unblocked is
+[part 2, drill 10](../../docs/M19-failure-drills-part2.md).
+
+Two things had to happen, and they are genuinely separate:
+
+| | Where the numbers come from | How it is turned on |
+|---|---|---|
+| **Broker metrics** — request rates, ISR, log size, controller state | JMX MBeans inside each broker JVM, translated by the Prometheus JMX Exporter javaagent on port 9404 | `Kafka.spec.kafka.metricsConfig` + `kafka/15-metrics-configmap.yaml` |
+| **Consumer group lag** — `kafka_consumergroup_lag` | *not* a broker MBean; a client that subtracts committed offset from end offset, per partition | `Kafka.spec.kafkaExporter` |
+
+The distinction matters because the obvious mental model ("turn on Kafka metrics, get lag") is
+wrong, and getting only the first half produces ~900 healthy broker series and zero lag.
+
+### Turning it on
+
+```bash
+kubectl apply -f infra/k8s/kafka/15-metrics-configmap.yaml   # rules first, or the CR dangles
+kubectl apply -f infra/k8s/kafka/20-kafka.yaml               # ROLLS ALL THREE BROKERS
+kubectl wait kafka/psp -n kafka --for=condition=Ready --timeout=15m
+
+infra/k8s/scripts/install-monitoring.sh                      # Prometheus + Grafana
+```
+
+**The second command restarts the Kafka cluster.** `metricsConfig` changes the broker pod spec
+(a javaagent and a container port), so the operator does a rolling restart, one pod at a time,
+waiting for ISR to recover in between. Measured on this cluster: **2 min 18 s** from apply to
+`Ready=True`, in the order `psp-combined-1 → -2 → -0`. There is no way to add broker metrics to a
+running Strimzi cluster without it — which is exactly why `install-monitoring.sh` does *not* do
+this step. A script that silently restarts Kafka as a side effect of "install monitoring" is one
+nobody can run during an incident; it only checks the step has happened and warns if it hasn't.
+
+### The charts, pinned
+
+| | |
+|---|---|
+| Prometheus | chart **29.27.0** (`prometheus-community/prometheus`, appVersion **v3.14.0**) |
+| Grafana | chart **10.5.15** (`grafana/grafana`, appVersion **12.3.1**) |
+| Namespace | `monitoring` |
+| Installed as | pinned `.tgz` from the GitHub release asset — same discipline as Strimzi and KEDA |
+
+**Why not `kube-prometheus-stack`.** It is the default answer and the wrong one here. It brings
+the Prometheus Operator plus ~10 CRDs, and then every target has to be expressed as a
+ServiceMonitor rather than as a scrape job. That indirection pays for itself when many teams own
+their own targets; this cluster has two Kafka targets and one self-scrape, so it would buy a
+controller, a CRD-versioning dependency and a pile of alerting/kube-state defaults in exchange
+for nothing. Plain `prometheus` + plain `grafana` is two Deployments and a `helm uninstall` that
+actually removes everything. The honest cost: adding a target means editing
+`monitoring/prometheus-values.yaml` and running `helm upgrade`, not applying a CR.
+
+Both charts are trimmed hard for a laptop — alertmanager, kube-state-metrics, node-exporter and
+pushgateway are all `enabled: false`, persistence is `emptyDir` on both, and eight of the ten
+default scrape jobs are switched off. Prometheus retention is **6 h**. Every one of those is
+commented with its reasoning in the values files.
+
+> The `grafana/grafana` chart prints `WARN this chart is deprecated` on install. It still
+> installs and runs; upstream's replacement path is the `grafana-operator`, which is the same
+> CRD-and-controller trade rejected above.
+
+### What Prometheus scrapes
+
+```
+$ kubectl port-forward -n monitoring svc/prometheus-server 9090:9090
+$ curl -s 'localhost:9090/api/v1/targets?state=active' | jq -r '.data.activeTargets[]
+    | "\(.labels.job) \(.scrapeUrl) \(.health)"'
+kafka-brokers    http://10.244.2.14:9404/metrics  up
+kafka-brokers    http://10.244.1.20:9404/metrics  up
+kafka-brokers    http://10.244.2.15:9404/metrics  up
+kafka-exporter   http://10.244.2.16:9404/metrics  up
+prometheus       http://localhost:9090/metrics    up
+```
+
+Both Kafka jobs use `role: pod` discovery, for two different reasons:
+
+- **The brokers** are scraped per pod and not through `psp-kafka-bootstrap`, because that Service
+  load-balances — scraping it would hit a random broker per scrape and produce one incoherent
+  series instead of three.
+- **The exporter** is scraped per pod because Strimzi does not create a Service for it at all.
+  `kubectl get svc -n kafka` lists `psp-kafka-bootstrap`, `-brokers`, `-external-bootstrap` and
+  the three per-broker cluster-ips; there is no `psp-kafka-exporter`. Its only address is the pod
+  IP.
+
+One trap, worth writing down because it fails *quietly*: the first version of the broker job
+selected on `strimzi.io/kind=Kafka` + port name `tcp-prometheus`. The operator stamps
+`kind=Kafka` on the **kafka-exporter** pod too, and names its port `tcp-prometheus` as well — so
+the broker job swallowed the exporter and both jobs reported the same target. The per-component
+label `strimzi.io/name` (`psp-kafka` vs `psp-kafka-exporter`) is the one that actually separates
+them.
+
+**Not scraped: the eight Spring services.** They all carry `spring-boot-starter-actuator` and
+expose `health,info,metrics`, but not `prometheus` — no service has `micrometer-registry-prometheus`
+on its classpath (`grep -rl micrometer-registry-prometheus --include=pom.xml .` returns nothing).
+`/actuator/metrics` is a browsable JSON tree, one metric per request; it is not the Prometheus
+exposition format and Prometheus cannot read it. Adding the registry to eight POMs and rebuilding
+eight images is a change to the *applications*, out of scope for a metrics-infrastructure
+milestone, so this is Kafka-side metrics only. Business counters (`ledger.entries.applied` and
+friends) stay reachable exactly as every drill in `docs/` already reaches them, with
+`curl /actuator/metrics/<name>`.
+
+### Grafana access
+
+```bash
+kubectl port-forward -n monitoring svc/grafana 3000:80
+open http://localhost:3000        # user: admin
+```
+
+The password is **generated once, at first install, and exists only in the cluster** — there is
+deliberately no `adminPassword:` in `grafana-values.yaml`, because a password in a values file is
+a password in git. Read it back with:
+
+```bash
+kubectl get secret grafana -n monitoring -o jsonpath='{.data.admin-password}' | base64 -d ; echo
+```
+
+`helm upgrade` keeps the existing Secret, so re-running the installer does not rotate it; deleting
+the Secret and upgrading does.
+
+### The dashboards are M15's, unchanged
+
+`install-monitoring.sh` builds the ConfigMap `grafana-dashboards-kafka` straight out of
+`infra/compose/grafana/dashboards/*.json`. **The JSON is not copied into `infra/k8s/`** — the
+compose stack and the kind cluster render byte-identical dashboards from one source, and there is
+one copy of each to maintain.
+
+Nothing in them needed adapting, which is worth stating because it was the main open question:
+M15's panels are written against **kafka-exporter's** metric names, and Strimzi's
+`spec.kafkaExporter` runs that same exporter, so every query matched on the first try. Verified
+against the live cluster rather than assumed:
+
+| Metric a panel asks for | Series present |
+|---|---|
+| `kafka_consumergroup_lag` | 474 |
+| `kafka_consumergroup_current_offset` | 474 |
+| `kafka_topic_partition_in_sync_replica` | 334 |
+| `kafka_topic_partition_leader` | 334 |
+| `kafka_topic_partitions` | 43 |
+| `kafka_brokers` | 1 |
+
+The one thing that *is* load-bearing is the datasource **uid**. Every panel refers to its
+datasource as `{"type": "prometheus", "uid": "prometheus"}` — a fixed id chosen in M15 precisely
+so the JSON would be portable — so `grafana-values.yaml` provisions the datasource with
+`uid: prometheus`. Any other uid (including a Grafana-generated one) imports both dashboards
+successfully and renders every panel as *"Datasource prometheus was not found"*. It fails per
+panel, not at install time, which is what makes it the most likely way this goes wrong.
+
+```
+$ curl -su admin:$PW localhost:3000/api/search?type=dash-db
+Kafka Cluster Overview (M2)   kafka-m2-overview        folder: Kafka
+Kafka Consumer Lag (M15)      kafka-m15-consumer-lag   folder: Kafka
+```
+
+### Reading lag from the API instead of the UI
+
+A dashboard is for watching; a drill needs numbers that can be pasted into a document. Prometheus's
+`query_range` gives the same series as a table:
+
+```bash
+kubectl port-forward -n monitoring svc/prometheus-server 9090:9090 &
+curl -s 'http://localhost:9090/api/v1/query_range' \
+  --data-urlencode 'query=sum(kafka_consumergroup_lag{consumergroup="psp-connector.v1",topic="payments.payment-requested.v1"})' \
+  --data-urlencode "start=$(date -v-20M +%s)" --data-urlencode "end=$(date +%s)" \
+  --data-urlencode 'step=10'
+```
+
+Two things to know about the values that come back:
+
+- **kafka-exporter reports `-1`, not `0`, for a partition a group has never committed to.** A
+  bare `sum(kafka_consumergroup_lag)` over an idle group therefore comes back *negative* (this
+  cluster idles at `-4`: `refunds.funds-reserved.v1` has partitions psp-connector has never
+  consumed). Always filter by `topic=`.
+- The series is a **10 s sample of a number that moves in hundreds per second**, which is why
+  `scrape_interval` is 10 s here and not the 60 s chart default.
+
+### Compromises
+
+- **No persistence, on either component.** Deleting the Prometheus pod deletes every sample. That
+  is acceptable because these metrics are evidence for a drill that gets captured to a document
+  while it runs, not a system of record — and an 8 GiB PVC on a laptop with ~5 GiB free is not a
+  trade this cluster can make.
+- **No alerting rules and no Alertmanager.** The stack answers "what is happening", never "wake
+  someone up". Every drill in `docs/` is a human watching on purpose.
+- **KEDA's own metrics are still not scraped.** `keda/values.yaml` sets
+  `prometheus.*.enabled: false` because those flags create `ServiceMonitor` CRs, whose CRD comes
+  from the Prometheus Operator — which this install deliberately does not have. KEDA's view of
+  lag is therefore observed through `kubectl get hpa`, not plotted. The scaler's number and the
+  exporter's number being independently derived is arguably a feature during a drill.
+- **No `kube-state-metrics`, so replica counts are not a metric.** Drill 10's replica trajectory
+  is sampled with `kubectl get deploy`, not queried; correlating it with the lag curve is done by
+  timestamp, by hand.

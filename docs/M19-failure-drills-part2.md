@@ -3,8 +3,9 @@
 Continuation of [part 1](M19-failure-drills.md), against the same cluster: `kafka-psp` /
 namespace `kafka`, Kafka 4.3.0, three combined-role nodes (`psp-combined-0..2`), KRaft,
 SASL/SCRAM-SHA-512, deny-by-default ACLs. The `kafka-drill` client pod was recreated with the
-two commands from part 1's [Test harness](M19-failure-drills.md#test-harness); everything below
-runs inside it.
+two commands from part 1's [Test harness](M19-failure-drills.md#test-harness); drills 6-9 run
+inside it. Drill 10 is the exception — it needs no Kafka client at all, only `kubectl`, `helm`
+and Prometheus's HTTP API from the host.
 
 Same rule as part 1: the deliverable is **measured evidence**. Every block quoted below is real
 output captured during the run; nothing is reconstructed.
@@ -15,6 +16,12 @@ output captured during the run; nothing is reconstructed.
 | 7 | `retention.bytes` vs `retention.ms`, segment rolling | asked for 5 MiB, kept 5.9 — size retention is a floor; asked for 60 s, got **everything deleted including the active segment**, 298 s late |
 | 8 | Offset reset to a timestamp | a datetime in a 20 s gap between batches landed the group on offset 1000, exactly — after two refusals worth knowing: active groups and the dry-run default |
 | 9 | Chaos: cordon + broker kill, ledger kill mid-transaction | nothing was lost — 6000/6000 through a broker outage, EOS held through a `--grace-period=0` kill, and the "3 lost payments" turned out to be **designed TIMEOUTs, a false alarm** — which nevertheless surfaced a real latent loss window in the non-transactional hop, since fixed and regression-proven |
+| 10 | The deferred lag drill, on a real metrics stack | peak lag **2,396** records, KEDA 1 → 3 → 5 → 6 in 72 s, drained at **2.3 rec/s** (0.38/pod × 6, exactly linear) — 3 min of load took **19 min** to clear, and the first dashboard render exposed **five orphaned consumer groups** carrying more lag than the service under test |
+
+Part 1 opened by saying a lag drill was **not possible in this cluster** — no Prometheus, no
+Grafana, nothing to plot. Drill 10 is that sentence retracted: the metrics stack now exists on
+Kubernetes ([`infra/k8s/README.md` → Monitoring](../infra/k8s/README.md#monitoring-prometheus--grafana-on-the-cluster-m19-revisit)),
+and the drill deferred in `docs/PLAN.md` has been run and measured.
 
 ---
 
@@ -768,3 +775,324 @@ from act B and the twelve from the regression run sit in `payment_attempts` with
 event, exactly as ADR-0006 intends. Part 2's drill topics
 (`drill.m19.{reassign,retention,tsreset,chaos}`) follow part 1's convention: kept as evidence,
 deletable with the same loop.
+
+---
+
+## Drill 10 - The deferred lag drill: a metrics stack on Kubernetes
+
+Part 1 could not run this one. Its preamble says so: *"Not possible in this cluster: anything
+requiring Grafana or Prometheus. They lived in the `infra/compose` stack, which is stopped; there
+is no metrics stack in the kind cluster."* Nine drills were measured out of the Kafka protocol
+instead — AdminClient, `kafka-verifiable-*`, broker logs — and the one drill from `docs/PLAN.md`
+that genuinely needs a time series ("deliberately induce lag, watch it recover on a dashboard")
+was deferred.
+
+This drill closes that. It is two pieces of work that only look like one: **building the metrics
+stack**, which is infrastructure and has its own failure modes, and then **running the lag drill
+against it**, which is the drill PLAN.md actually asked for.
+
+### Hypothesis
+
+About the stack:
+
+1. Turning on Kafka metrics gives you consumer lag. **(This is wrong, and it is the interesting
+   part.)** Lag is not a broker MBean — a broker knows every partition's end offset and holds
+   every group's committed offset in `__consumer_offsets`, but it never subtracts them. So
+   `Kafka.spec.kafka.metricsConfig` alone should produce a large, healthy pile of broker series
+   and **zero** lag series; `Kafka.spec.kafkaExporter` is a separate switch for a separate
+   process.
+2. M15's dashboards should import unchanged. They were written against kafka-exporter's metric
+   names, and Strimzi's `kafkaExporter` runs that same exporter.
+
+About the drill:
+
+3. `payments.payment-requested.v1` has 12 partitions; psp-connector's per-pod throughput is
+   ~0.39 rec/s (M18 phase 3). Three k6 pods at 5 req/s = 15 req/s in, which no replica count
+   under the `maxReplicaCount: 6` ceiling can match — so lag should rise for the whole load
+   window, KEDA should walk the deployment 1 → 6, and the backlog should then drain at a rate
+   that is **linear in replicas** (6 pods over 12 partitions is still below the one-consumer-per-
+   partition ceiling, so nothing should be idle).
+4. Scale-in should lag the drain: KEDA's `cooldownPeriod` is 60 s but the HPA's own
+   `scaleDown.stabilizationWindowSeconds` is what actually governs, and the HPA's arithmetic is
+   `ceil(lag / lagThreshold)` — with `lagThreshold: 25`, replicas should not start coming down
+   until total lag is under 150.
+
+### Method
+
+**Part A — the stack.** Two `kubectl apply`s and one script, in this order:
+
+```bash
+kubectl apply -f infra/k8s/kafka/15-metrics-configmap.yaml    # jmx_exporter rules
+kubectl apply -f infra/k8s/kafka/20-kafka.yaml                # metricsConfig + kafkaExporter
+infra/k8s/scripts/install-monitoring.sh                       # Prometheus + Grafana
+```
+
+The Kafka CR gains exactly two blocks — one on `spec.kafka`, one at the top level:
+
+```yaml
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef: { name: kafka-metrics, key: kafka-metrics-config.yml }
+...
+  kafkaExporter:
+    topicRegex: ".*"
+    groupRegex: ".*"
+```
+
+Prometheus (chart 29.27.0, app v3.14.0) and Grafana (chart 10.5.15, app 12.3.1) go into a
+`monitoring` namespace as plain charts, not `kube-prometheus-stack` — reasoning and every trimmed
+value in [`infra/k8s/README.md` → Monitoring](../infra/k8s/README.md#monitoring-prometheus--grafana-on-the-cluster-m19-revisit).
+
+**Part B — the drill.** The existing M18 load generator, at the same shape as M18's KEDA proof:
+
+```bash
+infra/k8s/scripts/load-test.sh --pods 3 --duration 3m     # 3 pods x 5 req/s = 15 req/s
+```
+
+Three pods rather than a higher rate because api-gateway rate-limits at 5/s **per client IP**
+(M16), so load scales by source, not by throughput knob. Two independent samplers run alongside:
+`kubectl get deploy psp-connector` every 5 s for the replica trajectory, and — the thing that was
+impossible in part 1 — Prometheus's own `query_range` API for the lag series:
+
+```bash
+kubectl port-forward -n monitoring svc/prometheus-server 9090:9090 &
+curl -s http://localhost:9090/api/v1/query_range \
+  --data-urlencode 'query=sum(kafka_consumergroup_lag{consumergroup="psp-connector.v1",topic="payments.payment-requested.v1"})' \
+  --data-urlencode "start=$START" --data-urlencode "end=$END" --data-urlencode 'step=10'
+```
+
+The `topic=` filter is not cosmetic. kafka-exporter reports **`-1`**, not 0, for a partition a
+group has never committed to, so a bare `sum(kafka_consumergroup_lag{consumergroup="psp-connector.v1"})`
+on an idle cluster returns **`-4`** — psp-connector has never consumed four partitions of
+`refunds.funds-reserved.v1`.
+
+### Measured output — Part A, the stack
+
+The rolling restart, which is the price of `metricsConfig` and cannot be avoided:
+
+```
+22:13:07  kubectl apply -f kafka/20-kafka.yaml
+22:13:11  psp-combined-1  recreated
+22:13:46  psp-combined-2  recreated
+22:14:21  psp-combined-0  recreated
+22:14:56  all three 1/1 Running
+22:15:25  Kafka psp  Ready=True
+```
+
+**2 min 18 s**, one broker at a time, ISR recovering in between — considerably faster than the
+5–10 min a three-broker roll is usually budgeted at, because these brokers hold ~1.5 GiB of log
+between them, not terabytes. The kafka-exporter Deployment appeared at **22:14:56**, *after* the
+last broker: Strimzi rolls the cluster first and only then reconciles the auxiliary components.
+
+Hypothesis 1 confirmed, and it is a bigger split than it sounds. The JMX agent on the three
+brokers produces **30,396 series**; not one of them is lag:
+
+```
+$ curl -s 'localhost:9090/api/v1/query?query=count({job="kafka-brokers"})'      -> 30396
+$ curl -s 'localhost:9090/api/v1/query?query=count(kafka_consumergroup_lag)'    ->   474
+```
+
+The 474 come entirely from the fourth target, the exporter. All five targets up:
+
+```
+kafka-brokers    http://10.244.2.14:9404/metrics  up
+kafka-brokers    http://10.244.1.20:9404/metrics  up
+kafka-brokers    http://10.244.2.15:9404/metrics  up
+kafka-exporter   http://10.244.2.16:9404/metrics  up
+prometheus       http://localhost:9090/metrics    up
+```
+
+Getting to four healthy targets took one wrong turn worth recording, because it fails *silently*.
+The broker scrape job first selected on `strimzi.io/kind=Kafka` + port name `tcp-prometheus` —
+which reads like "the Kafka pods". The operator stamps `kind=Kafka` on the **kafka-exporter** pod
+too, and names its metrics port `tcp-prometheus` as well, so the broker job swallowed the exporter
+and two jobs reported one target with no error anywhere. `strimzi.io/name` is the per-component
+label (`psp-kafka` vs `psp-kafka-exporter`) and is what actually separates them.
+
+Hypothesis 2 confirmed: both M15 dashboards imported with **zero query changes**. Every metric a
+panel asks for exists, verified against the live cluster rather than assumed:
+
+| Panel's query | Series |
+|---|---|
+| `kafka_consumergroup_lag` | 474 |
+| `kafka_consumergroup_current_offset` | 474 |
+| `kafka_topic_partition_in_sync_replica` | 334 |
+| `kafka_topic_partition_leader` | 334 |
+| `kafka_topic_partitions` | 43 |
+| `kafka_brokers` | **3** |
+
+The one thing that did need adapting was not in the JSON: the **datasource uid**. Every panel
+refers to `{"type": "prometheus", "uid": "prometheus"}`, a fixed id chosen in M15 for portability,
+so Grafana's datasource is provisioned with `uid: prometheus` explicitly. Any other uid imports
+both dashboards successfully and renders every panel as *"Datasource prometheus was not found"* —
+a per-panel error, not an install failure.
+
+### Measured output — Part B, the lag drill
+
+k6 ran 22:19:56 → 22:23:00. Three pods, `constant-arrival-rate`, no errors anywhere:
+
+```
+201 Created (real payments):  901   +   901   +   900   =  2702
+429 rate-limited by gateway:    0        0       0
+5xx server errors:              0        0       0
+gateway p95 (ms):            12.5
+```
+
+The lag series, straight out of Prometheus (`sum(kafka_consumergroup_lag{consumergroup=
+"psp-connector.v1", topic="payments.payment-requested.v1"})`, 10 s step), against the replica
+count sampled independently with `kubectl get deploy psp-connector`:
+
+```
+  time      lag   spec/ready   event
+22:19:56      0      1/1        k6 starts
+22:20:10      1      1/1        first record visible - a full 14 s after the load began
+22:20:12      1      3/1        KEDA scales 1 -> 3
+22:20:22    283      3/3
+22:20:42    568      5/3        1 -> 3 -> 5, two steps in 30 s
+22:20:52    708      5/5
+22:21:08    850      6/5        ceiling reached, 72 s after the first record
+22:21:23   1115      6/6
+   ... lag keeps rising for another 2 minutes, at max replicas ...
+22:23:00   2275      6/6        k6 stops
+22:23:10   2396      6/6        PEAK
+```
+
+**Peak lag 2,396 records at 22:23:10**, ten seconds *after* the load stopped — the backlog kept
+growing past the end of the load because the in-flight requests were still landing.
+
+Then the drain, which is the half worth measuring. Sampling the committed offset alongside the lag
+turns the curve into a throughput number:
+
+```
+  time      lag   committed   Δcommitted/10s   spec/ready
+22:23:10   2396      3507          -            6/6
+22:25:10   2133      3780         24            6/6
+22:29:10   1584      4329         23            6/6
+22:33:10   1042      4871         24            6/6
+22:37:10    492      5421         28            6/6
+22:39:10    219      5694         25            6/6
+22:40:10     89      5824         25            6/6
+22:40:40     47      5866          -            5/5   <- scale-in begins
+22:41:10     26      5887          7            4/4
+22:41:41     10        -           -            3/3
+22:42:10      0      5913          1            2/2
+22:42:42      0      5913          0            1/1   <- back to baseline
+```
+
+**Time to drain: 19 min 0 s** (22:23:10 → 22:42:10) for a backlog built in 3 min 4 s. The
+build-to-drain ratio is **1 : 6.2**.
+
+The steady `Δcommitted` of **23–25 records per 10 s = ~2.3 rec/s** across six replicas is
+**0.38 rec/s per pod** — M18 phase 3 measured per-pod throughput at ~0.39 rec/s from a completely
+different direction (timing a single pod). Six pods delivered six times one pod, with no
+sub-linearity: 6 consumers over 12 partitions is still under the one-consumer-per-partition
+ceiling, so nothing was idle and nothing was contended. Hypothesis 3 confirmed, including the
+prediction that the load could not be matched — 15 rec/s in against 2.3 rec/s out is why lag rose
+for the entire window even at `maxReplicaCount`.
+
+Hypothesis 4 confirmed as well, and the arithmetic is visible in the table. The HPA's target is
+`25` lag per replica, so its recommendation is `ceil(lag / 25)`; six replicas are justified while
+lag ≥ 150. Lag crossed 150 between 22:39:10 and 22:40:10, and the **first scale-in came at
+22:40:40** — the delay is the HPA's `scaleDown.stabilizationWindowSeconds: 60`, which makes it
+take the *maximum* recommendation over the trailing minute rather than the current one. From there
+it stepped down one replica roughly every 30 s: **6 → 5 → 4 → 3 → 2 → 1 in 2 min 2 s.**
+
+Nothing was lost across all of it — the sum the drill exists to check:
+
+```
+k6 201 Created                                   2702
+committed offset delta (3211 -> 5913)            2702
+final lag                                           0
+```
+
+And the accidental finding, visible the moment the lag dashboard rendered for the first time.
+The top panel — `sum(kafka_consumergroup_lag)` across every group — was not dominated by
+psp-connector at all:
+
+```
+realtime-gateway.realtime-gateway-86f49fcbff-ndffv.42b4b03f-…   3337
+realtime-gateway.realtime-gateway-86f49fcbff-ndffv.9c203f6d-…   3101
+realtime-gateway.realtime-gateway-6479bb56f8-fx9pk.c1a9ee68-…   2812
+realtime-gateway.realtime-gateway-5969dc595b-rqmlg.7faf10f2-…   2812
+realtime-gateway.realtime-gateway-5969dc595b-rqmlg.fcd66b15-…   2812
+psp-connector.v1                                                2271
+connect-mongo-audit-sink                                         225
+analytics-streams.v1                                              55
+realtime-gateway.realtime-gateway-9b9d4ddbd-pcj2b.f5cff326-…       1
+```
+
+Only `9b9d4ddbd-pcj2b` is a running pod. The other five groups belong to realtime-gateway
+instances that were deleted on earlier redeploys and are never coming back — their group ids
+embed the pod name by design (M12: every gateway instance needs *every* message, so every
+instance is its own consumer group), which means each redeploy strands one forever. They are not
+broken and they harm nothing, but they carry more "lag" than the service under test, and any
+alert on total cluster lag would fire on them permanently.
+
+### What it means
+
+- **"Kafka metrics" and "consumer lag" are two different products.** This is the one line worth
+  taking away from part A. `metricsConfig` gave 30,396 series and answered nothing about the
+  backlog; `kafkaExporter` gave 474 and answered the whole drill. The reason is structural, not a
+  Strimzi quirk: lag is a *subtraction across two pieces of cluster state* (a partition's end
+  offset, and a group's committed offset in `__consumer_offsets`) and no single broker MBean
+  spans both. Anyone who turns on JMX metrics, sees a thousand `kafka_server_*` series and
+  concludes monitoring is done has monitored everything except the number that pages you.
+- **The dashboard's headline panel was the least trustworthy thing on it.** M15's
+  `sum(kafka_consumergroup_lag)` over all groups is the first panel a human looks at, and on this
+  cluster it is wrong twice over — it counts `-1` sentinels for never-consumed partitions, and it
+  is dominated by five abandoned groups belonging to pods that no longer exist. The queries that
+  survived contact with a real cluster were the *specific* ones, filtered by group and topic. A
+  panel that aggregates over a dimension nobody is curating is a panel that measures the mess, not
+  the system.
+- **A metric nobody reads decays silently.** Those orphaned `realtime-gateway.<pod>.<uuid>` groups
+  have been accumulating since M12 — each redeploy of realtime-gateway leaves one behind, because
+  the group id embeds the pod name (the deliberate M12 design: every gateway instance needs *every*
+  message, so every instance is its own group). Nothing was broken by it, and nothing surfaced it,
+  until a dashboard existed to make it visible. That is the actual argument for the metrics stack,
+  independent of the drill: it did not answer a question anyone had asked.
+- **Turning on metrics restarts Kafka.** 2 min 18 s here, and it is a rolling restart of the
+  data plane triggered by an observability change. On a real cluster that is a change-window
+  conversation, and it is a strong argument for enabling `metricsConfig` on day one rather than
+  the day something is wrong — which is precisely the position this cluster was in when part 1
+  was written.
+- **Lag is a leading indicator; replica count is a lagging one.** The two series tell the same
+  story ~15 s apart, and the offset is the pipeline: kafka-exporter's own poll, Prometheus's 10 s
+  scrape, KEDA's 15 s `pollingInterval`, then the HPA's sync. Every one of those is a delay
+  between *the backlog growing* and *anything reacting*. `activationLagThreshold: 5` means the
+  first pod arrives fast, but "fast" here still means the backlog was already ~140 records deep.
+- **The drain is the honest half of the drill.** Building lag is easy; the useful measurement is
+  what it costs to get rid of it. This is the asymmetry every lag-based autoscaler has to be sized
+  against: three minutes of a load the consumer cannot match takes many times three minutes to
+  clear, because the drain rate is not the load rate — it is the consumer's throughput minus zero.
+  A `maxReplicaCount` chosen so that peak throughput is *below* peak load is a choice to accumulate
+  a backlog, and it should be made deliberately, with this ratio in hand.
+
+### Leftovers
+
+Unlike drills 6–9, this one leaves things **running on purpose**. The `monitoring` namespace stays
+up — Prometheus (`prometheus-server`) and Grafana (`grafana`), two pods, no PVCs — because the
+whole point was that the next drill should not have to open with part 1's disclaimer. The Kafka CR
+keeps `metricsConfig` and `kafkaExporter`, so `psp-kafka-exporter` is now a permanent fourth
+workload in the `kafka` namespace.
+
+```bash
+kubectl port-forward -n monitoring svc/prometheus-server 9090:9090   # /targets, /graph
+kubectl port-forward -n monitoring svc/grafana 3000:80               # folder "Kafka", user admin
+kubectl get secret grafana -n monitoring -o jsonpath='{.data.admin-password}' | base64 -d ; echo
+```
+
+The Grafana admin password is generated once at install and lives only in that Secret — there is
+no `adminPassword:` in `infra/k8s/monitoring/grafana-values.yaml`, deliberately.
+
+No drill topic this time: the drill ran against the real pipeline
+(`payments.payment-requested.v1`, group `psp-connector.v1`) rather than a `drill.m19.*` topic, so
+the only residue is the payments themselves, which are indistinguishable from any other load-test
+run. psp-connector is back at 1 replica. Neither did this drill use the `kafka-drill` client pod
+the rest of part 2 runs inside — everything here is `kubectl`, `helm` and Prometheus's HTTP API
+from the host. (That pod had failed on its own, `Exit Code: 255`, during an unrelated Docker
+restart before this drill started; it was removed rather than left `Failed` in `kubectl get pods`,
+and part 1's [Test harness](M19-failure-drills.md#test-harness) recreates it in two commands.)
+
+Retention is **6 h**, on `emptyDir`. The series quoted above are gone by now; that is why they are
+in this document.

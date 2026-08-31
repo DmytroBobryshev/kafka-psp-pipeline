@@ -84,6 +84,11 @@ helm upgrade --install strimzi-cluster-operator "${CHART_TGZ}" \
 # ---------------------------------------------------------------------------------------------
 say "Kafka cluster '${KAFKA_CLUSTER}' (3 combined broker+controller nodes, KRaft)"
 kubectl apply -f "${K8S_DIR}/kafka/10-nodepool-combined.yaml"
+# The jmx_exporter rules the Kafka CR's `metricsConfig` points at. BEFORE the CR: a metricsConfig
+# naming a ConfigMap that does not exist leaves the operator reconciling forever. On an existing
+# cluster this is free, but changing it (or the CR's metricsConfig block) rolls all three brokers
+# - see scripts/install-monitoring.sh.
+kubectl apply -f "${K8S_DIR}/kafka/15-metrics-configmap.yaml"
 kubectl apply -f "${K8S_DIR}/kafka/20-kafka.yaml"
 
 say "waiting for the Kafka CR to reach Ready (first run pulls ~500 MB of images)"

@@ -35,6 +35,13 @@ case "$MODE" in
     kubectl delete namespace keda --ignore-not-found
     helm uninstall strimzi-cluster-operator -n strimzi-system 2>/dev/null || true
     kubectl delete namespace strimzi-system --ignore-not-found
+    # Monitoring last, and it is genuinely just two Helm releases: no CRDs, no finalizers, no PVCs
+    # (both charts run on emptyDir - see monitoring/prometheus-values.yaml). That "helm uninstall
+    # actually removes everything" property is the main reason this module uses the plain charts
+    # rather than kube-prometheus-stack.
+    helm uninstall grafana -n monitoring 2>/dev/null || true
+    helm uninstall prometheus -n monitoring 2>/dev/null || true
+    kubectl delete namespace monitoring --ignore-not-found
     # Helm does NOT remove CRDs it installed. Left in place on purpose - deleting a CRD deletes
     # every CR of that kind cluster-wide, which is not something a teardown script should do
     # quietly. Remove by hand if you mean it:

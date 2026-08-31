@@ -102,6 +102,28 @@ spec:
     # rejects it ("strict decoding error: unknown field"). Pod sizing lives in
     # 10-nodepool-combined.yaml.
 
+    # ------------------------------------------------------------------------------------------
+    # METRICS (M19 revisit). Turning this on makes the operator inject the Prometheus JMX
+    # Exporter as a javaagent into each broker JVM and open container port 9404 named
+    # `tcp-prometheus`; the rules that translate JMX MBeans into metric names live in
+    # 15-metrics-configmap.yaml, which MUST be applied first.
+    #
+    # THE COST, stated plainly: adding, removing or editing this block is a spec change to the
+    # broker pods, so the operator does a ROLLING RESTART of psp-combined-0..2, one at a time,
+    # waiting for ISR to catch up in between. On this cluster that is ~6 minutes. It is not a
+    # hot-reload; there is no way to add broker metrics to a running Strimzi cluster without it.
+    #
+    # WHY JMX AND NOT THE NEWER OPTION. Strimzi 1.1 also accepts `type: strimziMetricsReporter`,
+    # which skips the agent and has the broker emit Prometheus format directly - cheaper, but its
+    # metric names are its own, and every Kafka dashboard in this repo (and everything published
+    # for Strimzi) is written against the jmx_exporter naming. Compatibility wins here.
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-metrics
+          key: kafka-metrics-config.yml
+
     # Give a cold JVM room to open every segment before the kubelet declares it dead. The default
     # initialDelay of 15s is tight on a laptop where three brokers start simultaneously.
     livenessProbe:
@@ -144,3 +166,38 @@ spec:
         # Both containers are small JVMs; without this they inherit the node's whole page cache
         # accounting on a memory-tight VM.
         terminationGracePeriodSeconds: 30
+
+  # --------------------------------------------------------------------------------------------
+  # KAFKA EXPORTER (M19 revisit) - consumer-group lag, and the only source of it.
+  #
+  # WHY IT IS A SEPARATE COMPONENT FROM metricsConfig ABOVE. Lag is not a broker MBean. A broker
+  # knows the log-end offset of every partition it leads, and the __consumer_offsets record for
+  # every committed group offset, but it never subtracts one from the other - lag is a client-side
+  # computation over two different pieces of cluster state. kafka-exporter is that client: a small
+  # Go process that polls ListOffsets + OffsetFetch for every topic and group and exports
+  # `kafka_consumergroup_lag`. Without this block the drill in docs/M19-failure-drills-part2.md
+  # has nothing to plot; the JMX agent above would happily export 900 broker series and not one of
+  # them would be the number the drill is about.
+  #
+  # NO KafkaUser, DELIBERATELY. Everything else on this cluster authenticates with SASL/SCRAM and
+  # carries explicit ACLs (M14) - users/23-kafka-exporter.yaml is exactly that principal, kept for
+  # the compose stack and for a standalone exporter. The operator-run exporter does not use it:
+  # Strimzi connects it to the internal replication listener on 9091 with a certificate it mints,
+  # and adds that mTLS principal to super.users itself. Deny-by-default is not weakened; the
+  # exporter simply is not one of our principals.
+  #
+  # `.*` FOR BOTH REGEXES. The chart defaults exclude everything (`topicRegex: ""` matches
+  # nothing), which produces a healthy pod exporting zero lag series - a failure that looks
+  # exactly like "there is no lag". Opening it to every topic and every group costs a few hundred
+  # series on a cluster this size and makes the exporter's blind spots impossible to confuse with
+  # a drained backlog.
+  kafkaExporter:
+    topicRegex: ".*"
+    groupRegex: ".*"
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 25m
+      limits:
+        memory: 192Mi
+        cpu: 250m
