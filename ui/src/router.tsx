@@ -5,6 +5,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  redirect,
 } from "@tanstack/react-router";
 import { TimelinePage } from "./pages/TimelinePage";
 import { PaymentsPage } from "./pages/PaymentsPage";
@@ -30,14 +31,13 @@ const NAV_GROUPS = [
   {
     label: "Operations",
     items: [
-      { to: "/payments", label: "Payments" },
-      { to: "/refunds", label: "Refunds" },
+      { to: "/payments", label: "Transactions" },
       { to: "/dashboard", label: "Dashboard" },
     ],
   },
   {
     label: "Simulation",
-    items: [{ to: "/", label: "Payment simulator", exact: true }],
+    items: [{ to: "/", label: "Simulator", exact: true }],
   },
   {
     label: "Configuration",
@@ -103,6 +103,10 @@ const routes = [
   createRoute({
     getParentRoute: () => rootRoute,
     path: "/refunds",
+    // The standalone refunds page is merged into the transactions panel; old links land there.
+    beforeLoad: ({ search }) => {
+      throw redirect({ to: "/payments", search: search as never });
+    },
     component: RefundTrackerPage,
     // Deep-linkable: the timeline's "refund →" action (and anything else) prefills the payment.
     validateSearch: (search: Record<string, unknown>) => ({

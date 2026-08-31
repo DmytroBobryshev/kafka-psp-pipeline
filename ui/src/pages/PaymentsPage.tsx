@@ -1,13 +1,12 @@
 import { useState } from "react";
-import { Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getPaymentRefunds,
   getProviderStatus,
   getWebhookDeliveries,
   listPayments,
 } from "../api/paymentsApi";
-import { getRefundState } from "../api/refundApi";
+import { getRefundState, requestRefund } from "../api/refundApi";
 import { useCopy } from "../lib/clipboard";
 import type { RefundResponse } from "../api/types";
 import type { PaymentResponse } from "../api/types";
@@ -22,7 +21,7 @@ const STATUS_BADGE: Record<string, string> = {
 };
 
 /**
- * The transactions panel: every payment the platform has ever taken, straight from payment-api's
+ * The single transactions panel (payments + their refunds + deliveries in one place): every payment the platform has ever taken, straight from payment-api's
  * Postgres (now kept in sync by its payment-status-changed listener), filterable by merchant and
  * status. Selecting a row opens the full detail: fields, refund history, on-demand provider
  * status (M12 request-reply over Kafka) and webhook delivery attempts (M8's Mongo log).
@@ -175,27 +174,94 @@ function RefundRow({ refund }: { refund: RefundResponse }) {
             />
           )}
           {ledger.error && <p className="pl-3 text-slate-400">ledger has no saga row yet</p>}
-          {refund.reason && <p className="mt-1 pl-3 text-slate-500">reason: {refund.reason}</p>}
+          {ledger.data && (
+            <div className="mt-2 rounded border border-slate-100 bg-slate-50 p-2">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                Ledger's view — GET /api/refunds/{"{id}"}, full response
+              </div>
+              <KeyValue data={ledger.data as unknown as Record<string, unknown>} />
+            </div>
+          )}
         </div>
       )}
     </li>
   );
 }
 
+/** The refund form, IN the panel - one place for everything, per the user's redesign ask. */
+function InlineRefundForm({ paymentId, onDone }: { paymentId: string; onDone: () => void }) {
+  const queryClient = useQueryClient();
+  const [amount, setAmount] = useState("10.00");
+  const [currency, setCurrency] = useState("EUR");
+  const [reason, setReason] = useState("");
+
+  const refund = useMutation({
+    mutationFn: () =>
+      requestRefund(paymentId, { amount: Number(amount), currency, reason: reason.trim() || undefined }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["payment-refunds", paymentId] });
+      onDone();
+    },
+  });
+
+  return (
+    <div className="rounded border border-slate-200 bg-slate-50 p-3">
+      <div className="mb-2 grid grid-cols-[1fr_90px] gap-2">
+        <input
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          className="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+          placeholder="amount"
+        />
+        <select
+          value={currency}
+          onChange={(e) => setCurrency(e.target.value)}
+          className="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+        >
+          <option>EUR</option>
+          <option>USD</option>
+          <option>GBP</option>
+        </select>
+      </div>
+      <input
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        className="mb-2 w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+        placeholder="reason (optional)"
+      />
+      <button
+        onClick={() => refund.mutate()}
+        disabled={refund.isPending}
+        className="w-full rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+      >
+        {refund.isPending ? "Submitting…" : "POST refund"}
+      </button>
+      {refund.error && <p className="mt-2 text-xs text-rose-600">{refund.error.message}</p>}
+      <p className="mt-2 text-[10px] text-slate-400">
+        The saga runs async - watch the refund appear in the list below (initiated → completed,
+        usually ~3 s) and its webhook delivery land underneath.
+      </p>
+    </div>
+  );
+}
+
 function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
   const [showProvider, setShowProvider] = useState(false);
+  const [showRefundForm, setShowRefundForm] = useState(false);
   const { copy, copiedKey } = useCopy();
 
   const refunds = useQuery({
     queryKey: ["payment-refunds", payment?.id],
     queryFn: () => getPaymentRefunds(payment!.id),
     enabled: !!payment,
+    refetchInterval: 5000,
   });
   const deliveries = useQuery({
     queryKey: ["payment-deliveries", payment?.id],
     queryFn: () => getWebhookDeliveries({ paymentId: payment!.id }),
     enabled: !!payment,
     retry: false,
+    refetchInterval: 7000,
   });
   const provider = useQuery({
     queryKey: ["provider-status", payment?.id],
@@ -231,14 +297,21 @@ function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
         </div>
         <KeyValue data={payment as unknown as Record<string, unknown>} />
         <div className="mt-3 flex gap-3 text-xs">
-          <Link to="/refunds" search={{ paymentId: payment.id }} className="font-medium text-slate-700 underline-offset-2 hover:underline">
-            request refund →
-          </Link>
+          <button
+            onClick={() => setShowRefundForm((s) => !s)}
+            disabled={payment.status !== "SUCCEEDED"}
+            title={payment.status !== "SUCCEEDED" ? "only SUCCEEDED payments can be refunded" : undefined}
+            className="font-medium text-slate-700 underline-offset-2 hover:underline disabled:opacity-40"
+          >
+            {showRefundForm ? "hide refund form" : "request refund"}
+          </button>
           <button onClick={() => setShowProvider((s) => !s)} className="text-slate-500 underline-offset-2 hover:underline">
             {showProvider ? "hide" : "check"} provider status
           </button>
         </div>
       </div>
+
+      {showRefundForm && <InlineRefundForm paymentId={payment.id} onDone={() => setShowRefundForm(false)} />}
 
       <div>
         <h4 className="mb-1 text-xs font-semibold text-slate-600">Lifecycle</h4>

@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getAllWindows, getMerchantWindows, getProjectedWindows, getStreamsState } from "../api/analyticsApi";
+import { listPayments } from "../api/paymentsApi";
+import { Link } from "@tanstack/react-router";
 import { ApiError } from "../api/client";
 import type { WindowMetricsResponse } from "../api/types";
 
@@ -36,6 +38,28 @@ export function DashboardPage() {
         : getAllWindows(lookback),
     refetchInterval: 5000,
     enabled: !projected || trimmed.length > 0,
+  });
+
+  // Operations overview: totals straight from the transactions panel's own API (size=1 per
+  // status - the total field is all we need), plus the latest transactions for one-click entry.
+  const totals = useQuery({
+    queryKey: ["op-totals", trimmed],
+    queryFn: async () => {
+      const m = trimmed || undefined;
+      const [all, ok, failed, created] = await Promise.all([
+        listPayments({ merchantId: m, page: 0, size: 1 }),
+        listPayments({ merchantId: m, status: "SUCCEEDED", page: 0, size: 1 }),
+        listPayments({ merchantId: m, status: "FAILED", page: 0, size: 1 }),
+        listPayments({ merchantId: m, status: "CREATED", page: 0, size: 1 }),
+      ]);
+      return { all: all.total, ok: ok.total, failed: failed.total, created: created.total };
+    },
+    refetchInterval: 10000,
+  });
+  const latest = useQuery({
+    queryKey: ["op-latest", trimmed],
+    queryFn: () => listPayments({ merchantId: trimmed || undefined, page: 0, size: 5 }),
+    refetchInterval: 10000,
   });
 
   const restoring =
@@ -82,6 +106,42 @@ export function DashboardPage() {
             ? `streams: ${streamsState.data.clientState}`
             : "streams state unknown"}
         </span>
+      </div>
+
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[
+          { label: "All operations", value: totals.data?.all, tone: "text-slate-900" },
+          { label: "Succeeded", value: totals.data?.ok, tone: "text-emerald-700" },
+          { label: "Failed", value: totals.data?.failed, tone: "text-rose-700" },
+          { label: "In flight (CREATED)", value: totals.data?.created, tone: "text-amber-700" },
+        ].map((c) => (
+          <div key={c.label} className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+            <div className="text-xs text-slate-500">{c.label}</div>
+            <div className={`text-2xl font-semibold ${c.tone}`}>{c.value ?? "–"}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mb-6 rounded-lg border border-slate-200 bg-white p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-slate-700">Latest operations</h3>
+          <Link to="/payments" className="text-xs text-slate-500 underline-offset-2 hover:underline">
+            open transactions panel →
+          </Link>
+        </div>
+        <ul className="divide-y divide-slate-100 text-xs">
+          {(latest.data?.items ?? []).map((p) => (
+            <li key={p.id} className="flex items-center justify-between py-1.5">
+              <span className="font-mono text-slate-500">{p.id.slice(0, 8)}…</span>
+              <span>{p.merchantId}</span>
+              <span>{p.amount} {p.currency}</span>
+              <span className={p.status === "SUCCEEDED" ? "text-emerald-700" : p.status === "FAILED" ? "text-rose-700" : "text-slate-500"}>
+                {p.status}
+              </span>
+              <span className="text-slate-400">{new Date(p.createdAt).toLocaleTimeString()}</span>
+            </li>
+          ))}
+        </ul>
       </div>
 
       {restoring && (
