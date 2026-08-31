@@ -53,8 +53,21 @@ payment-api:
     # context-refresh time (same requirement as the M12 reply topic above).
     payment-status-changed-topic: payments.payment-status-changed.v1
     payment-status-view-group-id: payment-api.status-view.test.v1
+    # M13: same "only PRESENCE matters, never sent from in this context-load test" reasoning.
+    dispute-opened-topic: disputes.dispute-opened.test.v1
   # M9 Phase 1: KafkaAvroSerializer#configure never connects eagerly (lazy on first serialize(),
   # which this context-load test never triggers - same lazy-connection reasoning as
   # bootstrap-servers above), so this value only needs to be present, not reachable.
   schema-registry:
     url: http://localhost:8081
+  # M13: OpenDisputeUseCase's two @Value thresholds, plus S3StorageConfig's S3Client - which, like
+  # the Kafka/Schema-Registry clients above, never connects eagerly (config.S3StorageConfig's
+  # javadoc). Only PRESENCE matters here; no MinIO runs under `mvn test`.
+  disputes:
+    claim-check-threshold-bytes: 524288
+    claim-check-enabled: true
+    minio:
+      bucket: disputes
+      endpoint: http://localhost:9000
+      access-key: test
+      secret-key: test

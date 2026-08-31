@@ -54,6 +54,14 @@ analytics:
   schema-registry:
     url: http://localhost:8081
 
+  # M13: same host/compose-network split as schema-registry above - analytics runs on the HOST, so
+  # it reaches MinIO via its published host port (infra/compose/.env's MINIO_API_PORT).
+  disputes:
+    minio:
+      endpoint: http://localhost:${MINIO_API_PORT:9000}
+      access-key: ${MINIO_ROOT_USER:minioadmin}
+      secret-key: ${MINIO_ROOT_PASSWORD}
+
   streams:
     # A STABLE, NAMED path, not ${java.io.tmpdir}. Two reasons, both operational:
     #   1. The state-restore proof deletes this directory and restarts the service. A path under

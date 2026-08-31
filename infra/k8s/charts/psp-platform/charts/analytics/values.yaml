@@ -40,6 +40,14 @@ env:
       secretKeyRef:
         name: psp-datastore-credentials
         key: analytics-db-password
+  # M13: same MinIO root credential payment-api's chart wires in (charts/minio/values.yaml's top
+  # comment explains the single-credential simplification) - analytics only ever calls GetObject,
+  # never PutObject/CreateBucket, but there is no read-only MinIO identity in this phase either.
+  - name: ANALYTICS_DISPUTES_MINIO_SECRET_KEY
+    valueFrom:
+      secretKeyRef:
+        name: psp-datastore-credentials
+        key: minio-root-password
   # Kafka Streams advertises this address to the other instances of the same application.id so an
   # interactive query for a key owned by another instance can be forwarded. With one replica it is
   # only ever self-referential, but a wrong value here is a bug that only appears when you scale.
@@ -63,6 +71,16 @@ config: |
   analytics:
     schema-registry:
       url: {{ .Values.global.schemaRegistryUrl }}
+    # M13: the dispute-projection listener - see adapters.in.kafka.DisputeOpenedListener.
+    # ANALYTICS_DISPUTES_MINIO_SECRET_KEY (env, above) supplies secret-key via Spring's relaxed
+    # binding, same split as payment-api's chart.
+    disputes:
+      dispute-opened-topic: disputes.dispute-opened.v1
+      group-id: analytics.dispute-projection.v1
+      minio:
+        bucket: {{ .Values.global.minio.bucket }}
+        endpoint: {{ .Values.global.minio.endpoint }}
+        access-key: {{ .Values.global.minio.accessKey }}
     streams:
       # /tmp is the emptyDir mounted by the shared Deployment template; the image's root filesystem
       # is read-only, so anywhere else fails at startup.

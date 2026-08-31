@@ -107,6 +107,10 @@ TOPICS=(
   "payments.payment-status-changed.v1.ledger.dlq|3|3|delete|2592000000"
   "psp.provider-status-query.v1|6|3|delete|3600000"
   "psp.provider-status-reply.v1|6|3|delete|3600000"
+  # M13: claim-check demo. One event per aggregate (see docs/diagrams/topic-map.md), keyed by
+  # disputeId - 3 partitions/30 d retention puts it in the same low-volume, audit-shaped tier as
+  # the config topic above and ledger.ledger-entry-recorded.v1.
+  "disputes.dispute-opened.v1|3|3|delete|2592000000"
 )
 
 echo "Creating ${#TOPICS[@]} topics via mode='${MODE}' ..."

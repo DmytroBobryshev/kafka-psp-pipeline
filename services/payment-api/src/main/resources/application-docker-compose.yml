@@ -70,6 +70,13 @@ eureka:
 payment-api:
   schema-registry:
     url: http://localhost:8081
+  # M13: same host/compose-network split as schema-registry above - payment-api runs on the HOST,
+  # so it reaches MinIO via its published host port (infra/compose/.env's MINIO_API_PORT).
+  disputes:
+    minio:
+      endpoint: http://localhost:${MINIO_API_PORT:9000}
+      access-key: ${MINIO_ROOT_USER:minioadmin}
+      secret-key: ${MINIO_ROOT_PASSWORD}
 
 # M15: same host/compose-network split as schema-registry above - payment-api runs on the HOST, so
 # it reaches Tempo via its published OTLP/HTTP port (infra/compose/.env's TEMPO_OTLP_HTTP_PORT,

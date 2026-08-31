@@ -50,6 +50,20 @@
          exactly like every other dependency in this build (ADR-0007). -->
     <testcontainers.version>1.20.6</testcontainers.version>
 
+    <!-- M13: the claim-check pattern's S3 client, against MinIO's S3-compatible API. AWS SDK v2
+         (software.amazon.awssdk) over minio-java: (a) it is THE reference client for the S3 API
+         the task brief names explicitly ("upload the document to MinIO (S3 API...)"), so the code
+         exercises the actual wire protocol rather than a MinIO-specific abstraction over it;
+         (b) MinIO's own docs recommend either AWS SDK or minio-java interchangeably for
+         S3-compatible access - there is no MinIO-only feature this module needs (no server-side
+         admin/policy calls, just PutObject/GetObject/HeadBucket/CreateBucket); (c) path-style
+         addressing and a custom endpoint - both required for MinIO, since it has no per-bucket
+         DNS - are first-class S3Configuration options (pathStyleAccessEnabled, endpointOverride),
+         not a workaround; (d) the same client and code would work unmodified against real AWS S3
+         later, which is not true of minio-java. See services/payment-api/README.md's "M13: claim
+         check, measured" section. -->
+    <aws-sdk.version>2.28.11</aws-sdk.version>
+
     <!-- Plugin versions -->
     <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
     <!-- M19 "Plus": maven-failsafe-plugin runs the Testcontainers integration tests (*IT.java) in
@@ -124,6 +138,17 @@
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-dependencies</artifactId>
         <version>${spring-boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- M13: AWS SDK v2 BOM - manages software.amazon.awssdk:s3 and its transitive http-client/
+           core artifacts, so payment-api and analytics only ever name the artifact (ADR-0007).
+           See the aws-sdk.version property comment above for why this SDK over minio-java. -->
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>bom</artifactId>
+        <version>${aws-sdk.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>

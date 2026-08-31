@@ -1,4 +1,4 @@
-# payment-api (:8085) - 16 bindings, matching init-security.sh's "--- payment-api ---" block.
+# payment-api (:8085) - 17 bindings, matching init-security.sh's "--- payment-api ---" block.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -28,6 +28,11 @@ spec:
       - resource: { type: topic, name: payments.payment-requested.v1, patternType: literal }
         operations: [Write, Describe]
       - resource: { type: topic, name: refunds.refund-requested.v1, patternType: literal }
+        operations: [Write, Describe]
+      # M13: the claim-check demo. Direct produce (no outbox - domain.port.DisputeEventPublisher's
+      # javadoc), so this Write, unlike the payments.payment-requested.v1 grant above, is the ONE
+      # this service's own credential actually uses.
+      - resource: { type: topic, name: disputes.dispute-opened.v1, patternType: literal }
         operations: [Write, Describe]
       # group.id is minted per instance (payment-api.replies.<host>.<suffix>, M12), so a literal
       # ACL would break on every restart. This is what prefixed resource patterns are for.

@@ -42,6 +42,14 @@ env:
       secretKeyRef:
         name: psp-datastore-credentials
         key: payment-api-db-password
+  # M13: MinIO root credential (charts/minio/values.yaml's top comment explains the
+  # single-credential simplification). Not PAYMENT_API_DISPUTES_MINIO_SECRET_KEY directly in
+  # `config` below because it is a secret - same rule SPRING_DATASOURCE_PASSWORD above follows.
+  - name: PAYMENT_API_DISPUTES_MINIO_SECRET_KEY
+    valueFrom:
+      secretKeyRef:
+        name: psp-datastore-credentials
+        key: minio-root-password
 
 # Rendered into /config/application-k8s.yml (through `tpl`, so Helm expressions work). This is the
 # HIGHEST-precedence Spring config document in the pod.
@@ -63,6 +71,17 @@ config: |
   payment-api:
     schema-registry:
       url: {{ .Values.global.schemaRegistryUrl }}
+    # M13: PAYMENT_API_DISPUTES_MINIO_SECRET_KEY (env, above) supplies secret-key - Spring's
+    # relaxed binding maps that env var name onto payment-api.disputes.minio.secret-key, so it is
+    # deliberately absent here (same split as spring.datasource.password/SPRING_DATASOURCE_PASSWORD
+    # just above).
+    disputes:
+      claim-check-threshold-bytes: 524288
+      claim-check-enabled: true
+      minio:
+        bucket: {{ .Values.global.minio.bucket }}
+        endpoint: {{ .Values.global.minio.endpoint }}
+        access-key: {{ .Values.global.minio.accessKey }}
   # psp.health.kafka.enabled deliberately absent (defaults to false, see
   # KafkaHealthAutoConfiguration): no @KafkaListener containers exist here for the "kafkaListeners"
   # bean to inspect - see the top-of-file comment - so creating it would just be dead weight, and

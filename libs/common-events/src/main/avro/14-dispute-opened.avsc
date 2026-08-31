@@ -1,0 +1,60 @@
+{
+  "type": "record",
+  "name": "DisputeOpened",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of disputes.dispute-opened.v1 (M13's claim-check demo). payment-api mints this directly (no outbox - same 'nothing to be atomic with' reasoning as MerchantConfigChanged, see domain.port.DisputeEventPublisher's javadoc) when a merchant disputes a payment and attaches a document (chargeback evidence, a receipt scan, ...). Registered under Schema Registry subject 'disputes.dispute-opened.v1-value' (TopicNameStrategy, ADR-0001), BACKWARD compatibility.\n\nTHE POINT OF THIS SCHEMA is the 'document' field below: ONE field, TWO shapes, chosen by the producer per record depending on the document's size against payment-api.disputes.claim-check-threshold-bytes. A small dispute document travels inline, in the value, like every other event in this system. A large one is uploaded to MinIO first and this event carries only a REFERENCE - {bucket, objectKey, sizeBytes, contentType} - never the bytes. The claim-check pattern exists because Kafka's default max.request.size (1 MiB, broker + producer default) and fetch.max.bytes/max.partition.fetch.bytes (consumer side) are not sized for arbitrary attachments, and raising them cluster-wide to fit the rare 5 MB dispute document would tax every other topic's batching and consumer memory for a shape only this one event ever needs. See services/payment-api/README.md's 'M13: claim check, measured' section for the RecordTooLargeException this schema exists to avoid.",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope",
+      "doc": "envelope.aggregateId = disputeId, envelope.aggregateType = 'dispute'. Root envelope (no causationId) - a dispute is opened by a merchant action, not caused by another event in this system."
+    },
+    {
+      "name": "disputeId",
+      "type": "string",
+      "doc": "UUID string form, minted by payment-api. IS the record key (see the topic's KafkaTopic CR / docs/diagrams/topic-map.md): this topic carries exactly one event per aggregate - like payments.payment-requested.v1 - so there is nothing for a merchantId key to order (ADR-0003's 'ordering is vacuous on a topic with one event per aggregate' exception). Also the MinIO object key when the document is claim-checked - see the 'document' field."
+    },
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "The disputed payment (UUID string form). payment-api validates this against its own payments table before publishing - see application.OpenDisputeUseCase."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "The owning merchant, denormalised from the payment. Carried for the analytics projection and any future per-merchant dispute-rate metric; not the partition key (see disputeId's doc)."
+    },
+    {
+      "name": "reason",
+      "type": "string",
+      "doc": "Free-text reason supplied by the merchant (e.g. 'goods not received', 'duplicate charge')."
+    },
+    {
+      "name": "document",
+      "doc": "THE claim-check contrast. Exactly one of two shapes, chosen by payment-api's threshold check (domain.model.ClaimCheckPolicy) at publish time - never both, never neither.",
+      "type": [
+        {
+          "type": "record",
+          "name": "InlineDocument",
+          "doc": "The document's bytes travel IN this record, like any other event payload. Chosen when the document is at or below payment-api.disputes.claim-check-threshold-bytes (default 512 KiB) - small enough that the whole DisputeOpened record still comfortably clears Kafka's default max.request.size (1 MiB).",
+          "fields": [
+            { "name": "contentType", "type": "string", "doc": "MIME type as supplied by the caller, e.g. 'application/pdf', 'image/png'." },
+            { "name": "sizeBytes", "type": "long", "doc": "Byte length of 'bytes' below, carried explicitly rather than left for a consumer to recompute - symmetric with ClaimCheckReference.sizeBytes." },
+            { "name": "bytes", "type": "bytes", "doc": "The raw document bytes." }
+          ]
+        },
+        {
+          "type": "record",
+          "name": "ClaimCheckReference",
+          "doc": "THE claim check: a pointer to the document, not the document. Chosen when the document exceeds payment-api.disputes.claim-check-threshold-bytes - payment-api uploads it to MinIO FIRST (adapters.out.storage.S3DisputeDocumentStore), then publishes this reference. A consumer that needs the bytes (analytics.adapters.in.kafka.DisputeOpenedListener) dereferences the same way any claim-check consumer does: GetObject(bucket, objectKey) against the S3-compatible endpoint - proving the round trip, not just asserting it.",
+          "fields": [
+            { "name": "bucket", "type": "string", "doc": "MinIO bucket, e.g. 'disputes'." },
+            { "name": "objectKey", "type": "string", "doc": "MinIO object key. Equal to this event's own disputeId - see that field's doc - so the reference is reconstructible from the envelope alone, with no lookup table." },
+            { "name": "sizeBytes", "type": "long", "doc": "Byte length of the uploaded object - lets a consumer (or a human reading AKHQ) see how large the dereferenced document will be WITHOUT fetching it, and lets analytics' projection cross-check the fetched byte count against what payment-api claims it uploaded." },
+            { "name": "contentType", "type": "string", "doc": "MIME type, mirrored from the upload so a consumer never has to fetch the object just to know how to render it." }
+          ]
+        }
+      ]
+    }
+  ]
+}

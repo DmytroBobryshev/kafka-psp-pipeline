@@ -1,0 +1,104 @@
+{{/*
+  M13. Deployment + Service, no PVC (see values.yaml's top comment for the emptyDir tradeoff) -
+  the plain, hand-written style mongodb/postgres already established for this chart tree, not the
+  shared _spring-service.tpl (that helper is for the seven Spring services; MinIO is neither
+  Spring nor one of them, same reasoning mongodb.yaml already gives).
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    # Single emptyDir-backed instance, same as mongodb.yaml - a rolling update briefly running
+    # two pods against two DIFFERENT empty data directories would just mean the second pod starts
+    # with what looks like data loss (it is not - the first pod's emptyDir dies with it anyway).
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "psp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psp.selectorLabels" . | nindent 8 }}
+    spec:
+      # Same reasoning as mongodb.yaml's identical line: Kubernetes' docker-link-style env vars
+      # for every Service in the namespace collide with images (like this one) that read
+      # well-known env var names for their own configuration.
+      enableServiceLinks: false
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: minio
+          image: {{ .Values.image }}
+          args: ["server", "/data", "--console-address", ":9090"]
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: console
+              containerPort: 9090
+          env:
+            - name: MINIO_ROOT_USER
+              value: {{ .Values.rootUser | quote }}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.datastoreSecretName }}
+                  key: minio-root-password
+          startupProbe:
+            httpGet:
+              path: /minio/health/live
+              port: api
+            periodSeconds: 5
+            failureThreshold: 40
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: api
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: api
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        # No bucket-creation initContainer: an initContainer runs BEFORE this container starts,
+        # so `mc mb` against localhost:9000 here would race a server that isn't listening yet.
+        # payment-api's adapters.out.storage.S3DisputeDocumentStore creates the 'disputes' bucket
+        # lazily, on its first claim-checked upload instead (see that class's javadoc) - the same
+        # "converge to the desired state on demand" shape this chart tree already uses for Flyway
+        # migrations running at application startup rather than as a separate Job.
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  labels:
+    {{- include "psp.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "psp.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: api
+      port: 9000
+      targetPort: api
+    - name: console
+      port: 9090
+      targetPort: console

@@ -128,6 +128,27 @@
       <artifactId>kafka-avro-serializer</artifactId>
     </dependency>
 
+    <!-- M13: the claim-check pattern's S3 client (adapters.out.storage.S3DisputeDocumentStore),
+         against MinIO's S3-compatible API - see the root pom's aws-sdk.version property comment
+         for why this SDK over minio-java. netty-nio-client is excluded in favour of the URL
+         connection client below: this service makes one small (PutObject) or already-in-memory
+         call per dispute, never a stream of concurrent calls, so Netty's async event-loop machinery
+         buys nothing here and only adds a dependency footprint the URL connection client avoids. -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
+      <exclusions>
+        <exclusion>
+          <groupId>software.amazon.awssdk</groupId>
+          <artifactId>netty-nio-client</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>url-connection-client</artifactId>
+    </dependency>
+
     <!-- Lombok + MapStruct (annotation processor order fixed in the parent) -->
     <dependency>
       <groupId>org.projectlombok</groupId>

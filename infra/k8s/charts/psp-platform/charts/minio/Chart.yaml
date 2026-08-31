@@ -1,0 +1,10 @@
+apiVersion: v2
+name: minio
+description: >-
+  One MinIO instance backing the M13 claim-check pattern (payment-api uploads dispute documents
+  over 512 KiB, analytics dereferences them) - mirrors infra/k8s/charts/psp-platform/charts/mongodb's
+  plain, single-instance, hand-written style (no chart repository in this phase - see that
+  chart's own values.yaml for the full reasoning).
+type: application
+version: 0.1.0
+appVersion: "RELEASE.2024-01-16T16-07-38Z"

@@ -151,6 +151,18 @@ analytics:
     # skew between service instances) apply to both windowed operations.
     grace: 30s
 
+  # M13: the dispute-projection listener - ANOTHER plain @KafkaListener (single-record, not
+  # batch), independent of the Streams application AND the batch listener below. See
+  # adapters.in.kafka.DisputeOpenedListener and services/payment-api/README.md's "M13: claim
+  # check, measured" section (the producer-side half of the pattern lives there).
+  disputes:
+    dispute-opened-topic: disputes.dispute-opened.v1
+    group-id: analytics.dispute-projection.v1
+    minio:
+      bucket: disputes
+      # endpoint/access-key/secret-key are environment-specific - see
+      # application-docker-compose.yml and the k8s analytics chart's values.yaml.
+
   # M13: the batch listener - a plain @KafkaListener(batch = true), NOT part of the Kafka Streams
   # application above, with its own consumer group and its own committed offsets.
   batch-listener:

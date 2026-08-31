@@ -74,7 +74,7 @@ and time estimates live in [`docs/PLAN.md`](docs/PLAN.md).
 | M10 - Compacted topics & Streams | `services/analytics` | `KTable`/`GlobalKTable`, RocksDB, windows | **Done** |
 | M11 - Refund saga | `services/ledger`, `services/psp-connector` | Choreography, compensating transactions | **Done** |
 | M12 - Request-reply + realtime-gateway | `services/realtime-gateway` | `ReplyingKafkaTemplate`, the broadcast problem | **Done** |
-| M13 - Feature grab-bag | multiple | Streams joins, batch listener, claim check, quotas, Connect sink | **Partial** - 4/5, quotas done + measured (claim check in flight) |
+| M13 - Feature grab-bag | multiple | Streams joins, batch listener, claim check, quotas, Connect sink | **Done** - 5/5, all measured (claim check: `services/payment-api/README.md`'s "M13 - Claim check, measured") |
 | M14 - Security | all services | SASL/SCRAM, ACLs, TLS | **Done** |
 | M15 - Observability | all services | Trace propagation via Kafka headers, lag dashboards | **Done** - metrics on both stacks (compose, and on k8s via Strimzi `metricsConfig`/`kafkaExporter` + Prometheus/Grafana in `monitoring`; tracing still compose-only) |
 | M16 - Discovery + gateway | `services/discovery-server`, `services/api-gateway` | Eureka vs k8s-native discovery, Spring Cloud Gateway | **Done** |

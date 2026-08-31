@@ -144,6 +144,10 @@ topic_acl payment-api literal  "merchants.merchant-config-changed.v1"  Write Des
 topic_acl payment-api literal  "psp.provider-status-query.v1"          Write Describe
 topic_acl payment-api literal  "payments.payment-requested.v1"         Write Describe
 topic_acl payment-api literal  "refunds.refund-requested.v1"           Write Describe
+# M13: the claim-check demo. Direct produce (no outbox - domain.port.DisputeEventPublisher's
+# javadoc), so this Write, unlike the payments.payment-requested.v1 grant above, is the ONE this
+# service's own credential actually uses.
+topic_acl payment-api literal  "disputes.dispute-opened.v1"            Write Describe
 topic_acl payment-api literal  "psp.provider-status-reply.v1"          Read Describe
 # group.id is minted per instance (payment-api.replies.<host>.<suffix>, M12) - a literal ACL
 # would break on every restart, which is precisely what prefixed resource patterns are for.
@@ -224,6 +228,10 @@ group_acl webhook-notifier prefixed "webhook-notifier."                 Read Des
 topic_acl analytics literal  "payments.payment-status-changed.v1"   Read Describe
 topic_acl analytics literal  "payments.payment-requested.v1"        Read Describe
 topic_acl analytics literal  "merchants.merchant-config-changed.v1" Read Describe
+# M13: the dispute-projection listener (adapters.in.kafka.DisputeOpenedListener) - a plain
+# single-record @KafkaListener, a THIRD independent consumer identity alongside Streams and the
+# batch listener below.
+topic_acl analytics literal  "disputes.dispute-opened.v1"           Read Describe
 # THE STREAMS GOTCHA. Streams CREATES its own internal topics (changelogs, repartitions) through
 # an embedded AdminClient at startup. With deny-by-default and no Create, KafkaStreams goes to
 # ERROR during StreamThread startup with a TopicAuthorizationException wrapped in a
@@ -241,6 +249,8 @@ topic_acl analytics prefixed "analytics-streams.v1"                 All
 group_acl analytics prefixed "analytics-streams.v1"                 Read Describe
 # M13's plain @KafkaListener(batch = true), a separate consumer identity from the Streams app.
 group_acl analytics prefixed "analytics.status-audit-batch.v1"      Read Describe
+# M13's dispute-projection listener - yet another independent consumer identity/group.
+group_acl analytics prefixed "analytics.dispute-projection.v1"      Read Describe
 # Streams' AdminClient calls describeCluster() during startup and rebalances.
 cluster_acl analytics Describe
 

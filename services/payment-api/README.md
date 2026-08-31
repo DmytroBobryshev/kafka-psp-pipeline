@@ -15,6 +15,8 @@ This is the only service that accepts synchronous REST traffic from outside the 
 - Batching: `linger.ms`, `batch.size`, `compression.type`
 - Async send with a callback reporting partition and offset
 - `min.insync.replicas` as the setting that gives `acks=all` its meaning
+- **Claim check (M13):** `max.request.size`, and why a producer never needs to raise it if it
+  keeps large payloads out of the record in the first place - see "M13 - Claim check, measured"
 
 ## Architecture
 
@@ -48,10 +50,13 @@ fails the build if a Spring, Kafka, or JPA import ever appears there.
 | Topic | Key | Partitions | RF | min.insync.replicas | cleanup.policy | Retention |
 |---|---|---|---|---|---|---|
 | `payments.payment-requested.v1` | `paymentId` | 12 | 3 | 2 | delete | 7 days |
+| `disputes.dispute-opened.v1` | `disputeId` | 3 | 3 | 2 | delete | 30 days |
 
 Keyed by `paymentId`, not `merchantId` - see ADR-0003. One event per aggregate means ordering
 within the key is vacuous here, so the key is chosen to spread load evenly and avoid serializing
-a large merchant behind a single partition.
+a large merchant behind a single partition. `disputes.dispute-opened.v1` (M13) is the same
+one-event-per-aggregate exception, keyed by its own `disputeId`; see "M13 - Claim check, measured"
+below for the whole feature.
 
 ## How to run
 
@@ -1116,3 +1121,244 @@ outside any HTTP request (e.g. a scheduled reconciliation job) simply produces a
 `trace_parent = NULL` - Debezium's additional-field placement omits the header on `NULL`, and the
 consuming service starts a fresh root span instead of continuing one, exactly like any other
 Kafka record with no `traceparent` header.
+
+## M13 - Claim check, measured
+
+`POST /api/payments/{paymentId}/disputes` (`adapters.in.web.DisputeController`) lets a merchant
+open a dispute against a payment and attach a document - a chargeback letter, a receipt scan.
+This section is PLAN.md's M13 claim-check item: **"dispute documents > 1MB -> MinIO, event
+carries a reference; touch `max.request.size`, `fetch.max.bytes`."** Everything below was run
+against the live `kind` cluster (`kafka-psp`), through the real ingress, with real payloads - not
+a unit test standing in for the demo.
+
+### The pattern in one picture
+
+```mermaid
+flowchart LR
+    client([HTTP client]) -->|"POST /disputes<br/>{reason, documentBase64, contentType}"| C[DisputeController]
+    C --> UC["OpenDisputeUseCase<br/>ClaimCheckPolicy.requiresClaimCheck(size, threshold)"]
+    UC -->|"size &le; 512 KiB"| INLINE["publishInline()<br/>bytes travel IN the record"]
+    UC -->|"size &gt; 512 KiB"| CC["documentStore.store()<br/>PutObject, key = disputeId"]
+    CC --> MINIO[(MinIO<br/>bucket: disputes)]
+    CC --> REF["publishClaimChecked()<br/>{bucket, objectKey, sizeBytes, contentType}"]
+    INLINE --> TOPIC[["disputes.dispute-opened.v1<br/>3 partitions, key = disputeId"]]
+    REF --> TOPIC
+    TOPIC --> LISTENER["analytics: DisputeOpenedListener"]
+    LISTENER -->|"claim-checked only"| GET["GetObject(bucket, objectKey)"]
+    GET --> MINIO
+    LISTENER --> HASH["sha256 the bytes actually held<br/>(fetched, or inline)"]
+    HASH --> MONGO[(MongoDB<br/>analytics.dispute_documents)]
+```
+
+One Avro record (`DisputeOpened`, `libs/common-events/src/main/avro/14-dispute-opened.avsc`), one
+`document` union field with two branches - `InlineDocument {contentType, sizeBytes, bytes}` or
+`ClaimCheckReference {bucket, objectKey, sizeBytes, contentType}` - chosen by
+`domain.model.ClaimCheckPolicy.requiresClaimCheck(sizeBytes, thresholdBytes)`, a five-line pure
+function unit-tested in isolation (`ClaimCheckPolicyTest`). Threshold defaults to 512 KiB
+(`payment-api.disputes.claim-check-threshold-bytes`). Neither branch is ever populated by
+accident: `OpenDisputeUseCase` calls exactly one of `DisputeEventPublisher.publishInline` /
+`.publishClaimChecked`, never both, never neither.
+
+Direct produce, like `merchants.merchant-config-changed.v1` (M10) - no M6 outbox. There is no
+`dispute` table in this service to be atomic with; the Kafka topic and analytics' Mongo
+projection are the system of record. See `domain.port.DisputeEventPublisher`'s javadoc for the
+full argument.
+
+### Why `max.request.size` is the limit that matters here
+
+Kafka's producer default `max.request.size` is **1,048,576 bytes (1 MiB)** - and
+`config.DisputeKafkaConfig` does not override it, on purpose. That default is what the claim-check
+pattern exists to never hit: keep every event under it, and the knob never needs touching. To
+prove that's a real limit and not a documentation claim, the demo below temporarily disabled the
+claim-check decision (`payment-api.disputes.claim-check-enabled=false` - the "killswitch"
+documented in `OpenDisputeUseCase`'s javadoc, reachable only by an operator setting an env
+var/ConfigMap key, never by a caller) and sent a 2 MiB document straight through the inline path.
+
+**1. Disable claim-check, send 2 MiB directly - real failure:**
+
+```
+$ kubectl -n kafka set env deployment/payment-api PAYMENT_API_DISPUTES_CLAIM_CHECK_ENABLED=false
+deployment.apps/payment-api env updated
+
+$ curl -s -X POST http://localhost/api/payments/b4ff8142-8a1b-4545-8f32-2018f1f01986/disputes \
+    -H 'Content-Type: application/json' --data-binary @dispute_2mb.json -w '\nHTTP %{http_code}\n'
+{"type":"https://psp.example.com/problems/internal-error","title":"Internal server error",
+ "status":500,"detail":"An unexpected error occurred",
+ "instance":"/api/payments/b4ff8142-8a1b-4545-8f32-2018f1f01986/disputes",
+ "correlationId":"1528516a-0833-4c09-af87-0202dab6c97b"}
+HTTP 500
+```
+
+payment-api's own log, the same request, **verbatim, not paraphrased**:
+
+```
+2026-08-31T21:55:35.724Z ERROR 1 --- [payment-api] [nio-8085-exec-4] o.s.k.support.LoggingProducerListener :
+Exception thrown when sending a message with key='f200c495-2646-4a9f-adcc-92f1b9c3da76' and
+payload='{"envelope": {"eventId": "01a059d2-1500-7078-aedb-e2db53cd558e", "eventType": "disputes.dispute-open...'
+to topic disputes.dispute-opened.v1:
+
+org.apache.kafka.common.errors.RecordTooLargeException: The message is 2097840 bytes when
+serialized which is larger than 1048576, which is the value of the max.request.size configuration.
+```
+
+...which `KafkaTemplate.doSend` turns into a `KafkaException: Send failed` that
+`KafkaDisputeEventPublisher.send` rethrows as an `IllegalStateException`, landing on
+`GlobalExceptionHandler`'s catch-all as the 500 above. The 2 MiB raw document Avro-encodes to
+2,097,840 bytes (envelope + framing overhead on top of the raw bytes) - just over double the 1 MiB
+ceiling, and Kafka refuses it **before the record ever leaves the producer**, not as a broker
+rejection after the fact.
+
+**2. Re-enable claim-check, send the SAME shape at 5 MiB - real success:**
+
+```
+$ kubectl -n kafka set env deployment/payment-api PAYMENT_API_DISPUTES_CLAIM_CHECK_ENABLED-
+deployment.apps/payment-api env updated
+
+$ curl -s -X POST http://localhost/api/payments/b4ff8142-8a1b-4545-8f32-2018f1f01986/disputes \
+    -H 'Content-Type: application/json' --data-binary @dispute_5mb.json -w '\nHTTP %{http_code}\n'
+{"disputeId":"48d1fcbc-15ac-4081-9a73-2595caa520ee",
+ "paymentId":"b4ff8142-8a1b-4545-8f32-2018f1f01986","merchantId":"acme",
+ "sizeBytes":5242880,"claimChecked":true,"bucket":"disputes",
+ "objectKey":"48d1fcbc-15ac-4081-9a73-2595caa520ee"}
+HTTP 202
+```
+
+payment-api's log for the same request:
+
+```
+2026-08-31T21:56:14.464Z INFO ... S3DisputeDocumentStore : Created MinIO bucket 'disputes' on first claim-checked upload
+2026-08-31T21:56:14.832Z INFO ... KafkaDisputeEventPublisher : Published dispute-opened (CLAIM CHECK, 5242880 bytes at
+disputes/48d1fcbc-15ac-4081-9a73-2595caa520ee) disputeId=48d1fcbc-15ac-4081-9a73-2595caa520ee
+paymentId=b4ff8142-8a1b-4545-8f32-2018f1f01986 eventId=01a059d2-ae40-741a-9b70-edbe56a41220 ->
+disputes.dispute-opened.v1-2@0
+```
+
+(The bucket-creation log line is `adapters.out.storage.S3DisputeDocumentStore`'s lazy
+create-on-first-upload path, working exactly as designed - see `config.S3StorageConfig`'s
+javadoc for why bucket creation is deliberately NOT an eager startup check.)
+
+**The event on the wire, measured directly off the partition** (`kafka-console-consumer`,
+`--value-deserializer ByteArrayDeserializer`, one record at offset 0 of
+`disputes.dispute-opened.v1-2`):
+
+```
+$ kafka-console-consumer.sh --bootstrap-server $BOOTSTRAP --consumer.config admin.properties \
+    --topic disputes.dispute-opened.v1 --partition 2 --offset 0 --max-messages 1 \
+    --value-deserializer org.apache.kafka.common.serialization.ByteArrayDeserializer | wc -c
+229
+```
+
+**A 5,242,880-byte (5 MiB) document produced a ~229-byte event** - the claim-check contrast, measured:
+the reference (`bucket`, `objectKey`, `sizeBytes`, `contentType`, plus the envelope) costs a few
+hundred bytes regardless of whether the document behind it is 1 MiB or 1 GiB. This is also why
+`fetch.max.bytes` / `max.partition.fetch.bytes` (the consumer-side counterparts of
+`max.request.size`) never needed touching on this topic, or anywhere else in the map: a consumer
+of `disputes.dispute-opened.v1` never fetches more than a few hundred bytes per record, claim
+check or not. (The `RecordTooLargeException` above fired at PRODUCE time, before any consumer was
+ever involved - so this demo exercises the producer-side limit for real and states the
+consumer-side one analytically, rather than claiming a measurement that never happened.)
+
+### 3. Proving the reference actually dereferences
+
+A reference that merely *looks* plausible is not the same claim as "the reference dereferences to
+the real document." analytics' `DisputeOpenedListener` fetches the object from MinIO
+(`S3DisputeDocumentFetcher.fetch`, a real `GetObject`) and hashes the bytes it actually received -
+never the bytes the event claims - then projects `{disputeId, sizeBytes, sha256}` into
+`analytics.dispute_documents` (`ProjectDisputeUseCase`).
+
+The document sent above was generated locally with a known SHA-256:
+
+```
+$ python3 -c "import os,hashlib; d=os.urandom(5*1024*1024); print(hashlib.sha256(d).hexdigest())"
+7a76d27e56db6ae1b4f721d8012a232fa0145b43316e19c160bccf37ce6f7700
+```
+
+The Mongo projection, read back from the live cluster after analytics consumed the event:
+
+```
+$ mongosh "mongodb://analytics:***@mongodb:27017/analytics?authSource=analytics" \
+    --eval 'db.dispute_documents.findOne({_id:"48d1fcbc-15ac-4081-9a73-2595caa520ee"})'
+{
+  _id: '48d1fcbc-15ac-4081-9a73-2595caa520ee',
+  paymentId: 'b4ff8142-8a1b-4545-8f32-2018f1f01986',
+  merchantId: 'acme',
+  reason: 'chargeback - measured demo (claim check enabled)',
+  sizeBytes: 5242880,
+  sha256: '7a76d27e56db6ae1b4f721d8012a232fa0145b43316e19c160bccf37ce6f7700',
+  claimChecked: true,
+  bucket: 'disputes',
+  objectKey: '48d1fcbc-15ac-4081-9a73-2595caa520ee'
+}
+```
+
+**The hash matches, byte for byte, and `sizeBytes` matches the original 5,242,880.** analytics
+never received the document over Kafka - it received 229 bytes and a pointer, dereferenced the
+pointer against MinIO independently, and arrived at the exact same document payment-api uploaded.
+That is the check-in/check-out round trip the claim-check pattern promises, demonstrated rather
+than asserted.
+
+**The contrast, same cluster, same payment, a document below the threshold:**
+
+```
+$ curl -s -X POST http://localhost/api/payments/b4ff8142-8a1b-4545-8f32-2018f1f01986/disputes \
+    -H 'Content-Type: application/json' --data-binary @dispute_small.json -w '\nHTTP %{http_code}\n'
+{"disputeId":"b350dd8f-477a-49f6-a800-5c93f44eefca",
+ "paymentId":"b4ff8142-8a1b-4545-8f32-2018f1f01986","merchantId":"acme",
+ "sizeBytes":2048,"claimChecked":false,"bucket":null,"objectKey":null}
+HTTP 202
+
+$ mongosh ... --eval 'db.dispute_documents.findOne({_id:"b350dd8f-477a-49f6-a800-5c93f44eefca"})'
+{
+  _id: 'b350dd8f-477a-49f6-a800-5c93f44eefca',
+  ...
+  sizeBytes: 2048,
+  sha256: '78fc626b87df2c467492bb30b461dd6608fc35f965629e476f56628c6e2783d9',
+  claimChecked: false
+  # no bucket, no objectKey - the bytes never left the Kafka record
+}
+```
+
+Same listener, same use case, same hash-of-what-was-actually-held logic - for a 2 KiB document it
+never calls MinIO at all, because `inlineBytes` was already in hand. The `sha256` still matches
+the document's own hash (computed locally before sending), which is the same proof at the other
+end of the size range: nothing about the projection depends on which branch produced it.
+
+### S3 client and MinIO wiring
+
+`software.amazon.awssdk:s3` (AWS SDK v2) against MinIO's S3-compatible API, not `minio-java` - see
+the root `pom.xml`'s `aws-sdk.version` property comment for the full justification (in short: it
+is the reference S3 client the task names, needs no MinIO-only feature this module uses, and the
+same code would run against real AWS S3 unmodified). `config.S3StorageConfig` builds the client
+with `pathStyleAccessEnabled(true)` (mandatory for MinIO - see that class's javadoc) and a fixed
+placeholder region (MinIO ignores it, but SigV4 signing requires a non-null value).
+
+The `disputes` bucket is created **lazily**, on the first claim-checked upload
+(`S3DisputeDocumentStore.store`: try the `PutObject`, catch `NoSuchBucketException`, create the
+bucket, retry) - not eagerly at application startup. That is a deliberate consequence of this
+codebase's "construct clients lazily, connect on first real call" convention
+(`config.KafkaProducerConfig`, `config.SchemaRegistryConfig`): an eager MinIO health check at
+startup would fail every `@SpringBootTest` in both services, which run with no MinIO available.
+
+MinIO itself: `infra/k8s/charts/psp-platform/charts/minio` (Deployment + Service, `emptyDir` -
+not a PVC, since the demo's point is the round trip, not durability - see that chart's
+`values.yaml` for the full reasoning) and, for compose parity, a `minio` service in
+`infra/compose/docker-compose.yml`. One root credential for the whole system (no per-service MinIO
+users/policies - a documented simplification, see the chart's `values.yaml`).
+
+### What's descoped
+
+- **No per-service MinIO IAM.** payment-api (write) and analytics (read) share one root
+  credential. A real deployment would scope this the way Strimzi's `KafkaUser` CRs scope Kafka
+  access; MinIO's own user/policy admin API is out of this module's declared scope.
+- **No dispute query API.** `POST /api/payments/{paymentId}/disputes` returns `202 Accepted` and
+  the analytics projection is the only place a dispute's outcome can be read back - consistent
+  with ADR-0004 (every read model is eventually consistent) but there is no `GET
+  /api/disputes/{id}` anywhere in this system, on either service.
+- **`fetch.max.bytes`/`max.partition.fetch.bytes` are discussed analytically, not measured** - see
+  the note in the `max.request.size` section above for why: the failure demo fires at produce
+  time, before any consumer is involved, so there was never a genuinely oversized record for a
+  consumer to fetch in this system to measure against.
+- **compose parity is infra-only.** `infra/compose/docker-compose.yml` gained a `minio` service
+  and `infra/compose/create-topics.sh`/`kafka-init/init-security.sh` gained the topic/ACLs, but
+  the measured demo above was run against the k8s cluster, not compose - the mechanics (SDK,
+  threshold, event shape) are identical either way.

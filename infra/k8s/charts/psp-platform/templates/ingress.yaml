@@ -42,6 +42,11 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # M13: nginx-ingress's own default (1m) would 413 the claim-check demo's base64-encoded
+    # multi-megabyte dispute document before it ever reaches payment-api - a DIFFERENT size limit
+    # than the one the demo is about (Kafka's max.request.size). 16m comfortably covers the
+    # README's 5 MiB document example plus base64's ~33% inflation plus JSON overhead.
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
     {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

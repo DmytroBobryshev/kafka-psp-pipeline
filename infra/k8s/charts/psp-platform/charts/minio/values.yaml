@@ -1,0 +1,39 @@
+# M13's object store, for the claim-check pattern's demo (services/payment-api/README.md's
+# "M13: claim check, measured" section). Hand-written for the same three reasons the mongodb and
+# postgres subcharts give: no chart repository in this phase, the interesting part is small, and
+# a production MinIO chart's concerns (distributed erasure-coded pools, TLS, per-tenant IAM) do
+# not apply to one dev instance backing one bucket.
+#
+# ONE ROOT CREDENTIAL, NO PER-SERVICE MinIO USERS. payment-api (writes) and analytics (reads) both
+# authenticate as the MinIO root user (templates/minio.yaml wires the same Secret key,
+# minio-root-password, into both subcharts' values.yaml). A real deployment would create scoped
+# MinIO users + a bucket policy per service the way Strimzi's KafkaUser CRs scope Kafka access
+# (infra/k8s/kafka/users/) - that needs MinIO's admin API (`mc admin user add` / IAM policies),
+# which is out of this module's declared scope. Documented here rather than silently done, the
+# same way charts/mongodb documents its single-root-user simplification for webhook-notifier/
+# analytics/audit-trail... except those three DO get scoped Mongo users; MinIO is the one
+# datastore in this chart tree that does not, and that asymmetry is worth naming, not hiding.
+#
+# PVC OPTIONAL, EMPTYDIR CHOSEN. The claim-check demo's point is the round trip (upload, publish a
+# reference, dereference), not durability - same reasoning analytics' RocksDB state gets an
+# emptyDir (infra/k8s/charts/psp-platform/charts/analytics/values.yaml's top comment): losing the
+# bucket's contents on a pod restart is an acceptable, documented simplification for a learning
+# cluster, and it avoids a PVC/StorageClass dependency for a service that is otherwise pure
+# demonstration. Swap the emptyDir volume in templates/minio.yaml for a PVC (mirror
+# charts/mongodb/templates/mongodb.yaml's pattern exactly) if the documents need to survive a
+# restart.
+image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+
+# The Strimzi convention (kafkaUser: "payment-api") has no MinIO equivalent, so this is a literal,
+# not a secret - see the top comment for why there is only one MinIO identity in this phase.
+rootUser: minioadmin
+
+bucket: disputes
+
+resources:
+  requests:
+    memory: 128Mi
+    cpu: 50m
+  limits:
+    memory: 256Mi
+    cpu: 300m

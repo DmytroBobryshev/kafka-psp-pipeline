@@ -58,3 +58,16 @@ analytics:
     # topic list) both need to be real and consistent for the context to load cleanly.
     group-id: analytics.status-audit-batch.test.v1
     max-poll-records: 200
+  # M13: adapters.in.kafka.DisputeOpenedListener is ALSO a real @KafkaListener - same
+  # "topic + group-id must be real and consistent" requirement as batch-listener above, so
+  # dispute-opened-topic is in AnalyticsApplicationTests' @EmbeddedKafka topic list too. The MinIO
+  # values only need to be PRESENT (config.S3StorageConfig's javadoc: S3Client never connects
+  # eagerly), same as schema-registry.url above.
+  disputes:
+    dispute-opened-topic: disputes.dispute-opened.test.v1
+    group-id: analytics.dispute-projection.test.v1
+    minio:
+      bucket: disputes
+      endpoint: http://localhost:9000
+      access-key: test
+      secret-key: test

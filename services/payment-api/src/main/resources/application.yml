@@ -161,10 +161,33 @@ payment-api:
     # are exactly what's wanted.
     payment-status-changed-topic: payments.payment-status-changed.v1
     payment-status-view-group-id: payment-api.status-view.v1
+    # M13: the claim-check demo's topic - produced directly, same as merchant-config-changed-topic
+    # above (see domain.port.DisputeEventPublisher's javadoc for why it skips the outbox).
+    dispute-opened-topic: disputes.dispute-opened.v1
   # schema-registry.url is environment-specific (M9 Phase 1) - see application-docker-compose.yml.
   # Read by config.SchemaRegistryConfig to build the KafkaAvroSerializer that Avro-encodes
   # payments.payment-requested.v1's outbox payload; payment-api runs no other Schema Registry
   # client, since it never talks to Kafka directly (M6).
+
+  # M13: the claim-check demo (PLAN.md's M13 brief: "dispute documents > 1MB -> MinIO, event
+  # carries a reference; touch max.request.size, fetch.max.bytes"). See
+  # application.OpenDisputeUseCase and services/payment-api/README.md's "M13: claim check,
+  # measured" section.
+  disputes:
+    # The largest document still sent INLINE, in the Kafka record's value. 512 KiB - comfortably
+    # below Kafka's default max.request.size (1 MiB, config.DisputeKafkaConfig does not override
+    # it) even after the Avro envelope's own overhead, and small enough that a legitimate small
+    # attachment (a text confirmation, a low-res photo) never pays the extra MinIO round trip the
+    # claim check needs.
+    claim-check-threshold-bytes: 524288
+    # THE DEMO KILLSWITCH - see application.OpenDisputeUseCase's javadoc. Not environment-specific
+    # (stays true here); only the measured demo flips it to false, temporarily, via an env var
+    # override - never through application code a caller could reach.
+    claim-check-enabled: true
+    minio:
+      bucket: disputes
+      # endpoint/access-key/secret-key are environment-specific - see
+      # application-docker-compose.yml and the k8s payment-api chart's values.yaml.
 
 # No datasource configured here on purpose - see application-docker-compose.yml. Running this
 # service without an active profile and without a database will fail to start (spring-boot-

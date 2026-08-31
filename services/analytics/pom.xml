@@ -122,6 +122,27 @@
       <artifactId>kafka-avro-serializer</artifactId>
     </dependency>
 
+    <!-- M13: the claim-check dereference (adapters.out.s3.S3DisputeDocumentFetcher), against
+         MinIO's S3-compatible API - see the root pom's aws-sdk.version property comment for why
+         this SDK over minio-java (same reasoning, mirrored from payment-api/pom.xml, which is
+         where the dependency is actually justified in full). This service only ever calls
+         GetObject, but the artifact is the same software.amazon.awssdk:s3 either way - there is no
+         narrower "read-only S3 client" module. -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
+      <exclusions>
+        <exclusion>
+          <groupId>software.amazon.awssdk</groupId>
+          <artifactId>netty-nio-client</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>url-connection-client</artifactId>
+    </dependency>
+
     <!-- Lombok + MapStruct (annotation processor order fixed in the parent) -->
     <dependency>
       <groupId>org.projectlombok</groupId>

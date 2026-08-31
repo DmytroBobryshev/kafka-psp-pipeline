@@ -1,4 +1,4 @@
-# analytics (:8089), Kafka Streams - 12 bindings, matching init-security.sh's
+# analytics (:8089), Kafka Streams - 14 bindings, matching init-security.sh's
 # "--- analytics ---" block. This is the principal that carries THE classic ACL gotcha.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
@@ -18,6 +18,11 @@ spec:
       - resource: { type: topic, name: payments.payment-requested.v1, patternType: literal }
         operations: [Read, Describe]
       - resource: { type: topic, name: merchants.merchant-config-changed.v1, patternType: literal }
+        operations: [Read, Describe]
+      # M13: the dispute-projection listener (adapters.in.kafka.DisputeOpenedListener) - a plain
+      # single-record @KafkaListener, a THIRD independent consumer identity in this service
+      # alongside the Streams app and the batch listener below.
+      - resource: { type: topic, name: disputes.dispute-opened.v1, patternType: literal }
         operations: [Read, Describe]
       # THE STREAMS GOTCHA. Streams CREATES its own internal topics (changelogs, repartitions)
       # through an embedded AdminClient at startup. With deny-by-default and no Create, KafkaStreams
@@ -41,6 +46,9 @@ spec:
         operations: [Read, Describe]
       # M13's plain @KafkaListener(batch = true) - a separate consumer identity in the same service.
       - resource: { type: group, name: analytics.status-audit-batch.v1, patternType: prefix }
+        operations: [Read, Describe]
+      # M13's dispute-projection listener - yet another independent consumer identity/group.
+      - resource: { type: group, name: analytics.dispute-projection.v1, patternType: prefix }
         operations: [Read, Describe]
       # Streams' AdminClient calls describeCluster() during startup and rebalances.
       - resource: { type: cluster }

@@ -23,6 +23,7 @@ so): `replication.factor=3`, `min.insync.replicas=2`, `cleanup.policy=delete`,
 | `refunds.reservation-released.v1` | `merchantId` | 6 | 7 d | delete | ledger | analytics, realtime-gateway |
 | `ledger.ledger-entry-recorded.v1` | `merchantId` | 6 | 30 d | delete | ledger | analytics, realtime-gateway, Connect Mongo sink (audit-trail) |
 | `merchants.merchant-config-changed.v1` | `merchantId` | 3 | ∞ (compacted) | compact | payment-api (merchant config API, **direct produce — not the outbox**) | analytics (`GlobalKTable`, M10); psp-connector, webhook-notifier, ledger later, same way |
+| `disputes.dispute-opened.v1` | `disputeId` | 3 | 30 d | delete | payment-api (dispute API, **direct produce — not the outbox**, same reasoning as merchant config) | analytics (dispute-projection listener, M13) |
 
 **M10 compaction settings** on `merchants.merchant-config-changed.v1`, applied by
 `infra/compose/create-topics.sh` via `kafka-configs --alter` (`kafka-topics --create
@@ -40,6 +41,19 @@ services/payment-api/README.md's "M10 - Merchant config" section.
 **Deletion on this topic is a tombstone** — a record with the merchant's key and a `null` value —
 never a `deleted` flag in the value. A flag *is* a value, so compaction would retain it forever
 and every downstream `GlobalKTable` would keep a live row for a merchant that no longer exists.
+
+**M13 claim check.** `disputes.dispute-opened.v1` carries a document at or below
+`payment-api.disputes.claim-check-threshold-bytes` (default 512 KiB) INLINE in the record's
+`InlineDocument` union branch; above the threshold, payment-api uploads the document to MinIO
+first (bucket `disputes`, object key = `disputeId`) and the record carries a `ClaimCheckReference`
+branch instead - `{bucket, objectKey, sizeBytes, contentType}`, never the bytes. Kept in the
+7-partition-and-under, delete-policy tier deliberately: keeping every claim-checked event small
+(well under Kafka's default `max.request.size=1 MiB`) is the entire point of the pattern, so this
+topic never needs the broker- or consumer-side size knobs (`max.request.size`, `fetch.max.bytes`,
+`max.partition.fetch.bytes`) touched for any other topic in the map. See
+services/payment-api/README.md's "M13: claim check, measured" section for the real
+`RecordTooLargeException` this topic's default limits produce when the claim-check decision is
+bypassed, and the measured claim-check success path against a real multi-megabyte document.
 
 **Wire format (M9):** `payments.payment-requested.v1` (Phase 1) and, as of Phase 2,
 `payments.payment-status-changed.v1` and `ledger.ledger-entry-recorded.v1` are Avro + Schema
@@ -172,6 +186,7 @@ compacted config topic. Debezium's Postgres connector needs no schema-history to
 | `payment-api.replies.<instanceId>` | payment-api | `psp.provider-status-reply.v1` — **unique per instance** (M12); a shared group would let a reply land on a partition the SENDING instance's `ReplyingKafkaTemplate` never sees, timing out a request that was actually answered — see services/payment-api/README.md's M12 section |
 | `realtime-gateway.<instanceId>` | realtime-gateway | `payments.*`, `refunds.*` — **unique per instance**; consumer groups load-split, they do not fan out (M12) |
 | `connect-mongo-audit-sink` | Kafka Connect | `ledger.ledger-entry-recorded.v1`, `payments.payment-status-changed.v1` |
+| `analytics.dispute-projection.v1` | analytics | `disputes.dispute-opened.v1` (M13) - a plain single-record `@KafkaListener`, independent of both `analytics-streams.v1` and `analytics.status-audit-batch.v1` above |
 
 Every group sets `enable.auto.commit=false` with manual ack, `auto.offset.reset=earliest`,
 `isolation.level=read_committed` (mandatory for consumers of anything the transactional ledger

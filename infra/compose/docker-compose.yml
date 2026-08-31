@@ -66,6 +66,7 @@ volumes:
   kafka3-data:
   postgres-data:
   mongo-data:
+  minio-data:
   prometheus-data:
   grafana-data:
   tempo-data:
@@ -597,6 +598,37 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 15s
+
+  # ============================================================================================
+  # M13 - MinIO: the claim-check pattern's object store (payment-api uploads dispute documents
+  # over 512 KiB, analytics dereferences them). One instance, one root credential, no per-service
+  # MinIO users - see the k8s minio subchart's values.yaml top comment for the full reasoning
+  # (same simplification, mirrored here for compose parity). payment-api and analytics both run on
+  # the HOST (java -jar ...), so they reach this over its published host port, same host/compose-
+  # network split every other infra address in this file follows - see their
+  # application-docker-compose.yml files.
+  # ============================================================================================
+  minio:
+    image: minio/minio:${MINIO_VERSION}
+    hostname: minio
+    container_name: minio
+    command: ["server", "/data", "--console-address", ":9090"]
+    networks: [kafka-psp-net]
+    restart: unless-stopped
+    ports:
+      - "${MINIO_API_PORT}:9000"     # S3 API - what payment-api/analytics's S3Client dials
+      - "${MINIO_CONSOLE_PORT}:9090" # Web console - http://localhost:${MINIO_CONSOLE_PORT}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
       start_period: 15s
 
   # ============================================================================================

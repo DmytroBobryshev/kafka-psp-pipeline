@@ -135,6 +135,28 @@ spec:
     cleanup.policy: delete
     min.insync.replicas: "2"
 ---
+# M13: the claim-check demo's topic. One event per aggregate (a dispute is opened once, never
+# updated on this topic - see the Avro schema's record-level doc), so - like
+# payments.payment-requested.v1 above - keyed by its own aggregate id (disputeId) rather than
+# merchantId: ADR-0003's "ordering is vacuous on a one-event-per-aggregate topic" exception.
+# 3 partitions (low volume: disputes are rare next to payments, same tier as the config/DLQ
+# topics), 30 d retention (an audit-trail-shaped record, same tier as ledger.ledger-entry-
+# recorded.v1, not the 7 d payment-path default).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: disputes.dispute-opened.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "2592000000"    # 30 d
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
 # The compacted config topic. Everything below the cleanup.policy line is the M10 block from
 # topic-map.md, and in compose it could NOT be expressed at creation time: `kafka-topics --create
 # --if-not-exists` never alters an existing topic's configs, so create-topics.sh had to make a

@@ -21,7 +21,13 @@ import org.springframework.kafka.test.context.EmbeddedKafka;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @EmbeddedKafka(
         partitions = 1,
-        topics = {"payments.payment-status-changed.v1", "merchants.merchant-config-changed.v1"})
+        topics = {
+            "payments.payment-status-changed.v1",
+            "merchants.merchant-config-changed.v1",
+            // M13: adapters.in.kafka.DisputeOpenedListener's container also subscribes at
+            // context-refresh time - same requirement as the two topics above.
+            "disputes.dispute-opened.test.v1"
+        })
 class AnalyticsApplicationTests {
 
     @Test
