@@ -130,6 +130,11 @@ class OpenDisputeUseCaseTest {
         }
 
         @Override
+        public void applyPendingStatus(UUID paymentId) {
+            throw new UnsupportedOperationException("not needed by this test");
+        }
+
+        @Override
         public com.example.psp.paymentapi.domain.model.PaymentPage search(
                 String merchantId, com.example.psp.paymentapi.domain.model.PaymentStatus status, int page, int size) {
             throw new UnsupportedOperationException("not needed by this test");

@@ -46,6 +46,7 @@ public class MerchantConfigAvroEventFactory {
                 .setDisplayName(config.displayName())
                 .setStatus(config.status().name())
                 .setPayoutCurrency(config.payoutCurrency())
+                .setAllowedCurrencies(config.allowedCurrencies())
                 .setWebhookUrl(config.webhookUrl())
                 .setDeclineRateAlertThresholdBps(config.declineRateAlertThresholdBps())
                 .build();

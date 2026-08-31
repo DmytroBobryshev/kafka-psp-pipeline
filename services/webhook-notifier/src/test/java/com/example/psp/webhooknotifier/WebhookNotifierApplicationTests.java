@@ -24,6 +24,9 @@ import org.springframework.kafka.test.context.EmbeddedKafka;
             // refundFailedKafkaListenerContainerFactory also subscribe at context-refresh time.
             "refunds.refund-completed.v1",
             "refunds.refund-failed.v1",
+            // Merchant webhook projection: config.KafkaConsumerConfig's
+            // merchantViewKafkaListenerContainerFactory also subscribes at context-refresh time.
+            "merchants.merchant-config-changed.v1",
             "webhooks.webhook-delivery-requested.v1",
             "webhooks.webhook-delivery-requested.v1.retry.5s",
             "webhooks.webhook-delivery-requested.v1.retry.1m",

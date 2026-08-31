@@ -15,35 +15,56 @@ import org.mapstruct.ReportingPolicy;
  * field is plain Avro {@code string}, hence the explicit {@code UUID.fromString(...)} expression -
  * the same pattern webhook-notifier's and ledger's own {@code PaymentStatusChangedMapper}s already
  * use for this identical event.
+ *
+ * <p>M20: {@code eventId}/{@code occurredAt} now also flow through from {@code event.envelope} -
+ * {@link ApplyPaymentOutcomeUseCase} needs both to write the {@code payment_status_history} row
+ * (eventId as the dedup key, occurredAt as the row's domain event time), the same
+ * {@code envelope.eventId}/{@code envelope.occurredAt} pair every other consumer of this event
+ * already reads for its own causation/dedup bookkeeping (see ledger's and webhook-notifier's own
+ * {@code PaymentStatusChangedMapper}s).
  */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface PaymentStatusChangedMapper {
 
     @Mapping(target = "paymentId", expression = "java(java.util.UUID.fromString(event.getPaymentId()))")
     @Mapping(target = "status", source = "status", qualifiedByName = "toPaymentStatus")
+    @Mapping(
+            target = "eventId",
+            expression = "java(java.util.UUID.fromString(event.getEnvelope().getEventId()))")
+    @Mapping(target = "occurredAt", source = "event.envelope.occurredAt")
     ApplyPaymentOutcomeCommand toCommand(PaymentStatusChanged event);
 
     /**
      * Translates the event's status vocabulary into this table's own. {@link PaymentStatus} (M1)
      * predates {@code payments.payment-status-changed.v1}'s (M9 Phase 2) event vocabulary by
-     * several milestones and was never renamed to match it. A declined card is not an error, it
-     * is a business outcome (ADR-0006 category B) - the event says so plainly with
-     * {@code "DECLINED"} - but this table has no {@code DECLINED} state of its own, only
-     * {@link PaymentStatus#FAILED}: from this row's point of view, "the provider said no" and "we
-     * could not reach the provider at all" are the same terminal fact as far as this column is
-     * concerned - the payment did not succeed. {@code FAILED} is this table's word for that fact,
-     * not a claim about which of the two actually happened; the decline reason itself, if a caller
-     * needs it, lives in psp-connector's own record of the attempt, not here.
+     * several milestones and was never renamed to match it.
      *
-     * <p>Any status other than {@code "SUCCEEDED"}/{@code "DECLINED"} is a contract violation this
-     * mapper cannot classify (the schema's own doc says the event is "never emitted for a TIMEOUT
-     * outcome" - ADR-0006 category A is not a business outcome) - it throws rather than silently
-     * defaulting, so it fails loudly at the listener (ADR-0006 category D: unknown = non-retryable,
-     * logged and skipped, never silently mis-recorded as a status that never happened).
+     * <p>{@code "PENDING"} (M20 - the pre-provider-call status
+     * {@code KafkaPaymentStatusPublisher#publishPending} emits) maps straight across to
+     * {@link PaymentStatus#PENDING}: unlike {@code "DECLINED"}, this table already has a
+     * same-named state for it, so no vocabulary translation is needed - only the downstream
+     * NO-DOWNGRADE guard ({@code domain.port.PaymentRepository#applyPendingStatus}) is new.
+     *
+     * <p>A declined card is not an error, it is a business outcome (ADR-0006 category B) - the
+     * event says so plainly with {@code "DECLINED"} - but this table has no {@code DECLINED}
+     * state of its own, only {@link PaymentStatus#FAILED}: from this row's point of view, "the
+     * provider said no" and "we could not reach the provider at all" are the same terminal fact
+     * as far as this column is concerned - the payment did not succeed. {@code FAILED} is this
+     * table's word for that fact, not a claim about which of the two actually happened; the
+     * decline reason itself, if a caller needs it, lives in psp-connector's own record of the
+     * attempt, not here.
+     *
+     * <p>Any status other than {@code "PENDING"}/{@code "SUCCEEDED"}/{@code "DECLINED"} is a
+     * contract violation this mapper cannot classify (the schema's own doc says the event is
+     * "never emitted for a TIMEOUT outcome" - ADR-0006 category A is not a business outcome) - it
+     * throws rather than silently defaulting, so it fails loudly at the listener (ADR-0006
+     * category D: unknown = non-retryable, logged and skipped, never silently mis-recorded as a
+     * status that never happened).
      */
     @Named("toPaymentStatus")
     default PaymentStatus toPaymentStatus(String eventStatus) {
         return switch (eventStatus) {
+            case "PENDING" -> PaymentStatus.PENDING;
             case "SUCCEEDED" -> PaymentStatus.SUCCEEDED;
             case "DECLINED" -> PaymentStatus.FAILED;
             default ->

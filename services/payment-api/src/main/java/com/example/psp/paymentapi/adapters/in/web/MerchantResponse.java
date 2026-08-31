@@ -1,6 +1,7 @@
 package com.example.psp.paymentapi.adapters.in.web;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Wire contract for a single merchant, returned by both {@code GET /api/merchants} (as an
@@ -12,6 +13,7 @@ public record MerchantResponse(
         String displayName,
         String status,
         String payoutCurrency,
+        List<String> allowedCurrencies,
         String webhookUrl,
         int declineRateAlertThresholdBps,
         Instant updatedAt) {

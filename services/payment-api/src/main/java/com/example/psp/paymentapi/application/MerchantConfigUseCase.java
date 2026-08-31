@@ -39,6 +39,7 @@ public class MerchantConfigUseCase {
                         command.displayName(),
                         command.status(),
                         command.payoutCurrency(),
+                        command.allowedCurrencies(),
                         command.webhookUrl(),
                         command.declineRateAlertThresholdBps());
 

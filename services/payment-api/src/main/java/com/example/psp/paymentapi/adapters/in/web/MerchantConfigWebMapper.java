@@ -25,6 +25,7 @@ public interface MerchantConfigWebMapper {
     @Mapping(target = "displayName", source = "request.displayName")
     @Mapping(target = "status", source = "request.status")
     @Mapping(target = "payoutCurrency", source = "request.payoutCurrency")
+    @Mapping(target = "allowedCurrencies", source = "request.allowedCurrencies")
     @Mapping(target = "webhookUrl", source = "request.webhookUrl")
     @Mapping(
             target = "declineRateAlertThresholdBps",

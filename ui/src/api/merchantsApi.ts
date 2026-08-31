@@ -6,6 +6,7 @@ export interface MerchantView {
   displayName: string;
   status: MerchantStatus;
   payoutCurrency: string;
+  allowedCurrencies: string[];
   webhookUrl: string | null;
   declineRateAlertThresholdBps: number;
   updatedAt: string;

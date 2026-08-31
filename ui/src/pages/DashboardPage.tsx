@@ -66,6 +66,11 @@ export function DashboardPage() {
 
   return (
     <main className="mx-auto max-w-[1500px] px-6 py-8">
+      <h2 className="mb-1 text-base font-semibold text-slate-900">Operations overview</h2>
+      <p className="mb-4 text-xs text-slate-500">
+        Totals and latest transactions from payment-api; windowed metrics below come live from the
+        Kafka Streams store.
+      </p>
       <div className="mb-6 flex flex-wrap items-end gap-4">
         <label className="block">
           <span className="mb-1 block text-sm font-medium text-slate-700">Merchant ID (empty = all)</span>
@@ -127,16 +132,23 @@ export function DashboardPage() {
             open transactions panel →
           </Link>
         </div>
+        <div className="grid grid-cols-[110px_1fr_110px_110px_80px] gap-3 border-b border-slate-200 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+          <span>Payment</span>
+          <span>Merchant</span>
+          <span className="text-right">Amount</span>
+          <span className="text-right">Status</span>
+          <span className="text-right">Time</span>
+        </div>
         <ul className="divide-y divide-slate-100 text-xs">
           {(latest.data?.items ?? []).map((p) => (
-            <li key={p.id} className="flex items-center justify-between py-1.5">
-              <span className="font-mono text-slate-500">{p.id.slice(0, 8)}…</span>
-              <span>{p.merchantId}</span>
-              <span>{p.amount} {p.currency}</span>
-              <span className={p.status === "SUCCEEDED" ? "text-emerald-700" : p.status === "FAILED" ? "text-rose-700" : "text-slate-500"}>
+            <li key={p.id} className="grid grid-cols-[110px_1fr_110px_110px_80px] items-center gap-3 py-1.5">
+              <span className="truncate font-mono text-slate-500">{p.id.slice(0, 8)}…</span>
+              <span className="truncate">{p.merchantId}</span>
+              <span className="text-right tabular-nums">{p.amount} {p.currency}</span>
+              <span className={`text-right font-medium ${p.status === "SUCCEEDED" ? "text-emerald-700" : p.status === "FAILED" ? "text-rose-700" : "text-slate-500"}`}>
                 {p.status}
               </span>
-              <span className="text-slate-400">{new Date(p.createdAt).toLocaleTimeString()}</span>
+              <span className="text-right text-slate-400">{new Date(p.createdAt).toLocaleTimeString()}</span>
             </li>
           ))}
         </ul>
@@ -153,6 +165,7 @@ export function DashboardPage() {
         <p className="text-sm text-rose-600">Failed to load windows: {windows.error.message}</p>
       )}
 
+      <h3 className="mb-2 text-sm font-semibold text-slate-700">Windowed metrics (1-minute tumbling, Kafka Streams)</h3>
       <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">

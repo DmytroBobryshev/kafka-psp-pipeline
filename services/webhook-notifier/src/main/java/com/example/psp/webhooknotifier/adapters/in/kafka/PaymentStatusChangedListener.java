@@ -23,11 +23,19 @@ import org.springframework.stereotype.Component;
  * boundary, not a silent one: this is a pure translation step with nothing of its own to protect
  * against loss (the source of truth, {@code payments.payment-status-changed.v1}, is retained for
  * 7 days and already has its own consumers/DLQs elsewhere in the system).
+ *
+ * <p><b>PENDING is filtered here, not planned.</b> {@code status = "PENDING"} is psp-connector's
+ * non-terminal, pre-provider-call event - there is nothing to tell a merchant yet. Only a terminal
+ * {@code SUCCEEDED}/{@code DECLINED} becomes a planned delivery; a PENDING record is acknowledged
+ * and dropped before {@link PlanWebhookDeliveryUseCase} - which stays reused unchanged across all
+ * three planner sources (see its own javadoc) - ever sees it.
  */
 @Component
 public class PaymentStatusChangedListener {
 
     private static final Logger log = LoggerFactory.getLogger(PaymentStatusChangedListener.class);
+
+    private static final String PENDING_STATUS = "PENDING";
 
     private final PlanWebhookDeliveryUseCase useCase;
     private final PaymentStatusChangedMapper mapper;
@@ -41,6 +49,16 @@ public class PaymentStatusChangedListener {
             topics = "${webhook-notifier.kafka.payment-status-changed-topic}",
             containerFactory = "plannerKafkaListenerContainerFactory")
     public void onMessage(PaymentStatusChanged event, Acknowledgment ack) {
+        if (PENDING_STATUS.equals(event.getStatus())) {
+            log.info(
+                    "Skipping non-terminal payment-status-changed paymentId={} merchantId={} status=PENDING - "
+                            + "nothing to notify a merchant about yet",
+                    event.getPaymentId(),
+                    event.getMerchantId());
+            ack.acknowledge();
+            return;
+        }
+
         log.info(
                 "Consumed payment-status-changed paymentId={} merchantId={} status={}",
                 event.getPaymentId(),

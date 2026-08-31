@@ -32,6 +32,24 @@ public interface PaymentJpaRepository extends JpaRepository<PaymentEntity, UUID>
             @Param("at") java.time.Instant at);
 
     /**
+     * M20: the NO-DOWNGRADE guard behind {@code domain.port.PaymentRepository#applyPendingStatus}
+     * - identical shape to {@link #updateStatus} above, plus one extra {@code AND} clause. Both
+     * {@code :status} and {@code :requiredCurrentStatus} are bound parameters rather than JPQL
+     * enum literals (avoids embedding {@link PaymentStatus}'s fully-qualified name in a query
+     * string) - the adapter always calls this with {@code PENDING}/{@code CREATED}, but the query
+     * itself stays a general "conditional absolute UPDATE" rather than a PENDING-only one, in case
+     * a future FROM/TO pair needs the identical guard shape.
+     */
+    @Modifying
+    @Query("UPDATE PaymentEntity p SET p.status = :status, p.statusUpdatedAt = :at"
+            + " WHERE p.id = :paymentId AND p.status = :requiredCurrentStatus")
+    void updateStatusIfCurrentStatus(
+            @Param("paymentId") UUID paymentId,
+            @Param("status") PaymentStatus status,
+            @Param("requiredCurrentStatus") PaymentStatus requiredCurrentStatus,
+            @Param("at") java.time.Instant at);
+
+    /**
      * M19's transactions-panel query. Both filters are optional: {@code (:x IS NULL OR field =
      * :x)} is the standard JPQL idiom for "match everything when the parameter is null, otherwise
      * match exactly" - one query plan instead of branching between up to four hand-written

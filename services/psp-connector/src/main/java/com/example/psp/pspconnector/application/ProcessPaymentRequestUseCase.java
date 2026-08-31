@@ -137,6 +137,16 @@ public class ProcessPaymentRequestUseCase {
             return;
         }
 
+        // Non-terminal PENDING before the provider call - the panel's CREATED->PENDING hop.
+        // Fresh eventId per emission; ledger skips non-SUCCEEDED, webhooks skip PENDING.
+        statusPublisher.publishPending(
+                command.paymentId(),
+                command.merchantId(),
+                command.amount(),
+                inboundEventId,
+                command.traceId(),
+                command.correlationId());
+
         ProviderResult result =
                 paymentProvider.authorize(command.paymentId(), command.merchantId(), command.amount());
 

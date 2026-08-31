@@ -236,6 +236,18 @@ class CrashRedeliveryIT extends PspConnectorIntegrationSupport {
         PaymentStatusPublisher failingPaymentStatusPublisher(KafkaPaymentStatusPublisher delegate) {
             return new PaymentStatusPublisher() {
                 @Override
+                public void publishPending(
+                        java.util.UUID paymentId,
+                        String merchantId,
+                        com.example.psp.pspconnector.domain.model.Money amount,
+                        java.util.UUID causationEventId,
+                        String traceId,
+                        String correlationId) {
+                    delegate.publishPending(
+                            paymentId, merchantId, amount, causationEventId, traceId, correlationId);
+                }
+
+                @Override
                 public void publishStatusChanged(PaymentAttempt attempt) {
                     if (PUBLISH_FAILING.get()) {
                         // KafkaException is what the real publisher throws when the broker never

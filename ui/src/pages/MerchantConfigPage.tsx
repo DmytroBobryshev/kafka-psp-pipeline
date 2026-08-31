@@ -5,11 +5,14 @@ import { listMerchants, type MerchantView } from "../api/merchantsApi";
 import { deleteMerchantConfig, upsertMerchantConfig } from "../api/merchantConfigApi";
 import type { MerchantStatus, UpsertMerchantConfigRequest } from "../api/types";
 
+const CURRENCIES = ["EUR", "USD", "GBP"] as const;
+
 const EMPTY_FORM: UpsertMerchantConfigRequest & { merchantId: string } = {
   merchantId: "",
   displayName: "",
   status: "ACTIVE",
   payoutCurrency: "EUR",
+  allowedCurrencies: ["EUR"],
   webhookUrl: "",
   declineRateAlertThresholdBps: 2500,
 };
@@ -36,6 +39,7 @@ export function MerchantConfigPage() {
       displayName: m.displayName,
       status: m.status,
       payoutCurrency: m.payoutCurrency,
+      allowedCurrencies: m.allowedCurrencies?.length ? m.allowedCurrencies : [m.payoutCurrency],
       webhookUrl: m.webhookUrl ?? "",
       declineRateAlertThresholdBps: m.declineRateAlertThresholdBps,
     });
@@ -49,6 +53,7 @@ export function MerchantConfigPage() {
         displayName: form.displayName,
         status: form.status,
         payoutCurrency: form.payoutCurrency,
+        allowedCurrencies: form.allowedCurrencies,
         webhookUrl: form.webhookUrl?.trim() ? form.webhookUrl : null,
         declineRateAlertThresholdBps: form.declineRateAlertThresholdBps,
       }),
@@ -108,7 +113,7 @@ export function MerchantConfigPage() {
                 <th className="px-4 py-3">Merchant</th>
                 <th className="px-4 py-3">ID</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Payout</th>
+                <th className="px-4 py-3">Currencies</th>
                 <th className="px-4 py-3">Webhook</th>
                 <th className="px-4 py-3">Updated</th>
                 <th className="px-4 py-3"></th>
@@ -136,7 +141,7 @@ export function MerchantConfigPage() {
                       {m.status}
                     </span>
                   </td>
-                  <td className="px-4 py-2">{m.payoutCurrency}</td>
+                  <td className="px-4 py-2 text-xs">{(m.allowedCurrencies?.length ? m.allowedCurrencies : [m.payoutCurrency]).join(" · ")}</td>
                   <td className="px-4 py-2 font-mono text-[10px] text-slate-400">
                     {m.webhookUrl ? "✓ set" : "–"}
                   </td>
@@ -209,11 +214,42 @@ export function MerchantConfigPage() {
               onChange={(e) => setForm({ ...form, payoutCurrency: e.target.value })}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
-              <option>EUR</option>
-              <option>USD</option>
-              <option>GBP</option>
+              {form.allowedCurrencies.map((c) => (
+                <option key={c}>{c}</option>
+              ))}
             </select>
           </label>
+        </div>
+        <div className="mb-3">
+          <span className="mb-1 block text-sm font-medium text-slate-700">
+            Accepted currencies <span className="text-xs font-normal text-slate-400">(1–3; payments allowed only in these)</span>
+          </span>
+          <div className="flex gap-3">
+            {CURRENCIES.map((c) => {
+              const checked = form.allowedCurrencies.includes(c);
+              return (
+                <label key={c} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${checked ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-600"}`}>
+                  <input
+                    type="checkbox"
+                    className="hidden"
+                    checked={checked}
+                    onChange={() => {
+                      const next = checked
+                        ? form.allowedCurrencies.filter((x) => x !== c)
+                        : [...form.allowedCurrencies, c];
+                      if (next.length === 0) return;
+                      setForm({
+                        ...form,
+                        allowedCurrencies: next,
+                        payoutCurrency: next.includes(form.payoutCurrency) ? form.payoutCurrency : next[0],
+                      });
+                    }}
+                  />
+                  {c}
+                </label>
+              );
+            })}
+          </div>
         </div>
         <label className="mb-3 block">
           <span className="mb-1 block text-sm font-medium text-slate-700">

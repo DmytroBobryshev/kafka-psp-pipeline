@@ -48,6 +48,14 @@ public class PostgresPaymentRepository implements PaymentRepository {
     }
 
     @Override
+    public void applyPendingStatus(UUID paymentId) {
+        // M20: PENDING only applies FROM CREATED - see the port's javadoc for why this is a
+        // conditional UPDATE rather than updateStatus's unconditional one.
+        jpaRepository.updateStatusIfCurrentStatus(
+                paymentId, PaymentStatus.PENDING, PaymentStatus.CREATED, java.time.Instant.now());
+    }
+
+    @Override
     public PaymentPage search(String merchantId, PaymentStatus status, int page, int size) {
         Page<PaymentEntity> result =
                 jpaRepository.search(merchantId, status, PageRequest.of(page, size));

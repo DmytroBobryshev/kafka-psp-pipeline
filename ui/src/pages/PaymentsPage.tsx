@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  getPaymentHistory,
   getPaymentRefunds,
   getProviderStatus,
   getWebhookDeliveries,
@@ -264,6 +265,13 @@ function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
     retry: false,
     refetchInterval: 7000,
   });
+  const statusTrail = useQuery({
+    queryKey: ["payment-history", payment?.id],
+    queryFn: () => getPaymentHistory(payment!.id),
+    enabled: !!payment,
+    refetchInterval: 5000,
+    retry: false,
+  });
   const provider = useQuery({
     queryKey: ["provider-status", payment?.id],
     queryFn: () => getProviderStatus(payment!.id),
@@ -315,20 +323,70 @@ function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
       {showRefundForm && <InlineRefundForm paymentId={payment.id} onDone={() => setShowRefundForm(false)} />}
 
       <div>
-        <h4 className="mb-1 text-xs font-semibold text-slate-600">Lifecycle</h4>
-        <LifecycleRow label="Created" at={payment.createdAt} />
-        {outcomeLabel ? (
-          <LifecycleRow
-            label={outcomeLabel}
-            at={payment.statusUpdatedAt}
-            tone={payment.status === "SUCCEEDED" ? "text-emerald-700" : "text-rose-700"}
-          />
-        ) : (
-          <LifecycleRow label="Awaiting outcome…" at={null} tone="text-slate-400" />
-        )}
-        {(refunds.data ?? []).map((r) => (
-          <LifecycleRow key={r.id} label={`Refund initiated (${r.amount} ${r.currency})`} at={r.createdAt} />
-        ))}
+        <h4 className="mb-1 text-xs font-semibold text-slate-600">History</h4>
+        {(() => {
+          type Entry = { at: string | null; label: string; tone?: string; sub?: string };
+          const TONE: Record<string, string> = {
+            SUCCEEDED: "text-emerald-700",
+            FAILED: "text-rose-700",
+            PENDING: "text-amber-700",
+            CREATED: "text-slate-700",
+          };
+          const LABEL: Record<string, string> = {
+            CREATED: "Created",
+            PENDING: "Pending — sent to provider",
+            SUCCEEDED: "Paid",
+            FAILED: "Declined",
+          };
+          let entries: Entry[];
+          if (statusTrail.data?.length) {
+            entries = statusTrail.data.map((h) => ({
+              at: h.occurredAt,
+              label: LABEL[h.status] ?? h.status,
+              tone: TONE[h.status],
+              sub: `${h.source}${h.eventId ? ` · ${h.eventId.slice(0, 8)}…` : ""}`,
+            }));
+          } else {
+            entries = [{ at: payment.createdAt, label: "Created" }];
+            if (outcomeLabel) {
+              entries.push({
+                at: payment.statusUpdatedAt ?? null,
+                label: outcomeLabel,
+                tone: payment.status === "SUCCEEDED" ? "text-emerald-700" : "text-rose-700",
+              });
+            } else {
+              entries.push({ at: null, label: "Awaiting outcome…", tone: "text-slate-400" });
+            }
+          }
+          for (const r of refunds.data ?? []) {
+            entries.push({ at: r.createdAt, label: `Refund initiated · ${r.amount} ${r.currency}` });
+          }
+          for (const d of deliveries.data ?? []) {
+            entries.push({
+              at: d.createdAt,
+              label: `Webhook ${d.eventType}`,
+              tone:
+                d.status === "SUCCESS"
+                  ? "text-emerald-700"
+                  : d.status === "RETRYABLE_FAILURE"
+                    ? "text-amber-700"
+                    : "text-rose-700",
+              sub: `${d.status.toLowerCase()} · ${d.attempts} attempt${d.attempts === 1 ? "" : "s"} → ${d.url}`,
+            });
+          }
+          entries.sort((a, b) => (a.at ?? "9999").localeCompare(b.at ?? "9999"));
+          return entries.map((e, i) => (
+            <div key={i} className="border-l-2 border-slate-200 py-1 pl-3 text-xs">
+              <div className="flex items-center justify-between">
+                <span className={e.tone ?? "text-slate-700"}>{e.label}</span>
+                <span className="font-mono text-slate-500">
+                  {e.at ? new Date(e.at).toLocaleTimeString() : "—"}
+                </span>
+              </div>
+              {e.sub && <div className="truncate text-[10px] text-slate-400">{e.sub}</div>}
+            </div>
+          ));
+        })()}
       </div>
 
       {showProvider && (
@@ -350,43 +408,6 @@ function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
         </ul>
       </div>
 
-      <div>
-        <h4 className="mb-1 text-xs font-semibold text-slate-600">Webhook deliveries</h4>
-        {deliveries.error && (
-          <p className="text-xs text-slate-400">
-            no delivery log available{deliveries.error.message ? ` (${deliveries.error.message})` : ""}
-          </p>
-        )}
-        {deliveries.data?.length === 0 && (
-          <p className="text-xs text-slate-400">no deliveries planned for this payment yet</p>
-        )}
-        <ul className="space-y-1">
-          {(deliveries.data ?? []).map((d) => (
-            <li key={d.id} className="rounded border border-slate-100 p-2 text-xs">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-medium">{d.eventType}</span>
-                <span
-                  className={`rounded px-1.5 py-0.5 font-medium ${
-                    d.status === "SUCCESS"
-                      ? "bg-emerald-100 text-emerald-700"
-                      : d.status === "RETRYABLE_FAILURE"
-                        ? "bg-amber-100 text-amber-700"
-                        : "bg-rose-100 text-rose-700"
-                  }`}
-                >
-                  {d.status}
-                </span>
-              </div>
-              <div className="mt-0.5 text-slate-500">
-                {d.attempts} attempt{d.attempts === 1 ? "" : "s"} · last{" "}
-                {new Date(d.lastAttemptAt).toLocaleTimeString()}
-                {d.refundId && <span className="ml-2 font-mono">refund {d.refundId.slice(0, 8)}…</span>}
-              </div>
-              <div className="mt-0.5 truncate font-mono text-[10px] text-slate-400">{d.url}</div>
-            </li>
-          ))}
-        </ul>
-      </div>
     </aside>
   );
 }

@@ -39,6 +39,10 @@ public class MerchantConfigEntity {
     @Column(name = "payout_currency", nullable = false, length = 3)
     private String payoutCurrency;
 
+    // CSV of 1-3 ISO-4217 codes; "" means legacy row - see MerchantConfigPersistenceMapper.
+    @Column(name = "allowed_currencies", nullable = false, length = 64)
+    private String allowedCurrencies;
+
     @Column(name = "webhook_url")
     private String webhookUrl;
 

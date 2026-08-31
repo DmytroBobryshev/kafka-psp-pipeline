@@ -38,12 +38,17 @@ public class PaymentQueryController {
     private final PaymentQueryUseCase useCase;
     private final PaymentWebMapper mapper;
     private final RefundWebMapper refundMapper;
+    private final PaymentHistoryWebMapper historyMapper;
 
     public PaymentQueryController(
-            PaymentQueryUseCase useCase, PaymentWebMapper mapper, RefundWebMapper refundMapper) {
+            PaymentQueryUseCase useCase,
+            PaymentWebMapper mapper,
+            RefundWebMapper refundMapper,
+            PaymentHistoryWebMapper historyMapper) {
         this.useCase = useCase;
         this.mapper = mapper;
         this.refundMapper = refundMapper;
+        this.historyMapper = historyMapper;
     }
 
     /**
@@ -90,6 +95,21 @@ public class PaymentQueryController {
         List<RefundResponse> refunds =
                 useCase.listRefunds(id).stream().map(refundMapper::toResponse).toList();
         return ResponseEntity.ok(refunds);
+    }
+
+    /**
+     * {@code GET /api/payments/{id}/history} (M20) - the transactions panel's PSP state-machine
+     * drill-down: {@code CREATED -> PENDING -> SUCCEEDED/FAILED}, ordered {@code occurredAt}
+     * ascending. {@code 200} with {@code {"items": [...]}} (never empty - every payment has at
+     * least its synthesized {@code CREATED} entry), or {@code 404} for an unknown {@code id} -
+     * same {@link java.util.NoSuchElementException} convention {@link #getById} already uses,
+     * propagated straight through from {@link PaymentQueryUseCase#history}.
+     */
+    @GetMapping("/{id}/history")
+    public ResponseEntity<PaymentHistoryResponse> history(@PathVariable("id") UUID id) {
+        List<PaymentHistoryItemResponse> items =
+                useCase.history(id).stream().map(historyMapper::toResponse).toList();
+        return ResponseEntity.ok(new PaymentHistoryResponse(items));
     }
 
     private PaymentStatus parseStatus(String status) {

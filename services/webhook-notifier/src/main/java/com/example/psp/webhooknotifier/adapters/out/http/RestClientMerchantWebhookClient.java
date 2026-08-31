@@ -3,7 +3,9 @@ package com.example.psp.webhooknotifier.adapters.out.http;
 import com.example.psp.webhooknotifier.config.WebhookNotifierProperties;
 import com.example.psp.webhooknotifier.domain.model.DeliveryResult;
 import com.example.psp.webhooknotifier.domain.model.WebhookDeliveryCommand;
+import com.example.psp.webhooknotifier.domain.model.WebhookUrlResolver;
 import com.example.psp.webhooknotifier.domain.port.MerchantWebhookClient;
+import com.example.psp.webhooknotifier.domain.port.MerchantWebhookDirectory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -14,10 +16,18 @@ import org.springframework.web.client.RestClient;
 
 /**
  * Real HTTP adapter for {@link MerchantWebhookClient} (ADR-0004's outbound-HTTP carve-out, same
- * as psp-connector's {@code SimulatedPaymentProviderAdapter} for the provider call). Calls
- * {@code webhook-notifier.merchant-client.base-url + webhook-path} - by default
- * {@code adapters.in.web.SimulatedMerchantController} in this same process, over real loopback
- * HTTP.
+ * as psp-connector's {@code SimulatedPaymentProviderAdapter} for the provider call).
+ *
+ * <h2>Target URL resolution - the M8 bug fix</h2>
+ *
+ * <p>{@link WebhookUrlResolver} decides the target on every call: if {@link MerchantWebhookDirectory}
+ * has a projected {@code webhookUrl} for this merchant, {@code restClient}'s absolute-URI handling
+ * (Spring's {@code DefaultUriBuilderFactory} ignores the configured base URL whenever the given
+ * URI template already has a host) sends the request straight there; otherwise the original
+ * relative template resolves against {@code webhook-notifier.merchant-client.base-url} exactly as
+ * before - by default {@code adapters.in.web.SimulatedMerchantController} in this same process,
+ * over real loopback HTTP. Resolved fresh on every attempt (not cached on the command at planning
+ * time), so a merchant's most recently configured URL always wins.
  *
  * <h2>Classification (ADR-0006, applied to an outbound HTTP call)</h2>
  *
@@ -38,10 +48,15 @@ public class RestClientMerchantWebhookClient implements MerchantWebhookClient {
 
     private final RestClient restClient;
     private final String webhookPath;
+    private final MerchantWebhookDirectory merchantWebhookDirectory;
 
-    public RestClientMerchantWebhookClient(RestClient merchantWebhookRestClient, WebhookNotifierProperties properties) {
+    public RestClientMerchantWebhookClient(
+            RestClient merchantWebhookRestClient,
+            WebhookNotifierProperties properties,
+            MerchantWebhookDirectory merchantWebhookDirectory) {
         this.restClient = merchantWebhookRestClient;
         this.webhookPath = properties.merchantClient().webhookPath();
+        this.merchantWebhookDirectory = merchantWebhookDirectory;
     }
 
     @Override
@@ -57,11 +72,16 @@ public class RestClientMerchantWebhookClient implements MerchantWebhookClient {
                         command.eventType(),
                         command.refundId() == null ? null : command.refundId().toString());
 
+        String targetUri =
+                WebhookUrlResolver.resolve(
+                        merchantWebhookDirectory.findWebhookUrl(command.merchantId()), webhookPath);
+        log.debug("Delivering webhook merchantId={} paymentId={} targetUri={}", command.merchantId(), command.paymentId(), targetUri);
+
         try {
             var response =
                     restClient
                             .post()
-                            .uri(webhookPath, command.merchantId())
+                            .uri(targetUri, command.merchantId())
                             .body(body)
                             .retrieve()
                             .toBodilessEntity();

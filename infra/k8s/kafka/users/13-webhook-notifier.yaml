@@ -19,6 +19,12 @@ spec:
         operations: [Read, Describe]
       - resource: { type: topic, name: refunds.refund-failed.v1, patternType: literal }
         operations: [Read, Describe]
+      # Merchant webhookUrl projection (adapters.in.kafka.MerchantConfigChangedListener) - the M8
+      # bug fix: resolves the delivery target from the merchant's OWN registered webhook. A
+      # second, independent consumer group over the same compacted topic payment-api and
+      # analytics also read (ADR-0005).
+      - resource: { type: topic, name: merchants.merchant-config-changed.v1, patternType: literal }
+        operations: [Read, Describe]
       # ONE prefixed grant covers the whole M9-Phase-2 delivery chain: the v2 base topic, its
       # three retry tiers and its DLQ. This service produces AND consumes every hop
       # (planner -> executor -> retry -> dlq -> replay), which is exactly why the chain lives

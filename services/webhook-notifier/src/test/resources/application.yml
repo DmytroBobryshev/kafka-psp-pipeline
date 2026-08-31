@@ -41,8 +41,10 @@ webhook-notifier:
     retry-1m-topic: webhooks.webhook-delivery-requested.v2.retry.1m
     retry-15m-topic: webhooks.webhook-delivery-requested.v2.retry.15m
     dlq-topic: webhooks.webhook-delivery-requested.v2.dlq
+    merchant-config-changed-topic: merchants.merchant-config-changed.v1
     planner-group-id: webhook-notifier.planner.test.v1
     executor-group-id: webhook-notifier.executor.test.v1
+    merchant-view-group-id: webhook-notifier.merchant-view.test.v1
     deserialization-error-handling-enabled: true
 
   retry:

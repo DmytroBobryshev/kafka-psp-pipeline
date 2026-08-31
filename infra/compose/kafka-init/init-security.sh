@@ -220,6 +220,11 @@ txn_acl   ledger prefixed "ledger-tx-"                                Write Desc
 topic_acl webhook-notifier literal  "payments.payment-status-changed.v1" Read Describe
 topic_acl webhook-notifier literal  "refunds.refund-completed.v1"        Read Describe
 topic_acl webhook-notifier literal  "refunds.refund-failed.v1"           Read Describe
+# Merchant webhookUrl projection (adapters.in.kafka.MerchantConfigChangedListener) - the M8 bug
+# fix: resolves the delivery target from the merchant's OWN registered webhook instead of always
+# falling back to the simulated endpoint. A second, independent consumer group over the same
+# compacted topic payment-api and analytics also read.
+topic_acl webhook-notifier literal  "merchants.merchant-config-changed.v1" Read Describe
 # One prefixed grant covers the whole M9-Phase-2 delivery chain: the v2 base topic, its three
 # retry tiers and its DLQ. This service produces AND consumes every hop (planner -> executor ->
 # retry -> dlq -> replay), which is exactly why the chain lives under one prefix.

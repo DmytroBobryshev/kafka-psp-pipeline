@@ -21,14 +21,15 @@ public interface MerchantConfigJpaRepository extends JpaRepository<MerchantConfi
     @Query(
             value =
                     "INSERT INTO merchant_configs "
-                            + "(merchant_id, display_name, status, payout_currency, webhook_url, "
-                            + "decline_rate_alert_threshold_bps, updated_at) "
-                            + "VALUES (:merchantId, :displayName, :status, :payoutCurrency, :webhookUrl, "
-                            + ":declineRateAlertThresholdBps, :updatedAt) "
+                            + "(merchant_id, display_name, status, payout_currency, allowed_currencies, "
+                            + "webhook_url, decline_rate_alert_threshold_bps, updated_at) "
+                            + "VALUES (:merchantId, :displayName, :status, :payoutCurrency, :allowedCurrencies, "
+                            + ":webhookUrl, :declineRateAlertThresholdBps, :updatedAt) "
                             + "ON CONFLICT (merchant_id) DO UPDATE SET "
                             + "display_name = EXCLUDED.display_name, "
                             + "status = EXCLUDED.status, "
                             + "payout_currency = EXCLUDED.payout_currency, "
+                            + "allowed_currencies = EXCLUDED.allowed_currencies, "
                             + "webhook_url = EXCLUDED.webhook_url, "
                             + "decline_rate_alert_threshold_bps = EXCLUDED.decline_rate_alert_threshold_bps, "
                             + "updated_at = EXCLUDED.updated_at",
@@ -38,6 +39,7 @@ public interface MerchantConfigJpaRepository extends JpaRepository<MerchantConfi
             @Param("displayName") String displayName,
             @Param("status") String status,
             @Param("payoutCurrency") String payoutCurrency,
+            @Param("allowedCurrencies") String allowedCurrencies,
             @Param("webhookUrl") String webhookUrl,
             @Param("declineRateAlertThresholdBps") int declineRateAlertThresholdBps,
             @Param("updatedAt") Instant updatedAt);

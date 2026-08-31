@@ -16,6 +16,7 @@ import com.example.psp.paymentapi.domain.port.PaymentRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -65,7 +66,14 @@ class CreatePaymentUseCaseTest {
         InMemoryFakeRepository repository = new InMemoryFakeRepository();
         MerchantView suspended =
                 new MerchantView(
-                        "merchant-2", "Suspended Co", MerchantStatus.SUSPENDED, "EUR", null, 1500, Instant.now());
+                        "merchant-2",
+                        "Suspended Co",
+                        MerchantStatus.SUSPENDED,
+                        "EUR",
+                        List.of("EUR"),
+                        null,
+                        1500,
+                        Instant.now());
         CreatePaymentUseCase useCase =
                 new CreatePaymentUseCase(
                         repository, new StubMerchantViewRepository(suspended), new RecordingFakePublisher());
@@ -78,10 +86,96 @@ class CreatePaymentUseCaseTest {
                 .hasMessageContaining("merchant-2 is not active (status=SUSPENDED)");
     }
 
+    @Test
+    void acceptsAPaymentInAnyOfTheMerchantsAllowedCurrencies() {
+        InMemoryFakeRepository repository = new InMemoryFakeRepository();
+        MerchantView merchant =
+                new MerchantView(
+                        "merchant-3",
+                        "Multi-currency Co",
+                        MerchantStatus.ACTIVE,
+                        "EUR",
+                        List.of("EUR", "USD", "GBP"),
+                        null,
+                        1500,
+                        Instant.now());
+        CreatePaymentUseCase useCase =
+                new CreatePaymentUseCase(
+                        repository, new StubMerchantViewRepository(merchant), new RecordingFakePublisher());
+
+        // GBP is allowed even though it is not the payoutCurrency (EUR) - the gate checks
+        // membership in the whole set, not equality with the single settlement currency.
+        Payment result =
+                useCase.execute(new CreatePaymentCommand("merchant-3", new Money(BigDecimal.TEN, "GBP")));
+
+        assertThat(result.getAmount().currency()).isEqualTo("GBP");
+    }
+
+    @Test
+    void rejectsAPaymentInACurrencyNotInTheMerchantsAllowedList() {
+        InMemoryFakeRepository repository = new InMemoryFakeRepository();
+        MerchantView merchant =
+                new MerchantView(
+                        "merchant-4",
+                        "Eur-Usd Co",
+                        MerchantStatus.ACTIVE,
+                        "EUR",
+                        List.of("EUR", "USD"),
+                        null,
+                        1500,
+                        Instant.now());
+        CreatePaymentUseCase useCase =
+                new CreatePaymentUseCase(
+                        repository, new StubMerchantViewRepository(merchant), new RecordingFakePublisher());
+
+        assertThatThrownBy(
+                        () ->
+                                useCase.execute(
+                                        new CreatePaymentCommand("merchant-4", new Money(BigDecimal.TEN, "GBP"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("merchant-4 accepts only [EUR, USD] (got GBP)");
+    }
+
+    @Test
+    void legacyEmptyAllowedCurrenciesFallsBackToPayoutCurrency() {
+        InMemoryFakeRepository repository = new InMemoryFakeRepository();
+        MerchantView legacy =
+                new MerchantView(
+                        "merchant-5",
+                        "Legacy Co",
+                        MerchantStatus.ACTIVE,
+                        "EUR",
+                        List.of(),
+                        null,
+                        1500,
+                        Instant.now());
+        CreatePaymentUseCase useCase =
+                new CreatePaymentUseCase(
+                        repository, new StubMerchantViewRepository(legacy), new RecordingFakePublisher());
+
+        Payment accepted =
+                useCase.execute(new CreatePaymentCommand("merchant-5", new Money(BigDecimal.TEN, "EUR")));
+        assertThat(accepted.getAmount().currency()).isEqualTo("EUR");
+
+        assertThatThrownBy(
+                        () ->
+                                useCase.execute(
+                                        new CreatePaymentCommand("merchant-5", new Money(BigDecimal.TEN, "USD"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("merchant-5 accepts only [EUR] (got USD)");
+    }
+
     private static MerchantViewRepository activeMerchant(String merchantId) {
         return new StubMerchantViewRepository(
                 new MerchantView(
-                        merchantId, "Test Merchant", MerchantStatus.ACTIVE, "EUR", null, 1500, Instant.now()));
+                        merchantId,
+                        "Test Merchant",
+                        MerchantStatus.ACTIVE,
+                        "EUR",
+                        List.of("EUR"),
+                        null,
+                        1500,
+                        Instant.now()));
     }
 
     /** Fake port: returns the fixed {@link MerchantView} passed at construction, or empty. */
@@ -144,6 +238,12 @@ class CreatePaymentUseCaseTest {
         public void updateStatus(UUID paymentId, PaymentStatus status) {
             throw new UnsupportedOperationException(
                     "updateStatus() is not part of the create-payment use case under test");
+        }
+
+        @Override
+        public void applyPendingStatus(UUID paymentId) {
+            throw new UnsupportedOperationException(
+                    "applyPendingStatus() is not part of the create-payment use case under test");
         }
     }
 

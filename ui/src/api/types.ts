@@ -124,6 +124,8 @@ export interface UpsertMerchantConfigRequest {
   displayName: string;
   status: MerchantStatus;
   payoutCurrency: string;
+  /** 1..3 ISO codes; payments are accepted only in these. */
+  allowedCurrencies: string[];
   webhookUrl?: string | null;
   declineRateAlertThresholdBps: number;
 }

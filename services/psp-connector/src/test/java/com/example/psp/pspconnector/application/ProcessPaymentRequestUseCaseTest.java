@@ -540,6 +540,7 @@ class ProcessPaymentRequestUseCaseTest {
      */
     private static final class RecordingPublisher implements PaymentStatusPublisher {
         private final List<PaymentAttempt> published = new ArrayList<>();
+        private final AtomicInteger pendingCount = new AtomicInteger();
         private final int failFirstN;
 
         private RecordingPublisher() {
@@ -548,6 +549,17 @@ class ProcessPaymentRequestUseCaseTest {
 
         private RecordingPublisher(int failFirstN) {
             this.failFirstN = failFirstN;
+        }
+
+        @Override
+        public void publishPending(
+                UUID paymentId,
+                String merchantId,
+                Money amount,
+                UUID causationEventId,
+                String traceId,
+                String correlationId) {
+            pendingCount.incrementAndGet();
         }
 
         @Override

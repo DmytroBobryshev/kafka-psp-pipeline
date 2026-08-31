@@ -36,7 +36,7 @@
     {
       "name": "status",
       "type": "string",
-      "doc": "'SUCCEEDED' or 'DECLINED' - never emitted for a TIMEOUT outcome (ADR-0006 category A is not a business outcome)."
+      "doc": "'PENDING' (accepted for processing, pre-provider), 'SUCCEEDED' or 'DECLINED' - never emitted for a TIMEOUT outcome (ADR-0006 category A is not a business outcome). PENDING carries providerReference=\"\" - no provider call has happened yet."
     },
     {
       "name": "providerReference",

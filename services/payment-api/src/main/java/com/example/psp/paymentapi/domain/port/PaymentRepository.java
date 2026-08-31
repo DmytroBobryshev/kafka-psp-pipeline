@@ -36,6 +36,27 @@ public interface PaymentRepository {
     void updateStatus(UUID paymentId, PaymentStatus status);
 
     /**
+     * M20: a NO-DOWNGRADE, conditional UPDATE for the one non-terminal status this method's
+     * absolute-value sibling {@link #updateStatus} must never be used for - {@code UPDATE ... SET
+     * status = 'PENDING' ... WHERE id = :paymentId AND status = 'CREATED'}. Unlike
+     * {@code updateStatus}, applying the SAME status twice is not what makes THIS call safe under
+     * redelivery - the {@code WHERE status = 'CREATED'} guard is: psp-connector publishes PENDING
+     * once, up front, before its provider call ({@code KafkaPaymentStatusPublisher#publishPending}),
+     * so a redelivery of that record can arrive AFTER this row has already moved on to
+     * SUCCEEDED/FAILED (events are ordered per-merchant partition, but redelivery is a replay, not
+     * a guarantee about when). Without the guard, a late-replayed PENDING would silently downgrade
+     * a resolved payment back to a non-terminal state. With it, the UPDATE's row count is simply 0
+     * once the row has left CREATED - the same "idempotent by construction, not by a special-cased
+     * check" shape {@link #updateStatus}'s javadoc describes, just conditioned on the FROM state
+     * instead of always firing.
+     *
+     * <p>A no-op (not an error) if {@code paymentId} is unknown to this table, or if the row is no
+     * longer CREATED - same "the event can only ever name a payment this service itself created"
+     * reasoning as {@link #updateStatus}.
+     */
+    void applyPendingStatus(UUID paymentId);
+
+    /**
      * M19's transactions-panel query: every payment for {@code merchantId} (or every merchant, if
      * {@code null}) in {@code status} (or any status, if {@code null}), newest first. Backs
      * {@code GET /api/payments} - see {@code adapters.in.web.PaymentQueryController} for the

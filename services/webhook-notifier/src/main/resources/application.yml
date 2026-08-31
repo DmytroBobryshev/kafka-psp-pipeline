@@ -80,8 +80,13 @@ webhook-notifier:
     retry-1m-topic: webhooks.webhook-delivery-requested.v2.retry.1m
     retry-15m-topic: webhooks.webhook-delivery-requested.v2.retry.15m
     dlq-topic: webhooks.webhook-delivery-requested.v2.dlq
+    # Merchant webhookUrl projection (adapters.in.kafka.MerchantConfigChangedListener): the M8 bug
+    # fix - resolves the delivery target from the merchant's OWN registered webhook instead of
+    # always falling back to the simulated endpoint below.
+    merchant-config-changed-topic: merchants.merchant-config-changed.v1
     planner-group-id: webhook-notifier.planner.v1
     executor-group-id: webhook-notifier.executor.v1
+    merchant-view-group-id: webhook-notifier.merchant-view.v1
 
     # THE M8 poison-pill flag. true (default): ErrorHandlingDeserializer wraps every consumer
     # factory's deserializer, so a record whose bytes cannot be deserialized is routed to the
@@ -111,15 +116,18 @@ webhook-notifier:
     poll-timeout-ms: 2000
 
   merchant-client:
-    # Points at THIS service's own simulated merchant endpoint by default - see
-    # adapters.in.web.SimulatedMerchantController. Point this at a real merchant's registered
-    # webhook host to call a genuine external endpoint, no code change required.
+    # Fallback endpoint ONLY - used when a merchant has no projected webhookUrl (see
+    # adapters.in.kafka.MerchantConfigChangedListener / domain.model.WebhookUrlResolver). A
+    # merchant with a real registered webhookUrl is delivered to THAT URL instead, no code change
+    # required.
     base-url: http://localhost:8088
     webhook-path: /simulated-merchant/webhooks/{merchantId}
-    connect-timeout-ms: 2000
-    # MUST be shorter than webhook-notifier.simulated-merchant.timeout-delay-ms below, or the
-    # TIMEOUT simulation never actually produces a client-side timeout.
-    read-timeout-ms: 3000
+    # Sane connect/read timeouts for a REAL external endpoint (webhook.site and friends), not just
+    # the fast in-process fallback. read-timeout-ms MUST stay shorter than
+    # webhook-notifier.simulated-merchant.timeout-delay-ms below, or the TIMEOUT simulation never
+    # actually produces a client-side timeout.
+    connect-timeout-ms: 3000
+    read-timeout-ms: 5000
 
   mongo:
     # TTL for delivery_attempts documents (M8 requirement #6) - 30 days, matching the DLQ topic's

@@ -20,9 +20,15 @@ public record WebhookNotifierProperties(
      * @param retry1mTopic              tier 2.
      * @param retry15mTopic             tier 3 (last tier before the DLQ).
      * @param dlqTopic                  terminal topic.
+     * @param merchantConfigChangedTopic the compacted merchant-config topic
+     *                          ({@code merchants.merchant-config-changed.v1}) this service
+     *                          projects into {@code merchant_webhooks} for delivery-time URL
+     *                          resolution - see {@code adapters.in.kafka.MerchantConfigChangedListener}.
      * @param plannerGroupId            {@code webhook-notifier.planner.v1} (docs/diagrams/topic-map.md).
      * @param executorGroupId           {@code webhook-notifier.executor.v1} - subscribed to the
      *                                  base topic plus all three retry tiers.
+     * @param merchantViewGroupId       {@code webhook-notifier.merchant-view.v1} - independent of
+     *                                  both groups above, reading {@code merchantConfigChangedTopic}.
      * @param deserializationErrorHandlingEnabled THE M8 poison-pill flag. {@code true} (default)
      *                          wraps every consumer factory's deserializer in
      *                          {@code ErrorHandlingDeserializer} (ADR-0006 category C). Set to
@@ -44,8 +50,10 @@ public record WebhookNotifierProperties(
             String retry1mTopic,
             String retry15mTopic,
             String dlqTopic,
+            String merchantConfigChangedTopic,
             String plannerGroupId,
             String executorGroupId,
+            String merchantViewGroupId,
             boolean deserializationErrorHandlingEnabled) {}
 
     /**

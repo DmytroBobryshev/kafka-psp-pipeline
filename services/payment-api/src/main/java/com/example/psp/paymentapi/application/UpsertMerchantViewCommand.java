@@ -2,6 +2,7 @@ package com.example.psp.paymentapi.application;
 
 import com.example.psp.paymentapi.domain.model.MerchantStatus;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Application-layer input for {@link MerchantViewProjectionUseCase#applyUpsert}, mapped from the
@@ -13,6 +14,7 @@ public record UpsertMerchantViewCommand(
         String displayName,
         MerchantStatus status,
         String payoutCurrency,
+        List<String> allowedCurrencies,
         String webhookUrl,
         int declineRateAlertThresholdBps,
         Instant updatedAt) {

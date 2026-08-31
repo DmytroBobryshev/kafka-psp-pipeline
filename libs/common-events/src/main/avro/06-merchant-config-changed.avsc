@@ -29,6 +29,12 @@
       "doc": "ISO-4217 three-letter code the merchant is settled in."
     },
     {
+      "name": "allowedCurrencies",
+      "type": {"type": "array", "items": "string"},
+      "default": [],
+      "doc": "ISO-4217 codes this merchant may be paid in (1-3 entries). Empty means legacy record - fall back to payoutCurrency."
+    },
+    {
       "name": "webhookUrl",
       "type": ["null", "string"],
       "default": null,

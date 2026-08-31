@@ -1,6 +1,7 @@
 package com.example.psp.paymentapi.application;
 
 import com.example.psp.paymentapi.domain.model.MerchantStatus;
+import java.util.List;
 
 /**
  * Application-layer input model for {@link MerchantConfigUseCase#upsert} (M10). Deliberately
@@ -16,6 +17,7 @@ public record UpsertMerchantConfigCommand(
         String displayName,
         MerchantStatus status,
         String payoutCurrency,
+        List<String> allowedCurrencies,
         String webhookUrl,
         int declineRateAlertThresholdBps) {
 }

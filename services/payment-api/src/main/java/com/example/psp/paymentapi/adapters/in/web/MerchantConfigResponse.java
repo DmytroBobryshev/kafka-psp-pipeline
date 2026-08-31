@@ -1,5 +1,7 @@
 package com.example.psp.paymentapi.adapters.in.web;
 
+import java.util.List;
+
 /**
  * Wire contract returned by {@code PUT /api/merchants/{merchantId}/config} (M10) - an echo of
  * what was published, so a caller can see the exact snapshot that became the topic's new
@@ -16,6 +18,7 @@ public record MerchantConfigResponse(
         String displayName,
         String status,
         String payoutCurrency,
+        List<String> allowedCurrencies,
         String webhookUrl,
         int declineRateAlertThresholdBps) {
 }

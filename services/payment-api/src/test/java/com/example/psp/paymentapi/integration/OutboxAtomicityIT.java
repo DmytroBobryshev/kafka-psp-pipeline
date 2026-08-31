@@ -147,8 +147,9 @@ class OutboxAtomicityIT {
         for (String merchantId : new String[] {MERCHANT_ID, "merchant-outbox-it-rollback"}) {
             jdbcTemplate.update(
                     "INSERT INTO merchant_configs "
-                            + "(merchant_id, display_name, status, payout_currency, decline_rate_alert_threshold_bps, updated_at) "
-                            + "VALUES (?, ?, 'ACTIVE', 'EUR', 1500, ?) "
+                            + "(merchant_id, display_name, status, payout_currency, allowed_currencies, "
+                            + "decline_rate_alert_threshold_bps, updated_at) "
+                            + "VALUES (?, ?, 'ACTIVE', 'EUR', 'EUR', 1500, ?) "
                             + "ON CONFLICT (merchant_id) DO NOTHING",
                     merchantId,
                     merchantId,

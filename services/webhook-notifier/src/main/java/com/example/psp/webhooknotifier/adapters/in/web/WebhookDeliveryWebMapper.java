@@ -16,8 +16,11 @@ import org.springframework.stereotype.Component;
 public class WebhookDeliveryWebMapper {
 
     private final WebhookNotifierProperties properties;
+    private final com.example.psp.webhooknotifier.domain.port.MerchantWebhookDirectory merchantWebhookDirectory;
 
-    public WebhookDeliveryWebMapper(WebhookNotifierProperties properties) {
+    public WebhookDeliveryWebMapper(WebhookNotifierProperties properties,
+            com.example.psp.webhooknotifier.domain.port.MerchantWebhookDirectory merchantWebhookDirectory) {
+        this.merchantWebhookDirectory = merchantWebhookDirectory;
         this.properties = properties;
     }
 
@@ -35,14 +38,11 @@ public class WebhookDeliveryWebMapper {
                 delivery.createdAt());
     }
 
-    /**
-     * Same {@code {merchantId}} substitution
-     * {@code adapters.out.http.RestClientMerchantWebhookClient} performs via {@code RestClient}'s
-     * URI-template expansion, done here by hand since this is a read path with no
-     * {@code RestClient} in scope.
-     */
+    // Same resolution rule the delivery path uses - the displayed target must match the real one.
     private String resolveUrl(String merchantId) {
         String path = properties.merchantClient().webhookPath().replace("{merchantId}", merchantId);
-        return properties.merchantClient().baseUrl() + path;
+        return com.example.psp.webhooknotifier.domain.model.WebhookUrlResolver.resolve(
+                merchantWebhookDirectory.findWebhookUrl(merchantId),
+                properties.merchantClient().baseUrl() + path);
     }
 }

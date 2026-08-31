@@ -1,5 +1,6 @@
 package com.example.psp.webhooknotifier.config;
 
+import com.example.psp.common.events.avro.MerchantConfigChanged;
 import com.example.psp.common.events.avro.PaymentStatusChanged;
 import com.example.psp.common.events.avro.RefundCompleted;
 import com.example.psp.common.events.avro.RefundFailed;
@@ -183,6 +184,47 @@ public class KafkaConsumerConfig {
         factory.getContainerProperties().setObservationEnabled(true);
         // No DLQ for this topic - same reasoning as the payment-status-changed planner factory
         // above (adapters.in.kafka.RefundFailedListener's javadoc).
+        factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
+        return factory;
+    }
+
+    // ============================================================================================
+    // Merchant webhook projection: merchants.merchant-config-changed.v1 -> webhook-notifier.merchant-view.v1
+    // - a THIRD, independent consumer identity in this service, fixing the M8 bug where the
+    // executor never knew a merchant's real webhookUrl (adapters.in.kafka.MerchantConfigChangedListener,
+    // domain.port.MerchantWebhookDirectory). auto-offset-reset is inherited from
+    // spring.kafka.consumer.auto-offset-reset=earliest (application.yml), so a fresh group id
+    // replays the whole compacted log rather than starting empty.
+    // ============================================================================================
+
+    @Bean
+    public ConsumerFactory<String, MerchantConfigChanged> merchantConfigChangedConsumerFactory(
+            KafkaProperties kafkaProperties,
+            WebhookNotifierProperties properties,
+            @Value("${webhook-notifier.schema-registry.url}") String schemaRegistryUrl) {
+        Map<String, Object> props = kafkaProperties.buildConsumerProperties(null);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, properties.kafka().merchantViewGroupId());
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
+        configureAvroDeserializers(
+                props, schemaRegistryUrl, properties.kafka().deserializationErrorHandlingEnabled());
+        return new DefaultKafkaConsumerFactory<>(props);
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, MerchantConfigChanged>
+            merchantViewKafkaListenerContainerFactory(
+                    @Qualifier("merchantConfigChangedConsumerFactory")
+                            ConsumerFactory<String, MerchantConfigChanged> consumerFactory,
+                    ObservationRegistry observationRegistry) {
+        ConcurrentKafkaListenerContainerFactory<String, MerchantConfigChanged> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(consumerFactory);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.getContainerProperties().setObservationRegistry(observationRegistry);
+        factory.getContainerProperties().setObservationEnabled(true);
+        // No DLQ - a derived, lossy read-model projection (ADR-0006), same reasoning as the
+        // planner factories above.
         factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
         return factory;
     }

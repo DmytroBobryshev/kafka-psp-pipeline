@@ -4,8 +4,11 @@ import com.example.psp.paymentapi.domain.model.MerchantStatus;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
+import java.util.List;
 
 /**
  * Wire contract for {@code PUT /api/merchants/{merchantId}/config} (M10). Records for DTOs, per
@@ -27,6 +30,14 @@ public record UpsertMerchantConfigRequest(
                         regexp = "[A-Z]{3}",
                         message = "payoutCurrency must be an ISO-4217 3-letter code")
                 String payoutCurrency,
+        @NotEmpty(message = "allowedCurrencies must not be empty")
+                @Size(min = 1, max = 3, message = "allowedCurrencies must contain 1 to 3 currency codes")
+                List<
+                        @Pattern(
+                                        regexp = "[A-Z]{3}",
+                                        message = "each allowedCurrencies entry must be an ISO-4217 3-letter code")
+                                String>
+                        allowedCurrencies,
         String webhookUrl,
         @Min(value = 0, message = "declineRateAlertThresholdBps must not be negative")
                 @Max(value = 10_000, message = "declineRateAlertThresholdBps must not exceed 10000 (100%)")

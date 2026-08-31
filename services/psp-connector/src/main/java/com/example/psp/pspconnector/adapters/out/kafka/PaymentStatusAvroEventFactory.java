@@ -27,6 +27,36 @@ public class PaymentStatusAvroEventFactory {
      * @param attempt  the payment attempt that was just processed.
      * @return the Avro record ready to hand to {@code KafkaTemplate#send}.
      */
+    public com.example.psp.common.events.avro.PaymentStatusChanged toPendingAvro(
+            com.example.psp.common.events.EventEnvelope envelope,
+            java.util.UUID paymentId,
+            String merchantId,
+            com.example.psp.pspconnector.domain.model.Money amount) {
+        com.example.psp.common.events.avro.EventEnvelope avroEnvelope =
+                com.example.psp.common.events.avro.EventEnvelope.newBuilder()
+                        .setEventId(envelope.eventId().toString())
+                        .setEventType(envelope.eventType())
+                        .setEventVersion(envelope.eventVersion())
+                        .setAggregateId(envelope.aggregateId())
+                        .setAggregateType(envelope.aggregateType())
+                        .setOccurredAt(envelope.occurredAt())
+                        .setSource(envelope.source())
+                        .setTraceId(envelope.traceId())
+                        .setCorrelationId(envelope.correlationId())
+                        .setCausationId(envelope.causationId() == null ? null : envelope.causationId().toString())
+                        .build();
+        return com.example.psp.common.events.avro.PaymentStatusChanged.newBuilder()
+                .setEnvelope(avroEnvelope)
+                .setPaymentId(paymentId.toString())
+                .setMerchantId(merchantId)
+                .setAmount(amount.amount())
+                .setCurrency(amount.currency())
+                .setStatus("PENDING")
+                .setProviderReference("")
+                .setDeclineReason(null)
+                .build();
+    }
+
     public com.example.psp.common.events.avro.PaymentStatusChanged toAvro(
             EventEnvelope envelope, PaymentAttempt attempt) {
         com.example.psp.common.events.avro.EventEnvelope avroEnvelope =

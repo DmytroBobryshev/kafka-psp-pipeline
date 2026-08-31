@@ -49,9 +49,19 @@ export function TimelinePage() {
   const [currency, setCurrency] = useState("EUR");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const selectedMerchant = activeMerchants.find((m) => m.merchantId === merchantId);
+  const merchantCurrencies = selectedMerchant
+    ? selectedMerchant.allowedCurrencies?.length
+      ? selectedMerchant.allowedCurrencies
+      : [selectedMerchant.payoutCurrency]
+    : ["EUR"];
   useEffect(() => {
     if (!merchantId && activeMerchants.length > 0) setMerchantId(activeMerchants[0].merchantId);
   }, [activeMerchants, merchantId]);
+  useEffect(() => {
+    if (!merchantCurrencies.includes(currency)) setCurrency(merchantCurrencies[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [merchantId, merchants.data]);
 
   const [refundPaymentId, setRefundPaymentId] = useState("");
   const [refundAmount, setRefundAmount] = useState("5.00");
@@ -97,9 +107,10 @@ export function TimelinePage() {
     try {
       const h = history.find((x) => x.id === refundPaymentId);
       if (h) setPayment({ ...h, status: "", createdAt: h.createdAt } as PaymentResponse);
+      const known = history.find((x) => x.id === refundPaymentId);
       await requestRefund(refundPaymentId, {
         amount: Number(cents == null ? refundAmount : withEnding(refundAmount, cents)),
-        currency: "EUR",
+        currency: known?.currency ?? "EUR",
         reason: refundReason.trim() || undefined,
       });
     } catch (e) {
@@ -194,9 +205,9 @@ export function TimelinePage() {
                     onChange={(e) => setCurrency(e.target.value)}
                     className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                   >
-                    <option>EUR</option>
-                    <option>USD</option>
-                    <option>GBP</option>
+                    {merchantCurrencies.map((c) => (
+                      <option key={c}>{c}</option>
+                    ))}
                   </select>
                 </label>
               </div>

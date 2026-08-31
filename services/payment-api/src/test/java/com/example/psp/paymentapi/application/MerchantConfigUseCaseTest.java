@@ -26,7 +26,13 @@ class MerchantConfigUseCaseTest {
     void upsertPublishesTheCompleteSnapshot() {
         UpsertMerchantConfigCommand command =
                 new UpsertMerchantConfigCommand(
-                        "acme", "ACME Corp", MerchantStatus.ACTIVE, "EUR", "https://acme.test/hook", 1500);
+                        "acme",
+                        "ACME Corp",
+                        MerchantStatus.ACTIVE,
+                        "EUR",
+                        List.of("EUR", "USD"),
+                        "https://acme.test/hook",
+                        1500);
 
         MerchantConfig published = useCase.upsert(command);
 
@@ -60,11 +66,26 @@ class MerchantConfigUseCaseTest {
     @Test
     void domainInvariantsAreEnforcedByTheUseCaseNotOnlyByTheWebDto() {
         UpsertMerchantConfigCommand invalid =
-                new UpsertMerchantConfigCommand("acme", "ACME Corp", MerchantStatus.ACTIVE, "EUR", null, 20_000);
+                new UpsertMerchantConfigCommand(
+                        "acme", "ACME Corp", MerchantStatus.ACTIVE, "EUR", List.of("EUR"), null, 20_000);
 
         assertThatThrownBy(() -> useCase.upsert(invalid))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("declineRateAlertThresholdBps");
+
+        assertThat(publisher.upserts).isEmpty();
+    }
+
+    @Test
+    void rejectsAPayoutCurrencyThatIsNotInAllowedCurrencies() {
+        UpsertMerchantConfigCommand invalid =
+                new UpsertMerchantConfigCommand(
+                        "acme", "ACME Corp", MerchantStatus.ACTIVE, "GBP", List.of("EUR", "USD"), null, 1500);
+
+        assertThatThrownBy(() -> useCase.upsert(invalid))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("payoutCurrency")
+                .hasMessageContaining("allowedCurrencies");
 
         assertThat(publisher.upserts).isEmpty();
     }

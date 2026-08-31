@@ -1,6 +1,8 @@
 package com.example.psp.pspconnector.domain.port;
 
+import com.example.psp.pspconnector.domain.model.Money;
 import com.example.psp.pspconnector.domain.model.PaymentAttempt;
+import java.util.UUID;
 
 /**
  * Outbound port for publishing {@code payments.payment-status-changed.v1}. Implemented by
@@ -15,4 +17,13 @@ import com.example.psp.pspconnector.domain.model.PaymentAttempt;
 public interface PaymentStatusPublisher {
 
     void publishStatusChanged(PaymentAttempt attempt);
+
+    /** Non-terminal PENDING, emitted before the provider call; a fresh eventId every time. */
+    void publishPending(
+            UUID paymentId,
+            String merchantId,
+            Money amount,
+            UUID causationEventId,
+            String traceId,
+            String correlationId);
 }

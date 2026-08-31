@@ -7,6 +7,7 @@ import com.example.psp.paymentapi.domain.model.Payment;
 import com.example.psp.paymentapi.domain.port.MerchantViewRepository;
 import com.example.psp.paymentapi.domain.port.PaymentEventPublisher;
 import com.example.psp.paymentapi.domain.port.PaymentRepository;
+import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -64,6 +65,17 @@ public class CreatePaymentUseCase {
                         .orElseThrow(() -> MerchantNotEligibleException.unknown(command.merchantId()));
         if (merchant.status() != MerchantStatus.ACTIVE) {
             throw MerchantNotEligibleException.notActive(command.merchantId(), merchant.status());
+        }
+        // Empty allowedCurrencies is the legacy-projection case (pre-M19 record, or one the
+        // schema's own default produced) - fall back to the single payoutCurrency rather than
+        // rejecting every payment for a merchant this projection has incomplete data for.
+        List<String> allowed =
+                merchant.allowedCurrencies().isEmpty()
+                        ? List.of(merchant.payoutCurrency())
+                        : merchant.allowedCurrencies();
+        if (!allowed.contains(command.amount().currency())) {
+            throw MerchantNotEligibleException.currencyNotAllowed(
+                    command.merchantId(), allowed, command.amount().currency());
         }
 
         Payment payment = Payment.create(command.merchantId(), command.amount());

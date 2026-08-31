@@ -1,5 +1,6 @@
 package com.example.psp.paymentapi.domain.model;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -25,6 +26,7 @@ public record MerchantConfig(
         String displayName,
         MerchantStatus status,
         String payoutCurrency,
+        List<String> allowedCurrencies,
         String webhookUrl,
         int declineRateAlertThresholdBps) {
 
@@ -33,6 +35,22 @@ public record MerchantConfig(
         requireNonBlank(displayName, "displayName");
         Objects.requireNonNull(status, "status must not be null");
         requireNonBlank(payoutCurrency, "payoutCurrency");
+        Objects.requireNonNull(allowedCurrencies, "allowedCurrencies must not be null");
+        allowedCurrencies = List.copyOf(allowedCurrencies);
+        // 1..3 currencies, and settlement must be one of them - a merchant that cannot be paid in
+        // its own payout currency is a contradiction the compacted snapshot must never carry.
+        if (allowedCurrencies.isEmpty() || allowedCurrencies.size() > 3) {
+            throw new IllegalArgumentException(
+                    "allowedCurrencies must contain 1 to 3 currency codes, got " + allowedCurrencies);
+        }
+        if (!allowedCurrencies.contains(payoutCurrency)) {
+            throw new IllegalArgumentException(
+                    "payoutCurrency "
+                            + payoutCurrency
+                            + " must be one of allowedCurrencies "
+                            + allowedCurrencies
+                            + " - a merchant must be able to settle in a currency it accepts");
+        }
         // webhookUrl is the one genuinely optional field - a merchant may have none.
         if (declineRateAlertThresholdBps < 0 || declineRateAlertThresholdBps > 10_000) {
             throw new IllegalArgumentException(
