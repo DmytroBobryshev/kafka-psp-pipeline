@@ -1,6 +1,7 @@
 package com.example.psp.pspconnector.domain.port;
 
 import com.example.psp.pspconnector.domain.model.RefundAttempt;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -31,4 +32,13 @@ public interface RefundAttemptLogRepository {
      * {@link AttemptLogRepository#tryRecord}).
      */
     boolean tryRecord(RefundAttempt attempt);
+
+    /**
+     * The loaded-row counterpart of {@link #existsByInboundEventId}, added for the M19 drill 9
+     * fix: a dedup hit must REPUBLISH the stored attempt's outcome event (same
+     * {@code statusEventId}) instead of skipping it - the row is written before the publish is
+     * broker-acknowledged, so its existence never proved the event exists. See
+     * {@code application.ExecuteRefundUseCase}.
+     */
+    Optional<RefundAttempt> findByInboundEventId(UUID inboundEventId);
 }

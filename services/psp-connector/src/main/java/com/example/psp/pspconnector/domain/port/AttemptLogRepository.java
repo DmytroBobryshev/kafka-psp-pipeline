@@ -69,4 +69,16 @@ public interface AttemptLogRepository {
      * see this interface's own javadoc and {@link PaymentAttempt}'s for that history).
      */
     Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId);
+
+    /**
+     * The loaded-row counterpart of {@link #existsByInboundEventId}, added for the M19 drill 9
+     * fix: a dedup hit must REPUBLISH the stored attempt's status event (same
+     * {@code statusEventId}), because the attempt row is written before the publish is
+     * broker-acknowledged - the row's existence alone never proved the event exists. See
+     * {@code application.ProcessPaymentRequestUseCase}.
+     */
+    Optional<PaymentAttempt> findByInboundEventId(UUID inboundEventId);
+
+    /** The loaded-row counterpart of {@link #existsByPaymentIdAndProviderEventId} - same M19 drill 9 rationale. */
+    Optional<PaymentAttempt> findByPaymentIdAndProviderEventId(UUID paymentId, UUID providerEventId);
 }

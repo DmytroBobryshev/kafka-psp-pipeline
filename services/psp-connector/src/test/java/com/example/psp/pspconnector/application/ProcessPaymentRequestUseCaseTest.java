@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.psp.common.events.UuidV7;
 import com.example.psp.pspconnector.domain.exception.ProviderTimeoutException;
 import com.example.psp.pspconnector.domain.model.Money;
 import com.example.psp.pspconnector.domain.model.PaymentAttempt;
@@ -18,6 +19,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -32,17 +34,20 @@ import org.junit.jupiter.api.Test;
  *
  * <ul>
  *   <li><b>Level 1</b> (the fix) - replaying the same inbound eventId must never call {@link
- *       PaymentProviderPort#authorize} a second time. That is the key assertion in {@link
- *       #replayingSameInboundEventIdAuthorizesExactlyOnceAndPublishesExactlyOnce()}: the original
- *       defect authorized every replayed payment twice, and a test that only checked "published
- *       once" would not have caught it, because the second authorize() call itself is the harm.
+ *       PaymentProviderPort#authorize} a second time. The original defect authorized every
+ *       replayed payment twice; the second authorize() call itself is the harm, so the assertion
+ *       that matters most is authorizeCallCount().
  *   <li><b>Level 2</b> (unchanged) - a duplicate {@code (paymentId, providerEventId)} provider
  *       callback for otherwise distinct inbound events.
  * </ul>
  *
- * Both levels are exercised via their check-first path and their race path (a lost {@code
- * tryRecord}), all of which must leave exactly the right number of publishes and never let an
- * exception escape.
+ * <p>Since the M19 drill 9 fix, a dedup hit REPUBLISHES the stored attempt's status event instead
+ * of skipping it (the attempt row is written before the publish is broker-acknowledged, so its
+ * existence never proved the event exists). The publish invariant is therefore no longer "exactly
+ * one publish" but <b>"at-least-one publish, all carrying the SAME statusEventId"</b> - the
+ * downstream idempotency key is what makes the extra publishes safe. Both dedup levels are still
+ * exercised via their check-first path and their race path (a lost {@code tryRecord}), and {@link
+ * #crashBetweenRecordAndPublishIsRepairedByRedelivery()} is the drill's loss scenario itself.
  */
 class ProcessPaymentRequestUseCaseTest {
 
@@ -61,7 +66,8 @@ class ProcessPaymentRequestUseCaseTest {
 
         assertThat(attemptLog.recorded).hasSize(1);
         assertThat(attemptLog.recorded.get(0).getOutcome()).isEqualTo(ProviderOutcome.APPROVED);
-        assertThat(publisher.publishedCount.get()).isEqualTo(1);
+        assertThat(attemptLog.recorded.get(0).getStatusEventId()).isNotNull();
+        assertThat(publisher.published).hasSize(1);
     }
 
     @Test
@@ -76,7 +82,7 @@ class ProcessPaymentRequestUseCaseTest {
 
         assertThat(attemptLog.recorded).hasSize(1);
         assertThat(attemptLog.recorded.get(0).getOutcome()).isEqualTo(ProviderOutcome.DECLINED);
-        assertThat(publisher.publishedCount.get()).isEqualTo(1);
+        assertThat(publisher.published).hasSize(1);
     }
 
     @Test
@@ -85,24 +91,27 @@ class ProcessPaymentRequestUseCaseTest {
         RecordingAttemptLog attemptLog = new RecordingAttemptLog();
         RecordingPublisher publisher = new RecordingPublisher();
         ProcessPaymentRequestUseCase useCase = useCase(provider, attemptLog, publisher);
+        ProcessPaymentRequestCommand command = command();
 
         // ADR-0006 category A: retryable - propagates so the Kafka listener never acks.
-        assertThatThrownBy(() -> useCase.execute(command())).isInstanceOf(ProviderTimeoutException.class);
+        assertThatThrownBy(() -> useCase.execute(command)).isInstanceOf(ProviderTimeoutException.class);
 
         // Still recorded - "just record attempts", even the ones that time out.
         assertThat(attemptLog.recorded).hasSize(1);
         assertThat(attemptLog.recorded.get(0).getOutcome()).isEqualTo(ProviderOutcome.TIMEOUT);
-        assertThat(publisher.publishedCount.get()).isZero();
+        assertThat(publisher.published).isEmpty();
+
+        // The redelivery of that same event: level 1 catches it, and the republish rule still
+        // never publishes a TIMEOUT row (there is no status event for a timeout, by design).
+        assertThatCode(() -> useCase.execute(command)).doesNotThrowAnyException();
+        assertThat(publisher.published).isEmpty();
     }
 
     @Test
-    void replayingSameInboundEventIdAuthorizesExactlyOnceAndPublishesExactlyOnce() {
-        // THE key M5 assertion: the original ("fake") implementation deduped only after calling
-        // the provider, so replaying the same inbound event authorized/charged a second time
-        // every single time - measured as 50 events replayed once -> 50 processed twice, 0 caught.
-        // Level 1 must catch this BEFORE authorize() runs again, not just skip the bookkeeping
-        // afterwards - so the assertion that matters most here is authorizeCallCount(), not just
-        // the publish count.
+    void replayingSameInboundEventIdAuthorizesExactlyOnceAndRepublishesSameEventId() {
+        // THE key M5 assertion: replaying the same inbound event must not authorize/charge a
+        // second time. Since the M19 drill 9 fix the replay DOES publish again - deliberately -
+        // but under the stored statusEventId, so downstream dedup sees one logical event.
         UUID inboundEventId = UUID.randomUUID();
         FakeProvider provider = new FakeProvider(ProviderOutcome.APPROVED);
         RecordingAttemptLog attemptLog = new RecordingAttemptLog();
@@ -116,7 +125,8 @@ class ProcessPaymentRequestUseCaseTest {
 
         assertThat(provider.authorizeCallCount()).isEqualTo(1);
         assertThat(attemptLog.recorded).hasSize(1);
-        assertThat(publisher.publishedCount.get()).isEqualTo(1);
+        assertThat(publisher.published).hasSize(2);
+        assertThat(publisher.distinctStatusEventIds()).hasSize(1);
         assertThat(meterRegistry.counter("psp-connector.payment.attempts.processed").count())
                 .isEqualTo(1.0);
         assertThat(
@@ -135,6 +145,34 @@ class ProcessPaymentRequestUseCaseTest {
     }
 
     @Test
+    void crashBetweenRecordAndPublishIsRepairedByRedelivery() {
+        // M19 drill 9's exact loss scenario, at use-case granularity. First delivery: the attempt
+        // row lands, then the publish fails (standing in for "the pod died before the broker
+        // acknowledged the send" - with the blocking publisher, that failure now reaches the
+        // listener, so the offset is never committed). Redelivery: level 1 finds the row, skips
+        // the provider, and republishes THE SAME statusEventId. Before the fix, the redelivery
+        // was "deduplicated and skipped" and the event was gone forever.
+        UUID inboundEventId = UUID.randomUUID();
+        FakeProvider provider = new FakeProvider(ProviderOutcome.APPROVED);
+        RecordingAttemptLog attemptLog = new RecordingAttemptLog();
+        RecordingPublisher publisher = new RecordingPublisher(1); // first publish attempt fails
+        ProcessPaymentRequestUseCase useCase = useCase(provider, attemptLog, publisher);
+        ProcessPaymentRequestCommand command = command(inboundEventId);
+
+        // First delivery: the publish failure must escape so the listener never acks.
+        assertThatThrownBy(() -> useCase.execute(command)).isInstanceOf(RuntimeException.class);
+        assertThat(attemptLog.recorded).hasSize(1);
+
+        // The redelivery repairs it - no second charge, same logical event.
+        assertThatCode(() -> useCase.execute(command)).doesNotThrowAnyException();
+        assertThat(provider.authorizeCallCount()).isEqualTo(1);
+        assertThat(publisher.published).hasSize(2); // the failed attempt + the successful republish
+        assertThat(publisher.distinctStatusEventIds()).hasSize(1);
+        assertThat(publisher.published.get(1).getStatusEventId())
+                .isEqualTo(attemptLog.recorded.get(0).getStatusEventId());
+    }
+
+    @Test
     void distinctInboundEventIdForSamePaymentStillProcesses() {
         // A genuinely different inbound message for the same payment (e.g. a legitimate retry)
         // must still be processed - level 1 only blocks a replay of the SAME inbound event, never
@@ -149,11 +187,12 @@ class ProcessPaymentRequestUseCaseTest {
 
         assertThat(provider.authorizeCallCount()).isEqualTo(2);
         assertThat(attemptLog.recorded).hasSize(2);
-        assertThat(publisher.publishedCount.get()).isEqualTo(2);
+        assertThat(publisher.published).hasSize(2);
+        assertThat(publisher.distinctStatusEventIds()).hasSize(2);
     }
 
     @Test
-    void duplicateProviderEventIdIsDeduplicatedAndPublishesExactlyOnce() {
+    void duplicateProviderEventIdIsDeduplicatedAndRepublishesSameEventId() {
         // Level 2: same providerEventId on every call - simulates SimulatedPaymentProviderAdapter's
         // M5 duplicate-rate replaying its previous callback (see that class's javadoc) - but each
         // call is a DISTINCT inbound event (command() mints a fresh inboundEventId each time), so
@@ -170,7 +209,8 @@ class ProcessPaymentRequestUseCaseTest {
         useCase.execute(command());
 
         assertThat(attemptLog.recorded).hasSize(1);
-        assertThat(publisher.publishedCount.get()).isEqualTo(1);
+        assertThat(publisher.published).hasSize(3);
+        assertThat(publisher.distinctStatusEventIds()).hasSize(1);
         assertThat(meterRegistry.counter("psp-connector.payment.attempts.processed").count())
                 .isEqualTo(1.0);
         assertThat(
@@ -201,31 +241,34 @@ class ProcessPaymentRequestUseCaseTest {
         useCase.execute(command());
 
         assertThat(attemptLog.recorded).hasSize(2);
-        assertThat(publisher.publishedCount.get()).isEqualTo(2);
+        assertThat(publisher.published).hasSize(2);
         Set<UUID> distinctProviderEventIds = new HashSet<>();
         attemptLog.recorded.forEach(a -> distinctProviderEventIds.add(a.getProviderEventId()));
         assertThat(distinctProviderEventIds).hasSize(2);
     }
 
     @Test
-    void raceOnInboundEventInsertIsDeduplicatedAsReplayWithoutEscapingAnException() {
-        // Level 1's race path: existsByInboundEventId reports "not seen yet" on the pre-check (as
+    void raceOnInboundEventInsertIsDeduplicatedAsReplayAndRepublishesTheWinner() {
+        // Level 1's race path: findByInboundEventId reports "not seen yet" on the pre-check (as
         // if a concurrent redelivery of the same inbound event hasn't landed when the check
         // runs), but tryRecord - standing in for the uq_payment_attempts_inbound_event_id
         // constraint (V2 migration), the real authority - reports it lost that race. Must be
-        // absorbed as a level-1 duplicate: no exception escapes, no publish happens, and the
-        // reason is correctly attributed to "replay" via the resolveRaceReason re-check.
+        // absorbed as a level-1 duplicate: no exception escapes, the reason is attributed to
+        // "replay" via the follow-up re-read, and the WINNER's row (not the losing attempt) is
+        // what gets republished.
         UUID inboundEventId = UUID.randomUUID();
+        PaymentAttempt winner = approvedAttempt(inboundEventId, UUID.randomUUID());
         FakeProvider provider = new FakeProvider(ProviderOutcome.APPROVED);
-        InboundEventRaceAttemptLog attemptLog = new InboundEventRaceAttemptLog();
+        InboundEventRaceAttemptLog attemptLog = new InboundEventRaceAttemptLog(winner);
         RecordingPublisher publisher = new RecordingPublisher();
         MeterRegistry meterRegistry = new SimpleMeterRegistry();
         ProcessPaymentRequestUseCase useCase = useCase(provider, attemptLog, publisher, meterRegistry);
 
         assertThatCode(() -> useCase.execute(command(inboundEventId))).doesNotThrowAnyException();
 
-        assertThat(publisher.publishedCount.get()).isZero();
         assertThat(attemptLog.tryRecordCalls.get()).isEqualTo(1);
+        assertThat(publisher.published).hasSize(1);
+        assertThat(publisher.published.get(0).getStatusEventId()).isEqualTo(winner.getStatusEventId());
         assertThat(
                         meterRegistry
                                 .counter("psp-connector.payment.attempts.deduplicated", "reason", "replay")
@@ -236,26 +279,26 @@ class ProcessPaymentRequestUseCaseTest {
     }
 
     @Test
-    void raceOnProviderEventInsertIsDeduplicatedAsProviderCallbackWithoutEscapingAnException() {
-        // Level 2's race path (unchanged behaviour from the original M5 implementation):
-        // existsByPaymentIdAndProviderEventId reports "not seen yet" (as if a concurrent insert
-        // for the same key hasn't landed when the check runs), but tryRecord - standing in for
-        // the DB unique constraint, the real authority - reports it lost that race. That must be
-        // absorbed as a duplicate: no exception escapes, no publish happens, and the counters and
-        // log line still fire, correctly attributed to "provider-callback" (see RacyAttemptLog's
-        // javadoc: existsByInboundEventId always reports false, so resolveRaceReason cannot
-        // mistake this for a level 1 race).
+    void raceOnProviderEventInsertIsDeduplicatedAsProviderCallbackAndRepublishesTheWinner() {
+        // Level 2's race path: findByPaymentIdAndProviderEventId reports "not seen yet" on the
+        // pre-check, but tryRecord - standing in for the DB unique constraint, the real authority
+        // - reports it lost that race, exactly like PostgresAttemptLogRepository catching
+        // DataIntegrityViolationException and returning false. findByInboundEventId stays empty
+        // throughout, so the follow-up re-read correctly attributes this race to level 2, and the
+        // winner row is looked up by (paymentId, providerEventId) instead.
         UUID providerEventId = UUID.randomUUID();
+        PaymentAttempt winner = approvedAttempt(UUID.randomUUID(), providerEventId);
         FakeProvider provider = new FakeProvider(ProviderOutcome.APPROVED, providerEventId);
-        RacyAttemptLog attemptLog = new RacyAttemptLog();
+        RacyAttemptLog attemptLog = new RacyAttemptLog(winner);
         RecordingPublisher publisher = new RecordingPublisher();
         MeterRegistry meterRegistry = new SimpleMeterRegistry();
         ProcessPaymentRequestUseCase useCase = useCase(provider, attemptLog, publisher, meterRegistry);
 
         assertThatCode(() -> useCase.execute(command())).doesNotThrowAnyException();
 
-        assertThat(publisher.publishedCount.get()).isZero();
         assertThat(attemptLog.tryRecordCalls.get()).isEqualTo(1);
+        assertThat(publisher.published).hasSize(1);
+        assertThat(publisher.published.get(0).getStatusEventId()).isEqualTo(winner.getStatusEventId());
         assertThat(
                         meterRegistry
                                 .counter(
@@ -289,6 +332,19 @@ class ProcessPaymentRequestUseCaseTest {
     private static ProcessPaymentRequestCommand command(UUID inboundEventId) {
         return new ProcessPaymentRequestCommand(
                 PAYMENT_ID, MERCHANT_ID, AMOUNT, inboundEventId, "trace-1", "corr-1");
+    }
+
+    /** A stored APPROVED attempt standing in for "the row the race's winner already inserted". */
+    private static PaymentAttempt approvedAttempt(UUID inboundEventId, UUID providerEventId) {
+        return PaymentAttempt.from(
+                PAYMENT_ID,
+                MERCHANT_ID,
+                AMOUNT,
+                new ProviderResult(providerEventId, ProviderOutcome.APPROVED, 0L),
+                inboundEventId,
+                UuidV7.generate(),
+                "trace-1",
+                "corr-1");
     }
 
     private static final class FakeProvider implements PaymentProviderPort {
@@ -329,16 +385,12 @@ class ProcessPaymentRequestUseCaseTest {
 
         @Override
         public boolean existsByInboundEventId(UUID inboundEventId) {
-            return recorded.stream().anyMatch(a -> a.getCausationEventId().equals(inboundEventId));
+            return findByInboundEventId(inboundEventId).isPresent();
         }
 
         @Override
         public boolean existsByPaymentIdAndProviderEventId(UUID paymentId, UUID providerEventId) {
-            return recorded.stream()
-                    .anyMatch(
-                            a ->
-                                    a.getPaymentId().equals(paymentId)
-                                            && a.getProviderEventId().equals(providerEventId));
+            return findByPaymentIdAndProviderEventId(paymentId, providerEventId).isPresent();
         }
 
         @Override
@@ -355,28 +407,50 @@ class ProcessPaymentRequestUseCaseTest {
         }
 
         @Override
-        public java.util.Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId) {
+        public Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId) {
             return recorded.stream()
                     .filter(a -> a.getPaymentId().equals(paymentId))
                     .max(java.util.Comparator.comparing(PaymentAttempt::getProcessedAt));
         }
+
+        @Override
+        public Optional<PaymentAttempt> findByInboundEventId(UUID inboundEventId) {
+            return recorded.stream()
+                    .filter(a -> a.getCausationEventId().equals(inboundEventId))
+                    .findFirst();
+        }
+
+        @Override
+        public Optional<PaymentAttempt> findByPaymentIdAndProviderEventId(UUID paymentId, UUID providerEventId) {
+            return recorded.stream()
+                    .filter(
+                            a ->
+                                    a.getPaymentId().equals(paymentId)
+                                            && a.getProviderEventId().equals(providerEventId))
+                    .findFirst();
+        }
     }
 
     /**
-     * Simulates the level-1 check-then-act race explicitly: {@code existsByInboundEventId}
-     * reports "not seen" on its first call (the pre-check, before {@code authorize()}) but "seen"
-     * on every call after that - specifically the follow-up re-check {@code
-     * ProcessPaymentRequestUseCase#resolveRaceReason} makes once {@code tryRecord} (always {@code
-     * false} here, standing in for the DB unique constraint) reports it lost the race - as if a
-     * concurrent redelivery of the same inbound event won the insert in between.
+     * Simulates the level-1 check-then-act race explicitly: {@code findByInboundEventId} reports
+     * "not seen" on its first call (the pre-check, before {@code authorize()}) but returns the
+     * winner's row on every call after that - specifically the follow-up re-read the use case
+     * makes once {@code tryRecord} (always {@code false} here, standing in for the DB unique
+     * constraint) reports it lost the race - as if a concurrent redelivery of the same inbound
+     * event won the insert in between.
      */
     private static final class InboundEventRaceAttemptLog implements AttemptLogRepository {
-        private final AtomicInteger existsByInboundEventIdCalls = new AtomicInteger();
+        private final PaymentAttempt winner;
+        private final AtomicInteger findByInboundEventIdCalls = new AtomicInteger();
         private final AtomicInteger tryRecordCalls = new AtomicInteger();
+
+        private InboundEventRaceAttemptLog(PaymentAttempt winner) {
+            this.winner = winner;
+        }
 
         @Override
         public boolean existsByInboundEventId(UUID inboundEventId) {
-            return existsByInboundEventIdCalls.incrementAndGet() > 1;
+            return findByInboundEventIdCalls.get() > 0;
         }
 
         @Override
@@ -391,23 +465,40 @@ class ProcessPaymentRequestUseCaseTest {
         }
 
         @Override
-        public java.util.Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId) {
-            return java.util.Optional.empty();
+        public Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public Optional<PaymentAttempt> findByInboundEventId(UUID inboundEventId) {
+            return findByInboundEventIdCalls.incrementAndGet() > 1 ? Optional.of(winner) : Optional.empty();
+        }
+
+        @Override
+        public Optional<PaymentAttempt> findByPaymentIdAndProviderEventId(UUID paymentId, UUID providerEventId) {
+            return Optional.empty();
         }
     }
 
     /**
      * Simulates the level-2 check-then-act race explicitly: {@code
-     * existsByPaymentIdAndProviderEventId} always reports "not seen" (as if a concurrent insert
-     * of the same key hasn't landed yet when the check runs), but {@code tryRecord} - standing in
-     * for the DB unique constraint, the real authority - always reports it lost the race, exactly
-     * like {@code PostgresAttemptLogRepository} catching {@code DataIntegrityViolationException}
-     * and returning {@code false} instead of letting it propagate. {@code existsByInboundEventId}
-     * always reports "not seen" too, so {@code resolveRaceReason}'s follow-up re-check correctly
-     * attributes this race to level 2, not level 1.
+     * findByPaymentIdAndProviderEventId} reports "not seen" on the pre-check (as if a concurrent
+     * insert of the same key hasn't landed yet when the check runs), but {@code tryRecord} -
+     * standing in for the DB unique constraint, the real authority - always reports it lost the
+     * race, exactly like {@code PostgresAttemptLogRepository} catching {@code
+     * DataIntegrityViolationException} and returning {@code false} instead of letting it
+     * propagate. {@code findByInboundEventId} always reports "not seen", so the follow-up re-read
+     * correctly attributes this race to level 2, not level 1, and the winner is served from the
+     * (paymentId, providerEventId) lookup.
      */
     private static final class RacyAttemptLog implements AttemptLogRepository {
+        private final PaymentAttempt winner;
+        private final AtomicInteger findByProviderEventIdCalls = new AtomicInteger();
         private final AtomicInteger tryRecordCalls = new AtomicInteger();
+
+        private RacyAttemptLog(PaymentAttempt winner) {
+            this.winner = winner;
+        }
 
         @Override
         public boolean existsByInboundEventId(UUID inboundEventId) {
@@ -426,17 +517,51 @@ class ProcessPaymentRequestUseCaseTest {
         }
 
         @Override
-        public java.util.Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId) {
-            return java.util.Optional.empty();
+        public Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public Optional<PaymentAttempt> findByInboundEventId(UUID inboundEventId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public Optional<PaymentAttempt> findByPaymentIdAndProviderEventId(UUID paymentId, UUID providerEventId) {
+            return findByProviderEventIdCalls.incrementAndGet() > 1 ? Optional.of(winner) : Optional.empty();
         }
     }
 
+    /**
+     * Records every attempt handed to it, in order. {@code failFirstN > 0} makes the first N
+     * publish calls throw AFTER recording - standing in for the blocking send failing (broker
+     * nack, or the pod dying before the ack), which since the M19 drill 9 fix must propagate to
+     * the listener instead of being logged and swallowed.
+     */
     private static final class RecordingPublisher implements PaymentStatusPublisher {
-        private final AtomicInteger publishedCount = new AtomicInteger();
+        private final List<PaymentAttempt> published = new ArrayList<>();
+        private final int failFirstN;
+
+        private RecordingPublisher() {
+            this(0);
+        }
+
+        private RecordingPublisher(int failFirstN) {
+            this.failFirstN = failFirstN;
+        }
 
         @Override
         public void publishStatusChanged(PaymentAttempt attempt) {
-            publishedCount.incrementAndGet();
+            published.add(attempt);
+            if (published.size() <= failFirstN) {
+                throw new RuntimeException("simulated broker-unacknowledged publish");
+            }
+        }
+
+        Set<UUID> distinctStatusEventIds() {
+            Set<UUID> ids = new HashSet<>();
+            published.forEach(a -> ids.add(a.getStatusEventId()));
+            return ids;
         }
     }
 }

@@ -28,6 +28,10 @@ public final class RefundAttempt {
     private final RefundOutcome outcome;
     private final long providerLatencyMs;
     private final UUID causationEventId;
+    // Same contract as PaymentAttempt#statusEventId: the outbound event's envelope eventId,
+    // minted once and persisted so a redelivery republishes the SAME logical event (M19 drill 9).
+    // Nullable only for rows persisted before db/migration/V4 added the column.
+    private final UUID statusEventId;
     private final String traceId;
     private final String correlationId;
     private final Instant processedAt;
@@ -42,6 +46,7 @@ public final class RefundAttempt {
             RefundOutcome outcome,
             long providerLatencyMs,
             UUID causationEventId,
+            UUID statusEventId,
             String traceId,
             String correlationId,
             Instant processedAt) {
@@ -54,11 +59,14 @@ public final class RefundAttempt {
         this.outcome = Objects.requireNonNull(outcome, "outcome must not be null");
         this.providerLatencyMs = providerLatencyMs;
         this.causationEventId = Objects.requireNonNull(causationEventId, "causationEventId must not be null");
+        // Deliberately NOT requireNonNull: pre-V4 rows reconstitute with a null statusEventId.
+        this.statusEventId = statusEventId;
         this.traceId = requireNonBlank(traceId, "traceId");
         this.correlationId = requireNonBlank(correlationId, "correlationId");
         this.processedAt = Objects.requireNonNull(processedAt, "processedAt must not be null");
     }
 
+    /** See {@link PaymentAttempt#from} for why {@code statusEventId} is minted by the caller. */
     public static RefundAttempt from(
             UUID refundId,
             UUID paymentId,
@@ -66,9 +74,11 @@ public final class RefundAttempt {
             Money amount,
             RefundProviderResult result,
             UUID causationEventId,
+            UUID statusEventId,
             String traceId,
             String correlationId) {
         Objects.requireNonNull(result, "result must not be null");
+        Objects.requireNonNull(statusEventId, "statusEventId must not be null");
         return new RefundAttempt(
                 UUID.randomUUID(),
                 refundId,
@@ -79,9 +89,45 @@ public final class RefundAttempt {
                 result.outcome(),
                 result.latencyMs(),
                 causationEventId,
+                statusEventId,
                 traceId,
                 correlationId,
                 Instant.now());
+    }
+
+    /**
+     * Reconstitutes an attempt from persisted state - needed since the M19 drill 9 fix gave this
+     * table its first read path ({@code RefundAttemptLogRepository#findByInboundEventId}, the
+     * republish-on-redelivery lookup). Counterpart of {@link PaymentAttempt#reconstitute}.
+     */
+    public static RefundAttempt reconstitute(
+            UUID id,
+            UUID refundId,
+            UUID paymentId,
+            String merchantId,
+            Money amount,
+            UUID providerReference,
+            RefundOutcome outcome,
+            long providerLatencyMs,
+            UUID causationEventId,
+            UUID statusEventId,
+            String traceId,
+            String correlationId,
+            Instant processedAt) {
+        return new RefundAttempt(
+                id,
+                refundId,
+                paymentId,
+                merchantId,
+                amount,
+                providerReference,
+                outcome,
+                providerLatencyMs,
+                causationEventId,
+                statusEventId,
+                traceId,
+                correlationId,
+                processedAt);
     }
 
     private static String requireNonBlank(String value, String fieldName) {

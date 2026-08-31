@@ -1,16 +1,21 @@
 package com.example.psp.pspconnector.adapters.out.kafka;
 
 import com.example.psp.common.events.EventEnvelope;
+import com.example.psp.common.events.UuidV7;
 import com.example.psp.pspconnector.domain.model.PaymentAttempt;
 import com.example.psp.pspconnector.domain.model.ProviderOutcome;
 import com.example.psp.pspconnector.domain.port.PaymentStatusPublisher;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
 /**
@@ -74,8 +79,14 @@ public class KafkaPaymentStatusPublisher implements PaymentStatusPublisher {
                             + attempt.getPaymentId());
         }
 
+        // The envelope eventId is the attempt's stored statusEventId, NOT a fresh mint: a
+        // redelivered inbound event republishes through here (M19 drill 9), and downstream dedup
+        // (the ledger's uq_ledger_entries_inbound_event_id above all) only recognises the replay
+        // if the id is byte-identical. Fresh mint is the pre-V4-row fallback only.
+        UUID eventId = attempt.getStatusEventId() != null ? attempt.getStatusEventId() : UuidV7.generate();
         EventEnvelope envelope =
                 EventEnvelope.causedBy(
+                        eventId,
                         attempt.getCausationEventId(),
                         EVENT_TYPE,
                         1,
@@ -101,27 +112,31 @@ public class KafkaPaymentStatusPublisher implements PaymentStatusPublisher {
                 .add("event-type", envelope.eventType().getBytes(StandardCharsets.UTF_8))
                 .add("aggregate-id", envelope.aggregateId().getBytes(StandardCharsets.UTF_8));
 
-        kafkaTemplate
-                .send(record)
-                .whenComplete(
-                        (result, ex) -> {
-                            if (ex != null) {
-                                log.error(
-                                        "Failed to publish {} for paymentId={}",
-                                        topic,
-                                        attempt.getPaymentId(),
-                                        ex);
-                            } else {
-                                RecordMetadata metadata = result.getRecordMetadata();
-                                log.info(
-                                        "Published {} paymentId={} merchantId={} status={} partition={} offset={}",
-                                        topic,
-                                        attempt.getPaymentId(),
-                                        attempt.getMerchantId(),
-                                        event.getStatus(),
-                                        metadata.partition(),
-                                        metadata.offset());
-                            }
-                        });
+        // Blocks until the broker acknowledges (acks=all) or the producer gives up
+        // (delivery.timeout.ms, well under max.poll.interval.ms). The fire-and-forget send this
+        // replaced was M19 drill 9's loss: the listener acked the inbound offset while this
+        // record still sat in the producer buffer, and a KEDA scale-in killed the pod inside
+        // that window. A failure must reach the listener so the offset is never committed ahead
+        // of the event (ADR-0006's error handler takes it from there).
+        try {
+            SendResult<String, Object> result = kafkaTemplate.send(record).get();
+            RecordMetadata metadata = result.getRecordMetadata();
+            log.info(
+                    "Published {} paymentId={} merchantId={} status={} eventId={} partition={} offset={}",
+                    topic,
+                    attempt.getPaymentId(),
+                    attempt.getMerchantId(),
+                    event.getStatus(),
+                    eventId,
+                    metadata.partition(),
+                    metadata.offset());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new KafkaException(
+                    "interrupted while publishing " + topic + " for paymentId=" + attempt.getPaymentId(), e);
+        } catch (ExecutionException e) {
+            throw new KafkaException(
+                    "failed to publish " + topic + " for paymentId=" + attempt.getPaymentId(), e.getCause());
+        }
     }
 }

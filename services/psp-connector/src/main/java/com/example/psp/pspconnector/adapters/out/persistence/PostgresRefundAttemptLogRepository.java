@@ -2,6 +2,7 @@ package com.example.psp.pspconnector.adapters.out.persistence;
 
 import com.example.psp.pspconnector.domain.model.RefundAttempt;
 import com.example.psp.pspconnector.domain.port.RefundAttemptLogRepository;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,6 +34,14 @@ public class PostgresRefundAttemptLogRepository implements RefundAttemptLogRepos
     @Override
     public boolean existsByInboundEventId(UUID inboundEventId) {
         return jpaRepository.existsByCausationEventId(inboundEventId);
+    }
+
+    @Override
+    public Optional<RefundAttempt> findByInboundEventId(UUID inboundEventId) {
+        // The refund table has no separate inbound_event_id column: the inbound event id IS
+        // causation_event_id (uq_refund_attempts_causation_event_id, V3) - same translation as
+        // existsByInboundEventId above.
+        return jpaRepository.findByCausationEventId(inboundEventId).map(mapper::toDomain);
     }
 
     @Override

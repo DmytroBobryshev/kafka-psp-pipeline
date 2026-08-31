@@ -1,5 +1,6 @@
 package com.example.psp.pspconnector.application;
 
+import com.example.psp.common.events.UuidV7;
 import com.example.psp.pspconnector.domain.model.RefundAttempt;
 import com.example.psp.pspconnector.domain.model.RefundProviderResult;
 import com.example.psp.pspconnector.domain.port.RefundAttemptLogRepository;
@@ -61,13 +62,19 @@ public class ExecuteRefundUseCase {
     public void execute(ExecuteRefundCommand command) {
         UUID inboundEventId = command.causationEventId();
 
-        if (attemptLogRepository.existsByInboundEventId(inboundEventId)) {
+        // Same M19 drill 9 rule as ProcessPaymentRequestUseCase#republish: a dedup hit skips the
+        // provider call (that is what the row proves happened) but REPUBLISHES the outcome event
+        // (which the row never proved was broker-acknowledged). Safe because the publisher reuses
+        // the row's stored statusEventId.
+        var replayed = attemptLogRepository.findByInboundEventId(inboundEventId);
+        if (replayed.isPresent()) {
             deduplicatedCounter.increment();
             log.info(
                     "Deduplicated refund attempt inboundEventId={} refundId={} path=check-first - "
-                            + "already processed, skipping provider call and publish",
+                            + "already recorded, skipping provider call, republishing the outcome event",
                     inboundEventId,
                     command.refundId());
+            statusPublisher.publishOutcome(replayed.get());
             return;
         }
 
@@ -83,6 +90,7 @@ public class ExecuteRefundUseCase {
                         command.amount(),
                         result,
                         inboundEventId,
+                        UuidV7.generate(),
                         command.traceId(),
                         command.correlationId());
 
@@ -91,9 +99,12 @@ public class ExecuteRefundUseCase {
             deduplicatedCounter.increment();
             log.info(
                     "Deduplicated refund attempt inboundEventId={} refundId={} path=constraint-race - "
-                            + "a concurrent delivery of this inbound event won the insert, skipping publish",
+                            + "a concurrent delivery of this inbound event won the insert, "
+                            + "republishing the winner's outcome event",
                     inboundEventId,
                     command.refundId());
+            // The winner's row, not our losing attempt: its statusEventId is the one that counts.
+            attemptLogRepository.findByInboundEventId(inboundEventId).ifPresent(statusPublisher::publishOutcome);
             return;
         }
 

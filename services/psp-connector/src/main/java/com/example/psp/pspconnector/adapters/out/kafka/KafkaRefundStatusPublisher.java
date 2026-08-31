@@ -1,16 +1,21 @@
 package com.example.psp.pspconnector.adapters.out.kafka;
 
 import com.example.psp.common.events.EventEnvelope;
+import com.example.psp.common.events.UuidV7;
 import com.example.psp.pspconnector.domain.model.RefundAttempt;
 import com.example.psp.pspconnector.domain.model.RefundOutcome;
 import com.example.psp.pspconnector.domain.port.RefundStatusPublisher;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
 /**
@@ -52,8 +57,12 @@ public class KafkaRefundStatusPublisher implements RefundStatusPublisher {
         String eventType = completed ? REFUND_COMPLETED_EVENT_TYPE : REFUND_FAILED_EVENT_TYPE;
         String topic = completed ? refundCompletedTopic : refundFailedTopic;
 
+        // Stored statusEventId, not a fresh mint - same replay-identity contract as
+        // KafkaPaymentStatusPublisher (M19 drill 9); fresh mint is the pre-V4-row fallback only.
+        UUID eventId = attempt.getStatusEventId() != null ? attempt.getStatusEventId() : UuidV7.generate();
         EventEnvelope envelope =
                 EventEnvelope.causedBy(
+                        eventId,
                         attempt.getCausationEventId(),
                         eventType,
                         1,
@@ -76,29 +85,29 @@ public class KafkaRefundStatusPublisher implements RefundStatusPublisher {
                 .add("event-type", envelope.eventType().getBytes(StandardCharsets.UTF_8))
                 .add("aggregate-id", envelope.aggregateId().getBytes(StandardCharsets.UTF_8));
 
-        kafkaTemplate
-                .send(record)
-                .whenComplete(
-                        (result, ex) -> {
-                            if (ex != null) {
-                                log.error(
-                                        "Failed to publish {} for refundId={}",
-                                        topic,
-                                        attempt.getRefundId(),
-                                        ex);
-                            } else {
-                                RecordMetadata metadata = result.getRecordMetadata();
-                                log.info(
-                                        "Published {} refundId={} paymentId={} merchantId={} outcome={} "
-                                                + "partition={} offset={}",
-                                        topic,
-                                        attempt.getRefundId(),
-                                        attempt.getPaymentId(),
-                                        attempt.getMerchantId(),
-                                        attempt.getOutcome(),
-                                        metadata.partition(),
-                                        metadata.offset());
-                            }
-                        });
+        // Blocks until the broker acknowledges - same contract and same M19 drill 9 rationale as
+        // KafkaPaymentStatusPublisher: the listener's ack must never precede the publish.
+        try {
+            SendResult<String, Object> result = kafkaTemplate.send(record).get();
+            RecordMetadata metadata = result.getRecordMetadata();
+            log.info(
+                    "Published {} refundId={} paymentId={} merchantId={} outcome={} eventId={} "
+                            + "partition={} offset={}",
+                    topic,
+                    attempt.getRefundId(),
+                    attempt.getPaymentId(),
+                    attempt.getMerchantId(),
+                    attempt.getOutcome(),
+                    eventId,
+                    metadata.partition(),
+                    metadata.offset());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new KafkaException(
+                    "interrupted while publishing " + topic + " for refundId=" + attempt.getRefundId(), e);
+        } catch (ExecutionException e) {
+            throw new KafkaException(
+                    "failed to publish " + topic + " for refundId=" + attempt.getRefundId(), e.getCause());
+        }
     }
 }

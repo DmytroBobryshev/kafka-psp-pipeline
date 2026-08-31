@@ -90,6 +90,40 @@ public record EventEnvelope(
     }
 
     /**
+     * Like {@link #causedBy(UUID, String, int, String, String, String, String, String)} but with a
+     * caller-supplied {@code eventId} instead of a freshly minted one. {@code eventId} is the
+     * consumer-side idempotency key (see {@link #eventId()}), so a publisher that may have to
+     * re-emit the same logical event after a redelivery - psp-connector republishing a status
+     * event whose attempt row already exists (M19 drill 9's loss) - must carry the id the
+     * original publish carried, or downstream dedup cannot recognise the replay and books it
+     * twice. {@code occurredAt} is still now(): identity is the id, not the wall clock.
+     */
+    public static EventEnvelope causedBy(
+            UUID eventId,
+            UUID causeEventId,
+            String eventType,
+            int eventVersion,
+            String aggregateId,
+            String aggregateType,
+            String source,
+            String traceId,
+            String correlationId) {
+        Objects.requireNonNull(eventId, "eventId must not be null");
+        Objects.requireNonNull(causeEventId, "causeEventId must not be null");
+        return new EventEnvelope(
+                eventId,
+                eventType,
+                eventVersion,
+                aggregateId,
+                aggregateType,
+                Instant.now(),
+                source,
+                traceId,
+                correlationId,
+                causeEventId);
+    }
+
+    /**
      * Creates an envelope caused by {@code causeEventId}, propagating {@code traceId} and
      * {@code correlationId} from the causing event - the usual case for every event after the
      * first in a saga.

@@ -47,6 +47,7 @@ public interface PaymentAttemptPersistenceMapper {
                 ProviderOutcome.valueOf(entity.getOutcome()),
                 entity.getProviderLatencyMs(),
                 entity.getCausationEventId(),
+                entity.getStatusEventId(),
                 entity.getTraceId(),
                 entity.getCorrelationId(),
                 entity.getProcessedAt());

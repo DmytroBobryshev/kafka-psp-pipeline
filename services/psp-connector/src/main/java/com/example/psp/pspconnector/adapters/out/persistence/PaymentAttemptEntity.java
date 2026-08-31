@@ -65,6 +65,10 @@ public class PaymentAttemptEntity {
     @Column(name = "inbound_event_id")
     private UUID inboundEventId;
 
+    // Nullable in db/migration/V4 for pre-fix rows - see PaymentAttempt#statusEventId.
+    @Column(name = "status_event_id")
+    private UUID statusEventId;
+
     @Column(name = "trace_id", nullable = false, length = 255)
     private String traceId;
 

@@ -1,5 +1,6 @@
 package com.example.psp.pspconnector.application;
 
+import com.example.psp.common.events.UuidV7;
 import com.example.psp.pspconnector.domain.exception.ProviderTimeoutException;
 import com.example.psp.pspconnector.domain.model.PaymentAttempt;
 import com.example.psp.pspconnector.domain.model.ProviderOutcome;
@@ -9,6 +10,7 @@ import com.example.psp.pspconnector.domain.port.PaymentProviderPort;
 import com.example.psp.pspconnector.domain.port.PaymentStatusPublisher;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -123,10 +125,15 @@ public class ProcessPaymentRequestUseCase {
         UUID inboundEventId = command.causationEventId();
 
         // LEVEL 1 (the fix): check BEFORE the side effect. If this exact inbound event has
-        // already been fully processed, paymentProvider.authorize() must never run again for it -
-        // that ordering is the entire point, see class javadoc.
-        if (attemptLogRepository.existsByInboundEventId(inboundEventId)) {
+        // already been recorded, paymentProvider.authorize() must never run again for it - that
+        // ordering is the entire point, see class javadoc. The status event, however, is
+        // REPUBLISHED, not skipped: the row was written before the original publish was
+        // broker-acknowledged, so its existence proves the provider was called, never that the
+        // event exists (M19 drill 9 lost 3 payments to exactly that gap).
+        Optional<PaymentAttempt> replayed = attemptLogRepository.findByInboundEventId(inboundEventId);
+        if (replayed.isPresent()) {
             recordDuplicate(DedupReason.REPLAY, command, inboundEventId, null);
+            republish(replayed.get());
             return;
         }
 
@@ -136,10 +143,13 @@ public class ProcessPaymentRequestUseCase {
         // LEVEL 2 (unchanged): a genuinely different failure - the provider redelivering the same
         // callback for an attempt we ourselves only made once. Level 1 above cannot see this: it
         // only knows about our own inbound message id, not what the provider chose to do with it.
-        if (attemptLogRepository.existsByPaymentIdAndProviderEventId(
-                command.paymentId(), result.providerEventId())) {
+        Optional<PaymentAttempt> callbackDuplicate =
+                attemptLogRepository.findByPaymentIdAndProviderEventId(
+                        command.paymentId(), result.providerEventId());
+        if (callbackDuplicate.isPresent()) {
             recordDuplicate(
                     DedupReason.PROVIDER_CALLBACK, command, inboundEventId, result.providerEventId());
+            republish(callbackDuplicate.get());
             return;
         }
 
@@ -150,15 +160,26 @@ public class ProcessPaymentRequestUseCase {
                         command.amount(),
                         result,
                         command.causationEventId(),
+                        UuidV7.generate(),
                         command.traceId(),
                         command.correlationId());
 
         boolean inserted = attemptLogRepository.tryRecord(attempt);
         if (!inserted) {
             // Race path: lost to a concurrent insert between one of the two check-first reads
-            // above and this insert - see class javadoc.
-            DedupReason reason = resolveRaceReason(inboundEventId);
+            // above and this insert - see class javadoc. tryRecord's boolean is deliberately
+            // identical for both constraints, so re-reading by inbound event id is what tells the
+            // two apart: whichever key just landed a row is the one this attempt collided with.
+            // The winner's row is republished for the same reason as the check-first paths above.
+            Optional<PaymentAttempt> replayWinner = attemptLogRepository.findByInboundEventId(inboundEventId);
+            DedupReason reason = replayWinner.isPresent() ? DedupReason.REPLAY : DedupReason.PROVIDER_CALLBACK;
             recordDuplicate(reason, command, inboundEventId, result.providerEventId());
+            replayWinner
+                    .or(
+                            () ->
+                                    attemptLogRepository.findByPaymentIdAndProviderEventId(
+                                            command.paymentId(), result.providerEventId()))
+                    .ifPresent(this::republish);
             return;
         }
 
@@ -179,17 +200,20 @@ public class ProcessPaymentRequestUseCase {
     }
 
     /**
-     * The race path (a lost {@link AttemptLogRepository#tryRecord}) only tells us <em>that</em> a
-     * unique constraint was violated, not <em>which</em> of the two (V1 level 2 vs V2 level 1)
-     * was the one that actually fired - {@code tryRecord}'s boolean contract is deliberately
-     * identical for both. Re-reading {@code existsByInboundEventId} is one cheap extra lookup on
-     * this rare path, and it is authoritative: whichever key just landed a row is the one that won
-     * the race, so if it now exists, level 1 is what this attempt collided with.
+     * The M19 drill 9 rule: every dedup hit republishes the stored attempt's status event instead
+     * of skipping it. The attempt row is written before the publish is broker-acknowledged, so a
+     * crash (or a KEDA scale-in - the drill's actual killer) between the two leaves a row with no
+     * event; skipping on redelivery made that loss permanent. Publishing again is safe because
+     * the publisher reuses the row's stored {@code statusEventId} - downstream sees a
+     * byte-identical idempotency key and drops the copy. TIMEOUT rows stay unpublished
+     * (ADR-0006 category A never produces a status event; M12's provider-status query is the
+     * exit for those).
      */
-    private DedupReason resolveRaceReason(UUID inboundEventId) {
-        return attemptLogRepository.existsByInboundEventId(inboundEventId)
-                ? DedupReason.REPLAY
-                : DedupReason.PROVIDER_CALLBACK;
+    private void republish(PaymentAttempt attempt) {
+        if (attempt.getOutcome() == ProviderOutcome.TIMEOUT) {
+            return;
+        }
+        statusPublisher.publishStatusChanged(attempt);
     }
 
     private void recordDuplicate(
@@ -203,8 +227,8 @@ public class ProcessPaymentRequestUseCase {
         }
         log.info(
                 "Deduplicated payment attempt reason={} paymentId={} inboundEventId={} "
-                        + "providerEventId={} merchantId={} - already processed, skipping attempt-log "
-                        + "write and publish, acknowledging normally",
+                        + "providerEventId={} merchantId={} - already recorded, skipping attempt-log "
+                        + "write, republishing the stored status event, acknowledging normally",
                 reason,
                 command.paymentId(),
                 inboundEventId,

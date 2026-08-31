@@ -78,4 +78,14 @@ public class PostgresAttemptLogRepository implements AttemptLogRepository {
     public Optional<PaymentAttempt> findLatestByPaymentId(UUID paymentId) {
         return jpaRepository.findFirstByPaymentIdOrderByProcessedAtDesc(paymentId).map(mapper::toDomain);
     }
+
+    @Override
+    public Optional<PaymentAttempt> findByInboundEventId(UUID inboundEventId) {
+        return jpaRepository.findByInboundEventId(inboundEventId).map(mapper::toDomain);
+    }
+
+    @Override
+    public Optional<PaymentAttempt> findByPaymentIdAndProviderEventId(UUID paymentId, UUID providerEventId) {
+        return jpaRepository.findByPaymentIdAndProviderEventId(paymentId, providerEventId).map(mapper::toDomain);
+    }
 }

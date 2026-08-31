@@ -36,6 +36,11 @@ public final class PaymentAttempt {
     private final ProviderOutcome outcome;
     private final long providerLatencyMs;
     private final UUID causationEventId;
+    // The envelope eventId the outbound status event carries - minted once, when the attempt is
+    // first processed, and persisted with the row, so a republish after redelivery reuses the
+    // SAME downstream idempotency key (M19 drill 9). Nullable only for rows persisted before
+    // db/migration/V4 added the column.
+    private final UUID statusEventId;
     private final String traceId;
     private final String correlationId;
     private final Instant processedAt;
@@ -49,6 +54,7 @@ public final class PaymentAttempt {
             ProviderOutcome outcome,
             long providerLatencyMs,
             UUID causationEventId,
+            UUID statusEventId,
             String traceId,
             String correlationId,
             Instant processedAt) {
@@ -60,21 +66,30 @@ public final class PaymentAttempt {
         this.outcome = Objects.requireNonNull(outcome, "outcome must not be null");
         this.providerLatencyMs = providerLatencyMs;
         this.causationEventId = Objects.requireNonNull(causationEventId, "causationEventId must not be null");
+        // Deliberately NOT requireNonNull: pre-V4 rows reconstitute with a null statusEventId.
+        this.statusEventId = statusEventId;
         this.traceId = requireNonBlank(traceId, "traceId");
         this.correlationId = requireNonBlank(correlationId, "correlationId");
         this.processedAt = Objects.requireNonNull(processedAt, "processedAt must not be null");
     }
 
-    /** Creates a freshly-processed attempt (M4: always a new one, never reconstituted from storage). */
+    /**
+     * Creates a freshly-processed attempt (M4: always a new one, never reconstituted from
+     * storage). {@code statusEventId} is minted by the caller (the application layer, which owns
+     * the UUIDv7 convention - ADR-0002) rather than here, because {@code domain/} imports nothing
+     * outside itself (ADR-0007) and {@code UuidV7} lives in {@code common-events}.
+     */
     public static PaymentAttempt from(
             UUID paymentId,
             String merchantId,
             Money amount,
             ProviderResult result,
             UUID causationEventId,
+            UUID statusEventId,
             String traceId,
             String correlationId) {
         Objects.requireNonNull(result, "result must not be null");
+        Objects.requireNonNull(statusEventId, "statusEventId must not be null");
         return new PaymentAttempt(
                 UUID.randomUUID(),
                 paymentId,
@@ -84,6 +99,7 @@ public final class PaymentAttempt {
                 result.outcome(),
                 result.latencyMs(),
                 causationEventId,
+                statusEventId,
                 traceId,
                 correlationId,
                 Instant.now());
@@ -107,6 +123,7 @@ public final class PaymentAttempt {
             ProviderOutcome outcome,
             long providerLatencyMs,
             UUID causationEventId,
+            UUID statusEventId,
             String traceId,
             String correlationId,
             Instant processedAt) {
@@ -119,6 +136,7 @@ public final class PaymentAttempt {
                 outcome,
                 providerLatencyMs,
                 causationEventId,
+                statusEventId,
                 traceId,
                 correlationId,
                 processedAt);

@@ -14,7 +14,7 @@ output captured during the run; nothing is reconstructed.
 | 6 | `kafka-reassign-partitions`, throttled vs not | 61.4 MiB moved in 62-67 s at a 1 MiB/s throttle, in ≤3 s without one — and the throttle is a config, not a lease |
 | 7 | `retention.bytes` vs `retention.ms`, segment rolling | asked for 5 MiB, kept 5.9 — size retention is a floor; asked for 60 s, got **everything deleted including the active segment**, 298 s late |
 | 8 | Offset reset to a timestamp | a datetime in a 20 s gap between batches landed the group on offset 1000, exactly — after two refusals worth knowing: active groups and the dry-run default |
-| 9 | Chaos: cordon + broker kill, ledger kill mid-transaction | the chaos we injected lost nothing — 6000/6000 acked through a broker outage, EOS held through a `--grace-period=0` kill. The chaos we didn't inject — KEDA scaling in — **lost 3 payments** on the one non-transactional hop |
+| 9 | Chaos: cordon + broker kill, ledger kill mid-transaction | nothing was lost — 6000/6000 through a broker outage, EOS held through a `--grace-period=0` kill, and the "3 lost payments" turned out to be **designed TIMEOUTs, a false alarm** — which nevertheless surfaced a real latent loss window in the non-transactional hop, since fixed and regression-proven |
 
 ---
 
@@ -653,13 +653,13 @@ producer that wrote them. `read_uncommitted == read_committed` also says the kil
 for catching one open was small; the fencing evidence above is what proves the machinery, not
 luck. The 11 `DECLINED` correctly produced no entries.
 
-### Act C - the chaos we did not inject
+### Act C - the false alarm that found a real bug
 
 The arithmetic above has a hole: **120 requested, 117 statuses.** psp-connector's consumer
 group shows lag 0 on all 12 partitions — it consumed and acknowledged all 120 — and its DLQ
 holds 0 records. Three payments went into the non-transactional hop and nothing came out.
 
-The connector's own log names the culprit, at the exact minute of the load:
+The connector's own log offered a suspect, at the exact minute of the load:
 
 ```
 20:06:31  psp-connector.v1: partitions revoked:  [payment-requested-0..11]
@@ -668,29 +668,80 @@ The connector's own log names the culprit, at the exact minute of the load:
 20:07:17  psp-connector.v1: partitions assigned: [payment-requested-0..2]
 ```
 
-Nobody killed psp-connector. **KEDA did** — the M18 autoscaler (`ScaledObject`: min 1, max 6,
-trigger: consumer lag > 25) saw the burst's lag, scaled the deployment out, the new replicas
-took partitions 4-11, and when the lag drained a minute later, scaled them back in. The three
-missing payments sat on partitions **7, 9 and 10** — partitions owned by the ephemeral
-replicas, never by the survivor. Their offsets are committed; their status events do not
-exist; the pods that ate them are gone, logs and all.
+Nobody killed psp-connector — **KEDA scaled it** (the M18 `ScaledObject`: min 1, max 6,
+trigger: consumer lag > 25) out on the burst's lag and back in a minute later. The three
+missing payments sat on partitions 7, 9 and 10, owned by the ephemeral replicas whose logs
+died with them. Circumstantial case: offsets committed, no status events, no DLQ, pods gone —
+scale-in ate them through the one consume→produce hop with no transaction.
 
-That is the loss mechanism the module has been circling since part 1: psp-connector's hop is
-consume → produce with no transaction (a deliberate M13 design note — only the ledger got
-EOS). Offsets committed ahead of a produce that never completed, in a pod that died on
-scale-in. The honest caveat: with the ephemeral pods' logs gone, the exact code path (async
-send unflushed at commit, or shutdown cutting the 100 ms-5 s simulated provider call) is not
-provable post-mortem. What is provable: **the guarantee on this hop is at-least-once only
-while nobody scales it in, and the component that scales it in is its own autoscaler.**
+**That conclusion was wrong.** The ground truth was one Postgres query away the whole time —
+the attempt log records what the provider actually answered:
+
+```sql
+SELECT outcome, count(*) FROM payment_attempts
+ WHERE merchant_id='merchant-m19-chaos' GROUP BY outcome;
+ outcome  | count
+----------+-------
+ APPROVED |   106
+ DECLINED |    11
+ TIMEOUT  |     3
+```
+
+106 + 11 + 3 = 120. The three "lost" payments are the simulated provider's `timeout-rate:
+0.05` firing three times in 120 calls — and a TIMEOUT, by ADR-0006 category A, **never
+publishes a status event**: the row is recorded, the exception propagates, and after the
+redelivery is deduplicated the event is acknowledged with no output, by design (M12's
+provider-status query is the exit for those payments). Nothing was lost. The drill survived
+its chaos completely; the investigator did not survive his own pattern-matching — a rebalance
+in the logs at the right minute plus missing events made a story too plausible to check.
+
+And yet the false alarm was the most productive finding of the module, because chasing it
+forced a real read of the hop's code, and the code had an actual loss window:
+
+```java
+// KafkaPaymentStatusPublisher, before the fix:
+kafkaTemplate.send(record).whenComplete((result, ex) -> { if (ex != null) log.error(...); });
+// listener, immediately after:
+ack.acknowledge();
+```
+
+Fire-and-forget: the offset commit raced the broker acknowledgement, and a send failure was
+*logged and acknowledged anyway*. Worse, the M5 dedup made any such loss permanent: a
+redelivery found the attempt row (written before the publish) and skipped the publish as
+"already processed" — the row's existence never proved the event's. The window simply never
+happened to fire during the drill.
+
+**The fix** (commit alongside this doc): the publish now blocks until the broker acknowledges
+and propagates failure to the listener (no ack, redelivery); every attempt row stores the
+outbound event's envelope `eventId` (`status_event_id`, migration V4); and every dedup hit
+REPUBLISHES the stored event under that same id instead of skipping — downstream dedup (the
+ledger's `uq_ledger_entries_inbound_event_id`) sees a byte-identical idempotency key and drops
+the copy. `ProcessPaymentRequestUseCaseTest#crashBetweenRecordAndPublishIsRepairedByRedelivery`
+is the loss scenario as a unit test: publish fails, listener never acks, redelivery republishes
+the same eventId, nothing charged twice.
+
+**The regression run**, against the fixed build on the live cluster — same shape as act B but
+harder (KEDA went 1 → 5 replicas and back, ledger hard-killed mid-flight, 150 payments):
+
+```
+150 requested = 123 APPROVED + 15 DECLINED + 12 TIMEOUT     (Postgres, the ground truth)
+138 status events, 138 unique paymentIds                     (= 123 + 15, exactly)
+123 committed ledger entries, 0 duplicates, set == APPROVED set
+LOST: none
+```
 
 ### What it means
 
-- **The rehearsed failure was survived; the unrehearsed one cost money.** We aimed chaos at
-  the broker (ISR machinery absorbed it: 6000/6000, zero errors) and at the EOS service
-  (fencing + read_committed absorbed it: 106/106, zero duplicates). The loss came from the
-  system's own automation reacting to our load — KEDA scale-in, installed in M18 as a
-  showpiece, meeting a non-transactional hop built in M13. Failure drills find the gaps
-  *between* modules, not inside them.
+- **Verify the boring hypothesis before the dramatic one.** The 3-in-120 gap had two candidate
+  explanations: a 2.5% sampling of a documented 5% timeout rate, or a novel distributed-systems
+  loss mechanism. The base-rate answer was checkable in one SQL query; the dramatic answer got
+  written up first because a rebalance log line at the right timestamp made it *feel* proven.
+  Correlation in chaos drills is treacherous precisely because chaos makes everything correlate.
+- **The false alarm still paid for itself.** The fire-and-forget publish and the
+  dedup-that-skips were real defects — real enough that the fix changed a migration, a domain
+  model, two publishers and two use cases. A latent loss window that hasn't fired yet is
+  exactly what failure drills exist to surface; this one was surfaced by code review under the
+  pressure of a wrong hypothesis, which is still surfacing.
 - **Storage pins brokers; cordon ≠ drain for Kafka.** The PV's node affinity means a cordoned
   node's broker cannot be "healed" anywhere else — by design. The operational play for node
   maintenance is Strimzi's rolling machinery (or accept the under-replicated window), not the
@@ -703,18 +754,17 @@ while nobody scales it in, and the component that scales it in is its own autosc
   epoch 1` — a stable `transactional.id` surviving its pod is what lets the coordinator
   distinguish "restarted" from "duplicated". Kill -9 is safe *because* the identity is durable
   and the epoch is not.
-- **Autoscaling a consumer is a correctness feature, not just a capacity one.** Scale-in
-  triggers a rebalance and pod termination at exactly the moment the service is busiest with
-  in-flight work. Every non-transactional consume→produce hop under an autoscaler needs one
-  of: a transactional producer (the ledger's answer), producer-flush-then-ack ordering, or
-  drain-aware termination. The fix belongs in M13's backlog; the drill's job was to price the
-  omission — 3 lost payments per 120 under a single scale cycle, silently.
+- **Autoscaling a consumer is still a correctness surface.** The KEDA cycle didn't lose
+  anything this time, but scale-in does terminate pods at their busiest, and before the fix the
+  hop's guarantee under any such termination was at-most-once. After it: at-least-once with a
+  stable event identity, which downstream idempotency converts to effectively-once — the same
+  contract the rest of the pipeline already ran on.
 
 ### Leftovers
 
 `drill.m19.chaos` is kept (6,000 records, RF=3). The node is uncordoned, all 16 service pods
-plus `kafka-drill` are Running, psp-connector is back to 1 replica, and the three lost
-payments remain lost — there is nothing to replay them from; the requested events are still in
-the topic but their offsets are committed past. Part 2's drill topics
+plus `kafka-drill` are Running, psp-connector is back to 1 replica. The three TIMEOUT payments
+from act B and the twelve from the regression run sit in `payment_attempts` with no status
+event, exactly as ADR-0006 intends. Part 2's drill topics
 (`drill.m19.{reassign,retention,tsreset,chaos}`) follow part 1's convention: kept as evidence,
 deletable with the same loop.

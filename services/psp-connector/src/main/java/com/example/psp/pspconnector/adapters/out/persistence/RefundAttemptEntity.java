@@ -58,6 +58,10 @@ public class RefundAttemptEntity {
     @Column(name = "causation_event_id", nullable = false)
     private UUID causationEventId;
 
+    // Nullable in db/migration/V4 for pre-fix rows - see RefundAttempt#statusEventId.
+    @Column(name = "status_event_id")
+    private UUID statusEventId;
+
     @Column(name = "trace_id", nullable = false, length = 255)
     private String traceId;
 

@@ -32,4 +32,10 @@ public interface PaymentAttemptJpaRepository extends JpaRepository<PaymentAttemp
      * without a dedicated {@code (payment_id, processed_at)} composite index.
      */
     Optional<PaymentAttemptEntity> findFirstByPaymentIdOrderByProcessedAtDesc(UUID paymentId);
+
+    /** M19 drill 9 fix: loads the row the republish-on-redelivery path re-emits from (level 1). */
+    Optional<PaymentAttemptEntity> findByInboundEventId(UUID inboundEventId);
+
+    /** M19 drill 9 fix: same, for the level 2 / constraint-race dedup paths. */
+    Optional<PaymentAttemptEntity> findByPaymentIdAndProviderEventId(UUID paymentId, UUID providerEventId);
 }

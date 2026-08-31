@@ -1,5 +1,6 @@
 package com.example.psp.pspconnector.adapters.out.persistence;
 
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -15,4 +16,7 @@ public interface RefundAttemptJpaRepository extends JpaRepository<RefundAttemptE
      * {@code uq_refund_attempts_causation_event_id} (V3 migration).
      */
     boolean existsByCausationEventId(UUID causationEventId);
+
+    /** M19 drill 9 fix: loads the row the republish-on-redelivery path re-emits from. */
+    Optional<RefundAttemptEntity> findByCausationEventId(UUID causationEventId);
 }
