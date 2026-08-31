@@ -28,7 +28,18 @@ public final class Payment {
     private final Instant createdAt;
     private PaymentStatus status;
 
-    private Payment(UUID id, String merchantId, Money amount, PaymentStatus status, Instant createdAt) {
+    // When the outcome landed (the status listener's UPDATE stamps it); null while CREATED and
+    // for rows that resolved before db/migration/V6 added the column.
+    private final Instant statusUpdatedAt;
+
+    private Payment(
+            UUID id,
+            String merchantId,
+            Money amount,
+            PaymentStatus status,
+            Instant createdAt,
+            Instant statusUpdatedAt) {
+        this.statusUpdatedAt = statusUpdatedAt;
         this.id = Objects.requireNonNull(id, "id must not be null");
         this.merchantId = requireNonBlank(merchantId, "merchantId");
         this.amount = Objects.requireNonNull(amount, "amount must not be null");
@@ -38,13 +49,18 @@ public final class Payment {
 
     /** Creates a brand-new payment in {@link PaymentStatus#CREATED}. */
     public static Payment create(String merchantId, Money amount) {
-        return new Payment(UUID.randomUUID(), merchantId, amount, PaymentStatus.CREATED, Instant.now());
+        return new Payment(UUID.randomUUID(), merchantId, amount, PaymentStatus.CREATED, Instant.now(), null);
     }
 
     /** Reconstitutes a payment from persisted state - used by {@code adapters/out/persistence}. */
     public static Payment reconstitute(
-            UUID id, String merchantId, Money amount, PaymentStatus status, Instant createdAt) {
-        return new Payment(id, merchantId, amount, status, createdAt);
+            UUID id,
+            String merchantId,
+            Money amount,
+            PaymentStatus status,
+            Instant createdAt,
+            Instant statusUpdatedAt) {
+        return new Payment(id, merchantId, amount, status, createdAt, statusUpdatedAt);
     }
 
     private static String requireNonBlank(String value, String fieldName) {

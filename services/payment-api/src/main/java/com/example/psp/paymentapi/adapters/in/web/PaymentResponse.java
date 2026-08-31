@@ -6,5 +6,11 @@ import java.util.UUID;
 
 /** Wire contract returned by the payment web adapter. Records for DTOs, per PLAN.md. */
 public record PaymentResponse(
-        UUID id, String merchantId, BigDecimal amount, String currency, String status, Instant createdAt) {
+        UUID id,
+        String merchantId,
+        BigDecimal amount,
+        String currency,
+        String status,
+        Instant createdAt,
+        Instant statusUpdatedAt) {
 }

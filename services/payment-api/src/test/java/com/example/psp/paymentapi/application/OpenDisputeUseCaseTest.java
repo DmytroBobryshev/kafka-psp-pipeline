@@ -45,7 +45,7 @@ class OpenDisputeUseCaseTest {
     void aSmallDocumentIsPublishedInlineAndNeverTouchesTheStore() {
         payments.save(Payment.reconstitute(
                 PAYMENT_ID, MERCHANT_ID, Money.of(BigDecimal.TEN, "EUR"),
-                com.example.psp.paymentapi.domain.model.PaymentStatus.CREATED, java.time.Instant.now()));
+                com.example.psp.paymentapi.domain.model.PaymentStatus.CREATED, java.time.Instant.now(), null));
         byte[] smallDocument = new byte[(int) THRESHOLD_BYTES]; // exactly at threshold -> inline
 
         DisputeOutcome outcome =
@@ -64,7 +64,7 @@ class OpenDisputeUseCaseTest {
     void aLargeDocumentIsUploadedThenPublishedAsAReference() {
         payments.save(Payment.reconstitute(
                 PAYMENT_ID, MERCHANT_ID, Money.of(BigDecimal.TEN, "EUR"),
-                com.example.psp.paymentapi.domain.model.PaymentStatus.CREATED, java.time.Instant.now()));
+                com.example.psp.paymentapi.domain.model.PaymentStatus.CREATED, java.time.Instant.now(), null));
         byte[] largeDocument = new byte[(int) THRESHOLD_BYTES + 1];
 
         DisputeOutcome outcome =
@@ -85,7 +85,7 @@ class OpenDisputeUseCaseTest {
         // measured demo flips to reproduce a genuine RecordTooLargeException.
         payments.save(Payment.reconstitute(
                 PAYMENT_ID, MERCHANT_ID, Money.of(BigDecimal.TEN, "EUR"),
-                com.example.psp.paymentapi.domain.model.PaymentStatus.CREATED, java.time.Instant.now()));
+                com.example.psp.paymentapi.domain.model.PaymentStatus.CREATED, java.time.Instant.now(), null));
         byte[] largeDocument = new byte[(int) THRESHOLD_BYTES * 10];
 
         DisputeOutcome outcome =

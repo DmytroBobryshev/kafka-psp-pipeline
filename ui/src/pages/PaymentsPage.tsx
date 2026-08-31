@@ -7,6 +7,9 @@ import {
   getWebhookDeliveries,
   listPayments,
 } from "../api/paymentsApi";
+import { getRefundState } from "../api/refundApi";
+import { useCopy } from "../lib/clipboard";
+import type { RefundResponse } from "../api/types";
 import type { PaymentResponse } from "../api/types";
 
 const STATUSES = ["", "CREATED", "PENDING", "SUCCEEDED", "FAILED"] as const;
@@ -133,8 +136,55 @@ function KeyValue({ data }: { data: Record<string, unknown> }) {
   );
 }
 
+function LifecycleRow({ label, at, tone }: { label: string; at?: string | null; tone?: string }) {
+  return (
+    <div className="flex items-center justify-between border-l-2 border-slate-200 py-1 pl-3 text-xs">
+      <span className={tone ?? "text-slate-700"}>{label}</span>
+      <span className="font-mono text-slate-500">{at ? new Date(at).toLocaleString() : "—"}</span>
+    </div>
+  );
+}
+
+/** One refund with an expandable detail (its own fields + the ledger's saga state on demand). */
+function RefundRow({ refund }: { refund: RefundResponse }) {
+  const [open, setOpen] = useState(false);
+  const ledger = useQuery({
+    queryKey: ["refund-state", refund.id],
+    queryFn: () => getRefundState(refund.id),
+    enabled: open,
+    retry: false,
+  });
+
+  return (
+    <li className="rounded border border-slate-100 text-xs">
+      <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between px-2 py-1.5">
+        <span className="font-mono">{refund.id.slice(0, 8)}…</span>
+        <span>
+          {refund.amount} {refund.currency}
+          <span className="ml-2 text-slate-400">{open ? "▲" : "▼"}</span>
+        </span>
+      </button>
+      {open && (
+        <div className="border-t border-slate-100 px-2 py-2">
+          <LifecycleRow label="Refund initiated" at={refund.createdAt} />
+          {ledger.data && (
+            <LifecycleRow
+              label={`Refund ${ledger.data.status.toLowerCase()} (ledger)`}
+              at={ledger.data.updatedAt}
+              tone={ledger.data.status === "COMPLETED" ? "text-emerald-700" : "text-rose-700"}
+            />
+          )}
+          {ledger.error && <p className="pl-3 text-slate-400">ledger has no saga row yet</p>}
+          {refund.reason && <p className="mt-1 pl-3 text-slate-500">reason: {refund.reason}</p>}
+        </div>
+      )}
+    </li>
+  );
+}
+
 function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
   const [showProvider, setShowProvider] = useState(false);
+  const { copy, copiedKey } = useCopy();
 
   const refunds = useQuery({
     queryKey: ["payment-refunds", payment?.id],
@@ -157,11 +207,14 @@ function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
   if (!payment) {
     return (
       <aside className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-400">
-        Select a payment to see its full detail: fields, refund history, provider status and
-        webhook deliveries.
+        Select a payment to see its full detail: lifecycle, fields, refund history, provider
+        status and webhook deliveries.
       </aside>
     );
   }
+
+  const outcomeLabel =
+    payment.status === "SUCCEEDED" ? "Paid" : payment.status === "FAILED" ? "Declined" : null;
 
   return (
     <aside className="space-y-4 rounded-lg border border-slate-200 bg-white p-5">
@@ -169,11 +222,11 @@ function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
         <div className="mb-1 flex items-center justify-between">
           <h3 className="text-sm font-semibold">Payment</h3>
           <button
-            onClick={() => navigator.clipboard.writeText(payment.id)}
-            title="Copy id"
+            onClick={() => copy(payment.id, "pid")}
+            title="Copy payment id"
             className="font-mono text-xs text-slate-500 hover:text-slate-900"
           >
-            copy id ⧉
+            {copiedKey === "pid" ? "copied ✓" : "copy id ⧉"}
           </button>
         </div>
         <KeyValue data={payment as unknown as Record<string, unknown>} />
@@ -187,6 +240,23 @@ function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
         </div>
       </div>
 
+      <div>
+        <h4 className="mb-1 text-xs font-semibold text-slate-600">Lifecycle</h4>
+        <LifecycleRow label="Created" at={payment.createdAt} />
+        {outcomeLabel ? (
+          <LifecycleRow
+            label={outcomeLabel}
+            at={payment.statusUpdatedAt}
+            tone={payment.status === "SUCCEEDED" ? "text-emerald-700" : "text-rose-700"}
+          />
+        ) : (
+          <LifecycleRow label="Awaiting outcome…" at={null} tone="text-slate-400" />
+        )}
+        {(refunds.data ?? []).map((r) => (
+          <LifecycleRow key={r.id} label={`Refund initiated (${r.amount} ${r.currency})`} at={r.createdAt} />
+        ))}
+      </div>
+
       {showProvider && (
         <div className="rounded border border-slate-100 bg-slate-50 p-3">
           <h4 className="mb-1 text-xs font-semibold text-slate-600">Provider status (request-reply over Kafka)</h4>
@@ -197,14 +267,11 @@ function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
       )}
 
       <div>
-        <h4 className="mb-1 text-xs font-semibold text-slate-600">Refunds</h4>
+        <h4 className="mb-1 text-xs font-semibold text-slate-600">Refunds (click to expand)</h4>
         {refunds.data?.length === 0 && <p className="text-xs text-slate-400">none</p>}
         <ul className="space-y-1">
           {(refunds.data ?? []).map((r) => (
-            <li key={r.id} className="rounded border border-slate-100 px-2 py-1 text-xs">
-              <span className="font-mono">{r.id.slice(0, 8)}…</span> · {r.amount} {r.currency} ·{" "}
-              <span className="text-slate-500">{r.status}</span>
-            </li>
+            <RefundRow key={r.id} refund={r} />
           ))}
         </ul>
       </div>

@@ -36,6 +36,7 @@ public interface PaymentPersistenceMapper {
                 entity.getMerchantId(),
                 Money.of(entity.getAmount(), entity.getCurrency()),
                 entity.getStatus(),
-                entity.getCreatedAt());
+                entity.getCreatedAt(),
+                entity.getStatusUpdatedAt());
     }
 }

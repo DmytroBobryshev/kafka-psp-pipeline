@@ -43,6 +43,7 @@ export function RefundTrackerPage() {
   const [reason, setReason] = useState("");
   const [trackedPaymentId, setTrackedPaymentId] = useState<string | null>(null);
   const { events, state, reconnect } = useEventStream(trackedPaymentId);
+  const [expandedStep, setExpandedStep] = useState<string | null>(null);
 
   const refund = useMutation({
     mutationFn: () =>
@@ -165,28 +166,48 @@ export function RefundTrackerPage() {
         <ol className="space-y-3">
           {SAGA_STEPS.map((step) => {
             const evt = byType.get(step.type);
+            const open = expandedStep === step.type;
             return (
               <li
                 key={step.type}
-                className={`rounded-lg border px-4 py-3 ${
+                className={`rounded-lg border ${
                   evt ? KIND_STYLES[step.kind] : "border-dashed border-slate-200 bg-slate-50 opacity-60"
                 }`}
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">{step.label}</span>
-                  {evt ? (
-                    <span className="font-mono text-xs text-slate-500">
-                      {new Date(evt.occurredAt).toLocaleTimeString()}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-slate-400">not seen</span>
-                  )}
-                </div>
-                {evt && (
-                  <div className="mt-1 font-mono text-xs text-slate-500">
-                    {evt.eventType} · eventId {evt.eventId.slice(0, 8)}…
-                    {evt.reason && <span className="ml-2 text-amber-700">reason: {evt.reason}</span>}
+                <button
+                  onClick={() => evt && setExpandedStep(open ? null : step.type)}
+                  disabled={!evt}
+                  className="block w-full px-4 py-3 text-left disabled:cursor-default"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">{step.label}</span>
+                    {evt ? (
+                      <span className="font-mono text-xs text-slate-500">
+                        {new Date(evt.occurredAt).toLocaleTimeString()}
+                        <span className="ml-2 text-slate-400">{open ? "▲" : "▼"}</span>
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-400">not seen</span>
+                    )}
                   </div>
+                  {evt && !open && (
+                    <div className="mt-1 font-mono text-xs text-slate-500">
+                      {evt.eventType} · click for full event
+                      {evt.reason && <span className="ml-2 text-amber-700">reason: {evt.reason}</span>}
+                    </div>
+                  )}
+                </button>
+                {evt && open && (
+                  <dl className="grid grid-cols-[130px_1fr] gap-y-1 border-t border-slate-200/60 px-4 py-3 text-xs">
+                    {Object.entries(evt)
+                      .filter(([, v]) => v != null && v !== "")
+                      .map(([k, v]) => (
+                        <div key={k} className="contents">
+                          <dt className="text-slate-500">{k}</dt>
+                          <dd className="break-all font-mono">{String(v)}</dd>
+                        </div>
+                      ))}
+                  </dl>
                 )}
               </li>
             );

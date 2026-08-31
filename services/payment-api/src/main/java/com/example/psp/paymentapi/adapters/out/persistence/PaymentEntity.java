@@ -51,4 +51,8 @@ public class PaymentEntity {
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
+
+    // Nullable in db/migration/V6 - see Payment#statusUpdatedAt.
+    @Column(name = "status_updated_at")
+    private Instant statusUpdatedAt;
 }

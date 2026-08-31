@@ -21,6 +21,8 @@ export interface PaymentResponse {
   currency: string;
   status: string;
   createdAt: string;
+  /** When the outcome landed (status listener's stamp); null while CREATED / for legacy rows. */
+  statusUpdatedAt?: string | null;
 }
 
 /**

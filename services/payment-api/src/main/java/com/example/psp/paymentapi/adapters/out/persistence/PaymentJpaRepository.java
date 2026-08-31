@@ -24,8 +24,12 @@ public interface PaymentJpaRepository extends JpaRepository<PaymentEntity, UUID>
      * by {@code application.ApplyPaymentOutcomeUseCase}'s {@code @Transactional}.
      */
     @Modifying
-    @Query("UPDATE PaymentEntity p SET p.status = :status WHERE p.id = :paymentId")
-    void updateStatus(@Param("paymentId") UUID paymentId, @Param("status") PaymentStatus status);
+    @Query("UPDATE PaymentEntity p SET p.status = :status, p.statusUpdatedAt = :at"
+            + " WHERE p.id = :paymentId")
+    void updateStatus(
+            @Param("paymentId") UUID paymentId,
+            @Param("status") PaymentStatus status,
+            @Param("at") java.time.Instant at);
 
     /**
      * M19's transactions-panel query. Both filters are optional: {@code (:x IS NULL OR field =

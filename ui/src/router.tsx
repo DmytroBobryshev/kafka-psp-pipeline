@@ -20,14 +20,36 @@ import { RefundTrackerPage } from "./pages/RefundTrackerPage";
  * so per-page components own only their content, keeping page 1 byte-identical in behaviour
  * to the pre-router slice.
  */
-const NAV = [
-  { to: "/", label: "Timeline", exact: true },
-  { to: "/payments", label: "Payments" },
-  { to: "/dashboard", label: "Dashboard" },
-  { to: "/merchants", label: "Merchant config" },
-  { to: "/refunds", label: "Refunds" },
-  { to: "/dlq", label: "DLQ" },
-  { to: "/cluster", label: "Cluster" },
+/**
+ * The nav is grouped by what a page is FOR, not by which Kafka feature backs it: Operations is
+ * where money is looked at and acted on, Simulation is where demo traffic is made, the last two
+ * groups are the knobs and the engine room. Requested directly by the user: "split where is
+ * configuration and where is simulation and where is another things".
+ */
+const NAV_GROUPS = [
+  {
+    label: "Operations",
+    items: [
+      { to: "/payments", label: "Payments" },
+      { to: "/refunds", label: "Refunds" },
+      { to: "/dashboard", label: "Dashboard" },
+    ],
+  },
+  {
+    label: "Simulation",
+    items: [{ to: "/", label: "Payment simulator", exact: true }],
+  },
+  {
+    label: "Configuration",
+    items: [{ to: "/merchants", label: "Merchants" }],
+  },
+  {
+    label: "Infrastructure",
+    items: [
+      { to: "/dlq", label: "DLQ" },
+      { to: "/cluster", label: "Cluster" },
+    ],
+  },
 ] as const;
 
 function Shell() {
@@ -41,8 +63,13 @@ function Shell() {
               Six windows into one event pipeline - every page is a Kafka concept, live.
             </p>
           </div>
-          <nav className="flex flex-wrap gap-1">
-            {NAV.map((item) => (
+          <nav className="flex flex-wrap items-center gap-3">
+            {NAV_GROUPS.map((group) => (
+              <div key={group.label} className="flex items-center gap-1 rounded-lg border border-slate-100 bg-slate-50 p-1">
+                <span className="px-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                  {group.label}
+                </span>
+                {group.items.map((item) => (
               // One className, styled off the data-status attribute the router sets - never two
               // class lists merged (activeProps.className CONCATENATES with className, which let
               // hover:bg-slate-100 win over the active bg while the text stayed white: white on
@@ -53,8 +80,10 @@ function Shell() {
                 activeOptions={{ exact: "exact" in item && item.exact }}
                 className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-200 hover:text-slate-900 data-[status=active]:bg-slate-900 data-[status=active]:text-white data-[status=active]:hover:bg-slate-700 data-[status=active]:hover:text-white"
               >
-                {item.label}
-              </Link>
+                    {item.label}
+                  </Link>
+                ))}
+              </div>
             ))}
           </nav>
         </div>

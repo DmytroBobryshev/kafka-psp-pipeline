@@ -42,7 +42,9 @@ public class PostgresPaymentRepository implements PaymentRepository {
 
     @Override
     public void updateStatus(UUID paymentId, PaymentStatus status) {
-        jpaRepository.updateStatus(paymentId, status);
+        // The clock is a persistence detail here: the port's contract is "record the outcome",
+        // and WHEN it was recorded is this adapter's bookkeeping, stamped alongside the UPDATE.
+        jpaRepository.updateStatus(paymentId, status, java.time.Instant.now());
     }
 
     @Override

@@ -5,6 +5,7 @@ import { EventTimeline } from "../components/EventTimeline";
 import { ConnectionStatus } from "../components/ConnectionStatus";
 import { useEventStream } from "../hooks/useEventStream";
 import { recordPayment, usePaymentHistory } from "../hooks/usePaymentHistory";
+import { useCopy } from "../lib/clipboard";
 import type { PaymentResponse } from "../api/types";
 
 /**
@@ -18,6 +19,7 @@ export function TimelinePage() {
   const [payment, setPayment] = useState<PaymentResponse | null>(null);
   const { events, state, reconnect } = useEventStream(payment?.id ?? null);
   const { history } = usePaymentHistory();
+  const { copy, copiedKey } = useCopy();
 
   const onCreated = (p: PaymentResponse) => {
     recordPayment(p);
@@ -41,9 +43,9 @@ export function TimelinePage() {
                   <button
                     className="truncate font-mono text-slate-600 hover:text-slate-900"
                     title="Copy payment id"
-                    onClick={() => navigator.clipboard.writeText(h.id)}
+                    onClick={() => copy(h.id)}
                   >
-                    {h.id.slice(0, 8)}… ⧉
+                    {copiedKey === h.id ? "copied ✓" : `${h.id.slice(0, 8)}… ⧉`}
                   </button>
                   <span className="whitespace-nowrap text-slate-500">
                     {h.amount} {h.currency}
