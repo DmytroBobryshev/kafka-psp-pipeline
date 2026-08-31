@@ -2,7 +2,7 @@
   "type": "record",
   "name": "WebhookDeliveryRequested",
   "namespace": "com.example.psp.common.events.avro",
-  "doc": "Avro form of webhooks.webhook-delivery-requested.v2 (M9 Phase 2) - and its three retry tiers, which carry the identical schema. Field-for-field identical to the hand-written webhook-notifier adapters.in.kafka.WebhookDeliveryRequestedEvent / adapters.out.kafka.WebhookDeliveryRequested records this schema replaces on the BASE topic and the three .retry.* tiers only. Deliberately no 'envelope' field, unlike every other schema in this file: this is an internal command/work-item topic, not an ADR-0002 business event, and the retry metadata (attempt count, original coordinates, classified failure) travels as Kafka HEADERS instead (domain.model.RetryHeaderNames) so a redelivered record's payload stays byte-for-byte identical on every hop. Cut to a NEW v2 topic (not v1 in place) specifically so this schema and its DLQ constraint could be demonstrated cleanly per ADR-0001's actual versioning mechanism - see services/webhook-notifier/README.md's M9 Phase 2 section. webhooks.webhook-delivery-requested.v2.dlq is deliberately NOT Avro - it stays on the byte-tolerant JsonSerializer/JsonDeserializer pair unchanged from M8, because DeadLetterPublishingRecoverer must be able to republish the raw undeserializable bytes of a genuine poison pill, which KafkaAvroSerializer cannot do.",
+  "doc": "Avro form of webhooks.webhook-delivery-requested.v2 (M9 Phase 2) - and its three retry tiers, which carry the identical schema. Field-for-field identical to the hand-written webhook-notifier adapters.in.kafka.WebhookDeliveryRequestedEvent / adapters.out.kafka.WebhookDeliveryRequested records this schema replaces on the BASE topic and the three .retry.* tiers only. Deliberately no 'envelope' field, unlike every other schema in this file: this is an internal command/work-item topic, not an ADR-0002 business event, and the retry metadata (attempt count, original coordinates, classified failure) travels as Kafka HEADERS instead (domain.model.RetryHeaderNames) so a redelivered record's payload stays byte-for-byte identical on every hop. Cut to a NEW v2 topic (not v1 in place) specifically so this schema and its DLQ constraint could be demonstrated cleanly per ADR-0001's actual versioning mechanism - see services/webhook-notifier/README.md's M9 Phase 2 section. webhooks.webhook-delivery-requested.v2.dlq is deliberately NOT Avro - it stays on the byte-tolerant JsonSerializer/JsonDeserializer pair unchanged from M8, because DeadLetterPublishingRecoverer must be able to republish the raw undeserializable bytes of a genuine poison pill, which KafkaAvroSerializer cannot do. M19 adds eventType and refundId, both with defaults, so this remains BACKWARD compatible (infra/compose/register-schemas.sh's compatibility mode for this subject) with every record already on the topic under the old, payment-only shape - the same additive pattern declineReason already established.",
   "fields": [
     {
       "name": "paymentId",
@@ -54,6 +54,18 @@
       "name": "correlationId",
       "type": "string",
       "doc": "The originating request id."
+    },
+    {
+      "name": "eventType",
+      "type": "string",
+      "default": "PAYMENT_STATUS_CHANGED",
+      "doc": "M19: which business event planned this delivery - 'PAYMENT_STATUS_CHANGED', 'REFUND_COMPLETED', or 'REFUND_FAILED'. Defaults to 'PAYMENT_STATUS_CHANGED' so this remains BACKWARD compatible with every record already on the topic, all of which predate this field and were all payment-status deliveries by construction."
+    },
+    {
+      "name": "refundId",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "M19: the refund this delivery is about (UUID string form), or null for a payment status-change delivery."
     }
   ]
 }

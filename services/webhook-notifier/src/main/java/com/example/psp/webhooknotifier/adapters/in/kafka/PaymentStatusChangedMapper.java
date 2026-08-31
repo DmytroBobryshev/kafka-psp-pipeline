@@ -26,5 +26,9 @@ public interface PaymentStatusChangedMapper {
             expression = "java(java.util.UUID.fromString(event.getEnvelope().getEventId()))")
     @Mapping(target = "traceId", source = "event.envelope.traceId")
     @Mapping(target = "correlationId", source = "event.envelope.correlationId")
+    // M19: distinguishes this planner source from the two refund ones - see
+    // adapters.in.kafka.RefundCompletedMapper/RefundFailedMapper.
+    @Mapping(target = "eventType", constant = "PAYMENT_STATUS_CHANGED")
+    @Mapping(target = "refundId", ignore = true)
     WebhookDeliveryCommand toCommand(PaymentStatusChanged event);
 }

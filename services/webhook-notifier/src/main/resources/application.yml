@@ -65,6 +65,11 @@ management:
 webhook-notifier:
   kafka:
     payment-status-changed-topic: payments.payment-status-changed.v1
+    # M19: two more planner sources, consumed under the SAME webhook-notifier.planner.v1 group as
+    # the payment-status-changed listener above (config.KafkaConsumerConfig) - see
+    # adapters.in.kafka.RefundCompletedListener/RefundFailedListener.
+    refund-completed-topic: refunds.refund-completed.v1
+    refund-failed-topic: refunds.refund-failed.v1
     # M9 Phase 2: the delivery chain moved to a NEW v2 topic set (Avro, base + 3 retry tiers +
     # dlq) rather than cutting v1 in place - see the README's M9 Phase 2 section for why. The old
     # v1 chain (including v1.dlq, holding M8's poisoned-record evidence) is retired: still

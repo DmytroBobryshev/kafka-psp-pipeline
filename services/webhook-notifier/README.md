@@ -370,6 +370,41 @@ records, with the whole group stopped each time. One slow merchant would take do
 every other merchant on the partition. Non-blocking retry topics are what keep a 15-minute backoff
 from becoming a 15-minute outage.
 
+## Integration tests (M19 "Plus")
+
+One Testcontainers IT, `src/test/java/.../integration/RetryChainIT.java`. It runs under `verify`,
+never under `test` - surefire (`*Test.java`) and failsafe (`*IT.java`) have disjoint include
+patterns, so `mvn test` starts no containers.
+
+```bash
+mvn -pl services/webhook-notifier -am verify   # unit + ArchUnit + the IT
+mvn -pl services/webhook-notifier -am test     # unit + ArchUnit only, no containers
+```
+
+Containers: `apache/kafka:3.8.1` (KRaft) + `mongo:7`, static singletons reaped by Ryuk at JVM exit.
+Mongo is not scenery: `ExecuteWebhookDeliveryUseCase` writes a `DeliveryAttempt` document on **every**
+hop before it decides where to republish, so without it the chain would break on hop 1 for a reason
+unrelated to retries. No Schema Registry container - `webhook-notifier.schema-registry.url` points
+at `mock://webhook-notifier-it`.
+
+**What it proves.** One `webhooks.webhook-delivery-requested.v2` event whose merchant endpoint is a
+closed port (`http://127.0.0.1:1` → `ResourceAccessException` → `RETRYABLE_FAILURE`, the same
+classification a 5xx gets):
+
+- the record physically appears on **all three retry topics and then the DLQ**, one record each -
+  which is only possible because the retry is non-blocking (a republish per tier, `@RetryableTopic`
+  style, not a consumer sleeping on a backoff)
+- `x-attempt-count` reads **2 / 3 / 4** across the tiers, so the chain *advanced* rather than one
+  tier firing repeatedly
+- the DLQ record is JSON (readable without a schema), keyed by `merchantId`, carrying
+  `x-original-topic`, `x-exception-fqcn=merchant-5xx-or-timeout` and `x-failed-at`
+- `ReplayDlqUseCase.replay(...)` then republishes it to the head of the chain with
+  `x-replayed-from` = the DLQ topic and `x-replay-count=1`
+
+Tier delays are shortened to 500/700/900 ms via `webhook-notifier.retry.delay-*-ms`. Those are
+configuration, not logic - the chain's shape (three tiers, then DLQ) comes from `RetryChainConfig`
+and is untouched; waiting 16 real minutes would exercise the same code and nothing else.
+
 ## Prove it (happy path, run for real)
 
 One payment, one successful delivery, straight through the simulated endpoint:

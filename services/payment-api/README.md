@@ -73,6 +73,42 @@ curl -X POST http://localhost:8085/api/payments \
   -d '{"merchantId":"merchant-acme","amount":49.99,"currency":"EUR"}'
 ```
 
+## Integration tests (M19 "Plus")
+
+One Testcontainers IT, `src/test/java/.../integration/OutboxAtomicityIT.java`. It runs under
+`verify`, never under `test` - surefire (`*Test.java`) and failsafe (`*IT.java`) have disjoint
+include patterns, so `mvn test` starts no containers.
+
+```bash
+mvn -pl services/payment-api -am verify   # unit + ArchUnit + the IT
+mvn -pl services/payment-api -am test     # unit + ArchUnit only, no containers
+```
+
+Containers: **`postgres:15` only**. There is deliberately no Kafka container here - payment-api
+never publishes to Kafka. `OutboxPaymentEventPublisher` Avro-serializes the event and INSERTs the
+bytes into `outbox_event`; getting that row onto `payments.payment-requested.v1` is Debezium's job,
+from outside this process. A broker would sit idle and prove nothing. (An `@EmbeddedKafka` broker is
+present for one unrelated reason: M12's `ReplyingKafkaConfig` builds a reply container at startup -
+the same arrangement `PaymentApiApplicationTests` already uses.) No Schema Registry container either
+- `payment-api.schema-registry.url` points at `mock://payment-api-it`, so the standalone
+`KafkaAvroSerializer` bean and the test's deserializer share one JVM-static mock client.
+
+**What it proves.** Two tests:
+
+- `postPaymentStagesBothRowsAndAValidEnvelope` - `POST /api/payments` writes the `payments` row and
+  the `outbox_event` row with matching ids, and the `BYTEA` payload **deserializes through a real
+  `KafkaAvroDeserializer`** into a `PaymentRequested` whose fields match the row. That last part is
+  the point: the column holds Confluent wire format (magic byte + schema id + Avro binary), so a
+  non-null payload proves nothing - Debezium hands these exact bytes to the topic. It also asserts
+  ADR-0002's rule that the envelope `eventId` **is** the outbox row's primary key, which is what
+  makes the id stable across a re-snapshot and is the key psp-connector (M5 level 1) and the ledger
+  dedup on.
+- `rollingBackTheCallerTransactionLeavesNeitherRow` - the atomicity proof. The use case runs inside
+  an outer, programmatically rolled-back transaction; both rows must vanish. If the outbox insert
+  ever moved to its own transaction, its own connection, or `REQUIRES_NEW` - the realistic ways this
+  breaks - the outbox row would survive and the test would catch it. No failure-injection hook, so
+  no test-only seam in production code.
+
 ## Prove it
 
 ### 1. End-to-end

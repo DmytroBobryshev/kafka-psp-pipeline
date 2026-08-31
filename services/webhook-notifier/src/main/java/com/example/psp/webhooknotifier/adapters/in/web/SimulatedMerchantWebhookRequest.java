@@ -11,4 +11,11 @@ import java.math.BigDecimal;
  * one service.
  */
 public record SimulatedMerchantWebhookRequest(
-        String paymentId, String merchantId, BigDecimal amount, String currency, String status, String declineReason) {}
+        String paymentId,
+        String merchantId,
+        BigDecimal amount,
+        String currency,
+        String status,
+        String declineReason,
+        String eventType,
+        String refundId) {}

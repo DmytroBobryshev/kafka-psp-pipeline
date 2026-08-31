@@ -23,5 +23,10 @@ public interface WebhookDeliveryRequestedMapper {
     @Mapping(
             target = "causationEventId",
             expression = "java(java.util.UUID.fromString(event.getCausationEventId()))")
+    // M19: refundId is nullable on the wire (Avro ["null","string"]) - only wrap it when present.
+    @Mapping(
+            target = "refundId",
+            expression =
+                    "java(event.getRefundId() == null ? null : java.util.UUID.fromString(event.getRefundId()))")
     WebhookDeliveryCommand toCommand(WebhookDeliveryRequested event);
 }

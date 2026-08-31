@@ -259,6 +259,38 @@ ledger.entries.deduplicated{path=constraint-race}
 ledger.entries.ignored
 ```
 
+## Integration tests (M19 "Plus")
+
+One Testcontainers IT, `src/test/java/.../integration/LedgerEosIT.java`. It runs under `verify`,
+never under `test` - surefire (`*Test.java`) and failsafe (`*IT.java`) have disjoint include
+patterns, so `mvn test` starts no containers.
+
+```bash
+mvn -pl services/ledger -am verify     # unit + ArchUnit + the IT
+mvn -pl services/ledger -am test       # unit + ArchUnit only, no containers
+```
+
+Containers: `apache/kafka:3.8.1` (KRaft) + `postgres:15`, static singletons reaped by Ryuk at JVM
+exit. A real broker is not negotiable here - `config.KafkaProducerConfig`'s transactional producer
+needs a real transaction coordinator, and the assertion side needs a real `read_committed`
+consumer, which is where an LSO actually comes from. `org.testcontainers.kafka.KafkaContainer`
+already sets `transaction.state.log.replication.factor=1` and `.min.isr=1`, without which a
+transactional producer refuses to start on a single broker. No Schema Registry container -
+`ledger.schema-registry.url` points at `mock://ledger-it`.
+
+**What it proves.** 8 distinct `payments.payment-status-changed.v1` SUCCEEDED events, 3 of them
+delivered a second time under the *same* envelope `eventId` - exactly the shape psp-connector's
+drill-9 republish puts on this topic. Then:
+
+- exactly **8** `ledger.ledger-entry-recorded.v1` records read under `isolation.level=read_committed`
+- exactly **8** rows in `ledger_entries`, 8 distinct `inbound_event_id`
+- `merchant_balances.balance` = 8 x 25.00, `entry_count` = 8
+
+This is the README's "Where Kafka EOS ends" claim turned into an assertion, with each mechanism
+checked from the side it actually governs: the Kafka transaction is what the `read_committed` count
+measures, and `uq_ledger_entries_inbound_event_id` is what makes the three redeliveries move no
+money. Drop the constraint and the transaction keeps working while the balance quietly doubles.
+
 ## Prove it
 
 ### 1. End-to-end

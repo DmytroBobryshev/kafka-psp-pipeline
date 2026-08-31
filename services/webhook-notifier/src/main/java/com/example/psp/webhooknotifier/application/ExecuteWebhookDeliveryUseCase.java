@@ -84,6 +84,9 @@ public class ExecuteWebhookDeliveryUseCase {
                 new DeliveryAttempt(
                         command.merchantId(),
                         command.paymentId(),
+                        command.refundId(),
+                        command.eventType(),
+                        command.causationEventId(),
                         envelope.attemptCount(),
                         result.outcome(),
                         result.statusCode(),

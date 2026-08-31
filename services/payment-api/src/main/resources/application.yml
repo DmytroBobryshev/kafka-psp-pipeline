@@ -153,6 +153,14 @@ payment-api:
     # worthless after the caller's timeout).
     provider-status-query-topic: psp.provider-status-query.v1
     provider-status-reply-topic: psp.provider-status-reply.v1
+    # M19: the transactions panel's status-view listener (adapters.in.kafka.PaymentStatusChangedListener,
+    # config.PaymentStatusViewKafkaConfig) - the same event ledger/webhook-notifier already
+    # consume, kept as a third independent local projection (ADR-0005). A fixed, shared group id
+    # (unlike M12's per-instance replies group above) - this is an ordinary work-sharing consumer,
+    # not a "every instance must see every record" one, so normal partition-splitting semantics
+    # are exactly what's wanted.
+    payment-status-changed-topic: payments.payment-status-changed.v1
+    payment-status-view-group-id: payment-api.status-view.v1
   # schema-registry.url is environment-specific (M9 Phase 1) - see application-docker-compose.yml.
   # Read by config.SchemaRegistryConfig to build the KafkaAvroSerializer that Avro-encodes
   # payments.payment-requested.v1's outbox payload; payment-api runs no other Schema Registry

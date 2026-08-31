@@ -148,6 +148,13 @@ topic_acl payment-api literal  "psp.provider-status-reply.v1"          Read Desc
 # group.id is minted per instance (payment-api.replies.<host>.<suffix>, M12) - a literal ACL
 # would break on every restart, which is precisely what prefixed resource patterns are for.
 group_acl payment-api prefixed "payment-api.replies."                  Read Describe
+# M19: the transactions panel's status-view listener (adapters.in.kafka.PaymentStatusChangedListener) -
+# the same event ledger and webhook-notifier already read, consumed here too as a third
+# independent local projection (ADR-0005), not a new source of truth.
+topic_acl payment-api literal  "payments.payment-status-changed.v1"    Read Describe
+# Fixed group id (payment-api.status-view.v1) - an ordinary work-sharing consumer, unlike the
+# per-instance replies group above. Prefixed anyway, matching this principal's usual convention.
+group_acl payment-api prefixed "payment-api.status-view."              Read Describe
 
 # --- psp-connector (:8086) -------------------------------------------------------------------
 # M17: also Write - adapters.out.kafka.KafkaDlqRepublisher republishes DLQ records back onto this

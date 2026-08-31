@@ -31,6 +31,8 @@ public class WebhookDeliveryAvroEventFactory {
                 .setCausationEventId(command.causationEventId().toString())
                 .setTraceId(command.traceId())
                 .setCorrelationId(command.correlationId())
+                .setEventType(command.eventType())
+                .setRefundId(command.refundId() == null ? null : command.refundId().toString())
                 .build();
     }
 }

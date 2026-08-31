@@ -75,6 +75,39 @@ psp-connector.provider.decline-rate / timeout-rate
 psp-connector.provider.forced-latency-ms / forced-outcome   # NONE | APPROVED | DECLINED | TIMEOUT
 ```
 
+## Integration tests (M19 "Plus")
+
+Two Testcontainers ITs, in `src/test/java/.../integration/`. They run under `verify`, never under
+`test` - surefire's include patterns (`*Test.java`) and failsafe's (`*IT.java`) are disjoint, so
+`mvn test` stays Docker-free.
+
+```bash
+mvn -pl services/psp-connector -am verify          # unit + ArchUnit + both ITs
+mvn -pl services/psp-connector -am test            # unit + ArchUnit only, no containers
+mvn -pl services/psp-connector -am verify -Dit.test=RebalanceLossIT   # one IT
+```
+
+Containers: `apache/kafka:3.8.1` (KRaft) + `postgres:15`, both static singletons shared by the two
+IT classes and reaped by Ryuk at JVM exit. **No Schema Registry container** - the ITs point
+`psp-connector.schema-registry.url` at `mock://psp-connector-it`, which makes Confluent's
+serializers resolve a JVM-static `MockSchemaRegistryClient` shared by the application and the test
+(same JVM, it is an `@SpringBootTest`). Each IT owns its topics and `group.id`, so they share the
+broker and the database without interfering.
+
+| IT | What it proves |
+|---|---|
+| `RebalanceLossIT` | 30 payments in flight, the listener container stopped and restarted **twice** mid-stream (a real LeaveGroup/JoinGroup rebalance). **No loss:** all 30 get a status event. **Bounded duplicates:** grouped by paymentId, every group has exactly ONE distinct envelope `eventId` - so a duplicate is recognisable as the same event, which is what `KafkaPaymentStatusPublisher`'s reuse of the stored `status_event_id` buys. 5 records are then re-sent verbatim so the republish path is exercised rather than hoped for. |
+| `CrashRedeliveryIT` | The M19 drill-9 window, opened deliberately: a `@Primary` test-scope publisher decorator fails every publish, so the `payment_attempts` row commits with no event and no committed offset. Asserts the topic is empty at that point, then heals the publisher, bounces the listener, and asserts **exactly one** event arrives whose envelope `eventId` equals the row's `status_event_id`. Pre-fix this was 0 - a permanent, silent loss. |
+
+Both are deterministic because `psp-connector.provider.forced-outcome=APPROVED` removes the
+simulator's decline/timeout dice; a TIMEOUT is ADR-0006 category A and publishes nothing, so
+"one status event per payment" is only a correct expectation once that die is off.
+
+Honest limitation, stated in `CrashRedeliveryIT`'s javadoc too: the recovery step recycles the Kafka
+consumer, not the process. The *state* (committed row, uncommitted offset, absent event) and the
+code path (M5 level 1 -> republish) are what a real pod restart would produce; the process
+lifecycle is not.
+
 ## Prove it
 
 ### 1. End-to-end

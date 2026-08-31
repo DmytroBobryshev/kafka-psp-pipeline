@@ -12,4 +12,13 @@ import java.math.BigDecimal;
  * expects.
  */
 public record WebhookCallbackRequest(
-        String paymentId, String merchantId, BigDecimal amount, String currency, String status, String declineReason) {}
+        String paymentId,
+        String merchantId,
+        BigDecimal amount,
+        String currency,
+        String status,
+        String declineReason,
+        // M19: lets a real merchant tell a refund notification apart from a payment one instead
+        // of inferring it from status's overlapping vocabulary.
+        String eventType,
+        String refundId) {}

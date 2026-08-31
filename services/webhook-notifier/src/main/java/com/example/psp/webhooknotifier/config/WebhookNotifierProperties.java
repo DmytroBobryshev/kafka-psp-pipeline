@@ -13,6 +13,8 @@ public record WebhookNotifierProperties(
 
     /**
      * @param paymentStatusChangedTopic inbound topic for the planner.
+     * @param refundCompletedTopic      M19: second inbound planner topic, {@code refunds.refund-completed.v1}.
+     * @param refundFailedTopic         M19: third inbound planner topic, {@code refunds.refund-failed.v1}.
      * @param deliveryRequestedTopic    base topic of the delivery/retry chain.
      * @param retry5sTopic              tier 1.
      * @param retry1mTopic              tier 2.
@@ -35,6 +37,8 @@ public record WebhookNotifierProperties(
      */
     public record Kafka(
             String paymentStatusChangedTopic,
+            String refundCompletedTopic,
+            String refundFailedTopic,
             String deliveryRequestedTopic,
             String retry5sTopic,
             String retry1mTopic,

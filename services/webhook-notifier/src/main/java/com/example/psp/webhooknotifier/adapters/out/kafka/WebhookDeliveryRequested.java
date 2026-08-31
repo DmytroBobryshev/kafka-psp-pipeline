@@ -32,4 +32,6 @@ public record WebhookDeliveryRequested(
         String declineReason,
         UUID causationEventId,
         String traceId,
-        String correlationId) {}
+        String correlationId,
+        String eventType,
+        UUID refundId) {}

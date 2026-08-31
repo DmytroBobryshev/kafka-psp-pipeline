@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
+import { useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { usePaymentHistory } from "../hooks/usePaymentHistory";
 import { getRefundState, requestRefund } from "../api/refundApi";
 import { ApiError } from "../api/client";
 import { useEventStream } from "../hooks/useEventStream";
@@ -33,7 +35,9 @@ const KIND_STYLES: Record<string, string> = {
 };
 
 export function RefundTrackerPage() {
-  const [paymentId, setPaymentId] = useState("");
+  const search = useSearch({ strict: false }) as { paymentId?: string };
+  const { history } = usePaymentHistory();
+  const [paymentId, setPaymentId] = useState(search.paymentId ?? "");
   const [amount, setAmount] = useState("10.00");
   const [currency, setCurrency] = useState("EUR");
   const [reason, setReason] = useState("");
@@ -75,9 +79,26 @@ export function RefundTrackerPage() {
       <section className="rounded-lg border border-slate-200 bg-white p-6">
         <h2 className="mb-4 text-base font-semibold">Request a refund</h2>
         <p className="mb-4 text-xs text-slate-500">
-          Needs an APPROVED payment id - create one on the Timeline page first, then paste its id
-          here.
+          Needs an APPROVED payment. Pick one below, use "refund →" on the Timeline page, or
+          paste an id.
         </p>
+        {history.length > 0 && (
+          <label className="mb-3 block">
+            <span className="mb-1 block text-sm font-medium text-slate-700">Recent payments</span>
+            <select
+              value={history.some((h) => h.id === paymentId) ? paymentId : ""}
+              onChange={(e) => e.target.value && setPaymentId(e.target.value)}
+              className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-xs"
+            >
+              <option value="">— pick a recent payment —</option>
+              {history.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {h.id.slice(0, 8)}… · {h.merchantId} · {h.amount} {h.currency}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="mb-3 block">
           <span className="mb-1 block text-sm font-medium text-slate-700">Payment ID</span>
           <input

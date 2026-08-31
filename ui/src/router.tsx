@@ -7,6 +7,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { TimelinePage } from "./pages/TimelinePage";
+import { PaymentsPage } from "./pages/PaymentsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DlqConsolePage } from "./pages/DlqConsolePage";
 import { MerchantConfigPage } from "./pages/MerchantConfigPage";
@@ -21,6 +22,7 @@ import { RefundTrackerPage } from "./pages/RefundTrackerPage";
  */
 const NAV = [
   { to: "/", label: "Timeline", exact: true },
+  { to: "/payments", label: "Payments" },
   { to: "/dashboard", label: "Dashboard" },
   { to: "/merchants", label: "Merchant config" },
   { to: "/refunds", label: "Refunds" },
@@ -41,12 +43,15 @@ function Shell() {
           </div>
           <nav className="flex flex-wrap gap-1">
             {NAV.map((item) => (
+              // One className, styled off the data-status attribute the router sets - never two
+              // class lists merged (activeProps.className CONCATENATES with className, which let
+              // hover:bg-slate-100 win over the active bg while the text stayed white: white on
+              // white).
               <Link
                 key={item.to}
                 to={item.to}
                 activeOptions={{ exact: "exact" in item && item.exact }}
-                className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
-                activeProps={{ className: "rounded-md px-3 py-1.5 text-sm font-medium bg-slate-900 text-white" }}
+                className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-200 hover:text-slate-900 data-[status=active]:bg-slate-900 data-[status=active]:text-white data-[status=active]:hover:bg-slate-700 data-[status=active]:hover:text-white"
               >
                 {item.label}
               </Link>
@@ -63,9 +68,18 @@ const rootRoute = createRootRoute({ component: Shell });
 
 const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/", component: TimelinePage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/payments", component: PaymentsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/dashboard", component: DashboardPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/merchants", component: MerchantConfigPage }),
-  createRoute({ getParentRoute: () => rootRoute, path: "/refunds", component: RefundTrackerPage }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/refunds",
+    component: RefundTrackerPage,
+    // Deep-linkable: the timeline's "refund →" action (and anything else) prefills the payment.
+    validateSearch: (search: Record<string, unknown>) => ({
+      paymentId: typeof search.paymentId === "string" ? search.paymentId : undefined,
+    }),
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: "/dlq", component: DlqConsolePage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/cluster", component: ClusterOpsPage }),
 ];

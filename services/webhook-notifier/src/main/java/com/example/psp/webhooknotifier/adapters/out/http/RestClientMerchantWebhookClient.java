@@ -53,7 +53,9 @@ public class RestClientMerchantWebhookClient implements MerchantWebhookClient {
                         command.amount(),
                         command.currency(),
                         command.status(),
-                        command.declineReason());
+                        command.declineReason(),
+                        command.eventType(),
+                        command.refundId() == null ? null : command.refundId().toString());
 
         try {
             var response =

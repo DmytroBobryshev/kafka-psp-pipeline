@@ -36,6 +36,14 @@ public class DeliveryAttemptDocument {
     @Id private String id;
     private String merchantId;
     private String paymentId;
+    // M19: nullable - null for a payment status-change delivery, set for a refund one.
+    private String refundId;
+    // M19: "PAYMENT_STATUS_CHANGED" / "REFUND_COMPLETED" / "REFUND_FAILED" - see
+    // domain.model.WebhookDeliveryCommand#eventType().
+    private String eventType;
+    // M19: the grouping key adapters.out.persistence.MongoDeliveryAttemptLogRepository#search
+    // aggregates on - identical across every retry-tier attempt of one logical delivery.
+    private String causationEventId;
     private int attemptNumber;
     private String outcome;
     private Integer statusCode;
