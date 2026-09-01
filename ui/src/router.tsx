@@ -22,29 +22,13 @@ import { RefundTrackerPage } from "./pages/RefundTrackerPage";
  * so per-page components own only their content, keeping page 1 byte-identical in behaviour
  * to the pre-router slice.
  */
-const NAV_GROUPS = [
-  {
-    label: "Operations",
-    items: [
-      { to: "/payments", label: "Transactions" },
-      { to: "/dashboard", label: "Dashboard" },
-    ],
-  },
-  {
-    label: "Simulation",
-    items: [{ to: "/", label: "Simulator", exact: true }],
-  },
-  {
-    label: "Configuration",
-    items: [{ to: "/merchants", label: "Merchants" }],
-  },
-  {
-    label: "Infrastructure",
-    items: [
-      { to: "/dlq", label: "DLQ" },
-      { to: "/cluster", label: "Cluster" },
-    ],
-  },
+const NAV_ITEMS = [
+  { to: "/payments", label: "Transactions" },
+  { to: "/dashboard", label: "Dashboard" },
+  { to: "/", label: "Simulator", exact: true },
+  { to: "/merchants", label: "Merchants" },
+  { to: "/dlq", label: "DLQ" },
+  { to: "/cluster", label: "Cluster" },
 ] as const;
 
 function RefreshButton() {
@@ -54,7 +38,7 @@ function RefreshButton() {
   return (
     <button
       onClick={() => queryClient.invalidateQueries()}
-      className="rounded-md border border-slate-400 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-200"
+      className="rounded-md border border-slate-600 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 hover:text-white"
     >
       {fetching ? "Refreshing…" : "↻ Refresh"}
     </button>
@@ -64,32 +48,29 @@ function RefreshButton() {
 function Shell() {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
-      <header className="border-b border-slate-300 bg-white">
-        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center justify-between gap-3 px-6 py-4">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Kafka PSP Pipeline</h1>
-            <p className="mt-0.5 text-sm text-slate-600">
-              Six windows into one event pipeline - every page is a Kafka concept, live.
-            </p>
+      <header className="bg-slate-900 text-white shadow-md">
+        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center justify-between gap-x-6 gap-y-2 px-6 py-3">
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500 text-base font-bold">
+              K
+            </span>
+            <div>
+              <h1 className="text-base font-semibold leading-tight tracking-tight">Kafka PSP Pipeline</h1>
+              <p className="text-xs text-slate-400">Six windows into one event pipeline — live.</p>
+            </div>
           </div>
-          <nav className="flex flex-wrap items-center gap-3">
-            {NAV_GROUPS.map((group) => (
-              <div key={group.label} className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-100 p-1">
-                <span className="px-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                  {group.label}
-                </span>
-                {group.items.map((item) => (
+          <nav className="flex flex-wrap items-center gap-1">
+            {NAV_ITEMS.map((item) => (
               <Link
                 key={item.to}
                 to={item.to}
                 activeOptions={{ exact: "exact" in item && item.exact }}
-                className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200 hover:text-slate-900 data-[status=active]:bg-slate-900 data-[status=active]:text-white data-[status=active]:hover:bg-slate-700 data-[status=active]:hover:text-white"
+                className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800 hover:text-white data-[status=active]:bg-white data-[status=active]:text-slate-900 data-[status=active]:hover:bg-white data-[status=active]:hover:text-slate-900"
               >
-                    {item.label}
-                  </Link>
-                ))}
-              </div>
+                {item.label}
+              </Link>
             ))}
+            <span className="mx-2 h-5 w-px bg-slate-700" />
             <RefreshButton />
           </nav>
         </div>

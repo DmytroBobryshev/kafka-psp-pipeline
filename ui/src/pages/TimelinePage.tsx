@@ -4,7 +4,6 @@ import { EventTimeline } from "../components/EventTimeline";
 import { ConnectionStatus } from "../components/ConnectionStatus";
 import { useEventStream } from "../hooks/useEventStream";
 import { recordPayment, usePaymentHistory } from "../hooks/usePaymentHistory";
-import { useCopy } from "../lib/clipboard";
 import { createPayment } from "../api/paymentApi";
 import { requestRefund } from "../api/refundApi";
 import { listMerchants } from "../api/merchantsApi";
@@ -30,7 +29,6 @@ export function TimelinePage() {
   const [payment, setPayment] = useState<PaymentResponse | null>(null);
   const { events, state, reconnect } = useEventStream(payment?.id ?? null);
   const { history } = usePaymentHistory();
-  const { copy, copiedKey } = useCopy();
 
   // Only ACTIVE merchants may transact; the picker enforces it client-side, payment-api
   // enforces it for real.
@@ -361,53 +359,6 @@ export function TimelinePage() {
           </p>
         </section>
 
-        <section className="rounded-lg border border-slate-300 bg-white p-4">
-          <h3 className="mb-2 text-sm font-semibold text-slate-700">Recent payments (this browser)</h3>
-          {history.length === 0 && (
-            <p className="text-xs text-slate-500">Payments you create appear here with quick actions.</p>
-          )}
-          <ul className="max-h-64 space-y-1.5 overflow-auto">
-            {history.map((h) => (
-              <li key={h.id} className="rounded border border-slate-200 px-2.5 py-1.5 text-xs">
-                <div className="flex items-center justify-between gap-2">
-                  <button
-                    className="truncate font-mono text-slate-700 hover:text-slate-900"
-                    title="Copy payment id"
-                    onClick={() => copy(h.id)}
-                  >
-                    {copiedKey === h.id ? "copied ✓" : `${h.id.slice(0, 8)}… ⧉`}
-                  </button>
-                  <span className="whitespace-nowrap text-slate-600">
-                    {h.amount} {h.currency}
-                  </span>
-                </div>
-                <div className="mt-0.5 flex items-center justify-between gap-2">
-                  <span className="truncate text-slate-500">{h.merchantId}</span>
-                  <span className="flex gap-2 whitespace-nowrap">
-                    <button
-                      className="rounded-md border border-slate-400 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 shadow-sm hover:bg-slate-200"
-                      onClick={() =>
-                        setPayment({ ...h, status: "", createdAt: h.createdAt } as PaymentResponse)
-                      }
-                    >
-                      track
-                    </button>
-                    <button
-                      className="rounded-md border border-slate-400 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 shadow-sm hover:bg-slate-200"
-                      onClick={() => {
-                        setMode("refund");
-                        setRefundPaymentId(h.id);
-                        setRefundAmount(String(h.amount));
-                      }}
-                    >
-                      refund
-                    </button>
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
       </div>
 
       <section>
