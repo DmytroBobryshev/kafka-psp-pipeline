@@ -15,6 +15,9 @@ public record WebhookNotifierProperties(
      * @param paymentStatusChangedTopic inbound topic for the planner.
      * @param refundCompletedTopic      M19: second inbound planner topic, {@code refunds.refund-completed.v1}.
      * @param refundFailedTopic         M19: third inbound planner topic, {@code refunds.refund-failed.v1}.
+     * @param refundStatusChangedTopic  M24: fourth inbound planner topic, {@code refunds.refund-status-changed.v1} -
+     *                          {@code adapters.in.kafka.RefundExpiredListener} plans a delivery
+     *                          only for its {@code EXPIRED} records (see that class's javadoc).
      * @param deliveryRequestedTopic    base topic of the delivery/retry chain.
      * @param retry5sTopic              tier 1.
      * @param retry1mTopic              tier 2.
@@ -45,6 +48,7 @@ public record WebhookNotifierProperties(
             String paymentStatusChangedTopic,
             String refundCompletedTopic,
             String refundFailedTopic,
+            String refundStatusChangedTopic,
             String deliveryRequestedTopic,
             String retry5sTopic,
             String retry1mTopic,

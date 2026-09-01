@@ -50,6 +50,7 @@ public class MerchantConfigAvroEventFactory {
                 .setWebhookUrl(config.webhookUrl())
                 .setDeclineRateAlertThresholdBps(config.declineRateAlertThresholdBps())
                 .setPaymentExpirationSeconds(config.paymentExpirationSeconds())
+                .setRefundExpirationSeconds(config.refundExpirationSeconds())
                 .build();
     }
 }

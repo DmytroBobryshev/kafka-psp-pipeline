@@ -52,5 +52,10 @@ public record UpsertMerchantConfigRequest(
         // usual 400 problem+json (common-web's GlobalExceptionHandler).
         @Min(value = 30, message = "paymentExpirationSeconds must be at least 30")
                 @Max(value = 86_400, message = "paymentExpirationSeconds must not exceed 86400 (24h)")
-                Integer paymentExpirationSeconds) {
+                Integer paymentExpirationSeconds,
+        // M24: the refund-path mirror of paymentExpirationSeconds - same null -> 900 resolution,
+        // same bounds.
+        @Min(value = 30, message = "refundExpirationSeconds must be at least 30")
+                @Max(value = 86_400, message = "refundExpirationSeconds must not exceed 86400 (24h)")
+                Integer refundExpirationSeconds) {
 }

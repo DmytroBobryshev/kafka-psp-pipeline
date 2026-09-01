@@ -3,6 +3,7 @@ package com.example.psp.paymentapi.adapters.out.persistence;
 import com.example.psp.paymentapi.domain.model.Refund;
 import com.example.psp.paymentapi.domain.port.RefundRepository;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -42,5 +43,10 @@ public class PostgresRefundRepository implements RefundRepository {
     @Override
     public Optional<Refund> findByIdAndPaymentId(UUID id, UUID paymentId) {
         return jpaRepository.findByIdAndPaymentId(id, paymentId).map(mapper::toDomain);
+    }
+
+    @Override
+    public List<Refund> findExpirationCandidates(Instant now) {
+        return jpaRepository.findExpirationCandidates(now).stream().map(mapper::toDomain).toList();
     }
 }

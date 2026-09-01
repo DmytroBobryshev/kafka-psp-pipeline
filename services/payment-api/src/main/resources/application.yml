@@ -183,6 +183,12 @@ payment-api:
   # application.ExpirePaymentsUseCase). Reuses payment-api.kafka.payment-status-changed-topic
   # above as its PRODUCE target too - config.PaymentExpirationKafkaConfig - this service was only
   # ever a consumer of that topic before M22.
+  #
+  # M24: adapters.in.scheduler.RefundExpirationScheduler / application.ExpireRefundsUseCase share
+  # this SAME sweep-interval - two independent sweeps (payments, refunds), one cadence property.
+  # The refund sweep's PRODUCE target is payment-api.kafka.refund-status-changed-topic above
+  # (config.RefundExpirationKafkaConfig) - this service was only ever a consumer of THAT topic
+  # before M24.
   expiration:
     # How often the sweep runs. Short by production standards, deliberate - see
     # adapters.in.scheduler.PaymentExpirationScheduler's javadoc.

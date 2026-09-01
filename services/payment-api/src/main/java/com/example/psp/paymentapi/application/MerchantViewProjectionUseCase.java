@@ -40,6 +40,7 @@ public class MerchantViewProjectionUseCase {
                         command.webhookUrl(),
                         command.declineRateAlertThresholdBps(),
                         command.paymentExpirationSeconds(),
+                        command.refundExpirationSeconds(),
                         command.updatedAt()));
     }
 

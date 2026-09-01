@@ -38,7 +38,8 @@ import java.util.UUID;
  * @param status        the source event's own outcome vocabulary, echoed unchanged: {@code
  *                      "SUCCEEDED"}/{@code "DECLINED"} for {@link #eventType}
  *                      {@code "PAYMENT_STATUS_CHANGED"}, {@code "COMPLETED"} for
- *                      {@code "REFUND_COMPLETED"}, {@code "FAILED"} for {@code "REFUND_FAILED"}.
+ *                      {@code "REFUND_COMPLETED"}, {@code "FAILED"} for {@code "REFUND_FAILED"},
+ *                      {@code "EXPIRED"} for (M24) {@code "REFUND_EXPIRED"}.
  * @param declineReason populated when {@code status} names a failure - the payment decline reason
  *                      for a {@code DECLINED} payment, or the refund failure reason
  *                      ({@code "INSUFFICIENT_BALANCE"}/{@code "PROVIDER_DECLINED"}, see
@@ -55,8 +56,12 @@ import java.util.UUID;
  * @param traceId       W3C trace-id, propagated end to end (ADR-0002).
  * @param correlationId the originating request id.
  * @param eventType     which business event planned this delivery: {@code "PAYMENT_STATUS_CHANGED"},
- *                      {@code "REFUND_COMPLETED"}, or {@code "REFUND_FAILED"} (M19). Lets the
- *                      attempt log and the deliveries-visibility API
+ *                      {@code "REFUND_COMPLETED"}, {@code "REFUND_FAILED"} (M19), or (M24)
+ *                      {@code "REFUND_EXPIRED"} - planned only for the EXPIRED case of
+ *                      {@code refunds.refund-status-changed.v1} (PENDING/IPN_RECEIVED/VERIFIED are
+ *                      not merchant-facing notifications and are ignored by
+ *                      {@code adapters.in.kafka.RefundExpiredListener}). Lets the attempt log and
+ *                      the deliveries-visibility API
  *                      ({@code adapters.in.web.WebhookDeliveryQueryController}) tell a refund
  *                      notification apart from a payment one without inferring it from
  *                      {@link #status}'s overlapping vocabulary.

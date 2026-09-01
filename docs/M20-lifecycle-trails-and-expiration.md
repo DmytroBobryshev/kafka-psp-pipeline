@@ -99,6 +99,35 @@ EXPIRED  01:43:35.158  payment-api      (sweep; 30s window + ≤5s sweep delay)
 PUT with paymentExpirationSeconds=10 → 400 (min 30)
 ```
 
+## 3b. Refund expiration
+
+`refundExpirationSeconds` (30..86400, default 900) joined the merchant config (avro 06, V13).
+The same 5 s sweep expires refunds with **no terminal history row** past the window
+(`NOT EXISTS … status IN ('COMPLETED','FAILED','EXPIRED')`), publishing `EXPIRED` on
+`refunds.refund-status-changed.v1` with deterministic eventId
+(`"refund-expired:" + refundId`); webhook-notifier notifies the merchant with
+`eventType=REFUND_EXPIRED`. The refund aggregate stays `REQUESTED` (history-only, as designed);
+the ledger's own PT2M reservation TTL independently frees the money — expiration is the
+merchant-facing verdict on top.
+
+The drill needed the executor to actually stay dead: `kubectl scale deploy/psp-connector
+--replicas=0` alone is NOT enough — the terminating pod drains its in-flight batch, and KEDA
+resurrects the deployment ~20 s later once consumer lag appears. The honest kill is
+`kubectl annotate scaledobject psp-connector autoscaling.keda.sh/paused-replicas="0"` (drop the
+annotation to resume).
+
+Evidence (live, 30 s window, refund `ff19c321`, KEDA paused → resumed):
+
+```
+REQUESTED       17:09:01.705  payment-api
+FUNDS_RESERVED  17:09:02.494  ledger
+EXPIRED         17:09:35.829  payment-api      ← sweep verdict, REFUND_EXPIRED webhook SUCCESS
+PENDING         17:09:57.886  psp-connector    ← KEDA resumed, queued work executed late
+IPN_RECEIVED    17:09:59.246  psp-connector · provider ref df65b69c…
+VERIFIED        17:09:59.319  psp-connector
+COMPLETED       17:09:59.356  psp-connector    ← provider outcome authoritative, after EXPIRED
+```
+
 ## 4. Analytics: count a payment once
 
 `AnalyticsTopology` fed **every** status event into the windowed metrics and the latency join —

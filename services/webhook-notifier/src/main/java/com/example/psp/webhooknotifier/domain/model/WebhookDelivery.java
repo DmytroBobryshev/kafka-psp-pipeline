@@ -13,8 +13,9 @@ import java.util.UUID;
  *
  * @param id            the grouping key - {@code causationEventId} of the event that caused this
  *                       delivery, stable across every retry-tier attempt of the same notification.
- * @param eventType      {@code "PAYMENT_STATUS_CHANGED"}, {@code "REFUND_COMPLETED"}, or
- *                       {@code "REFUND_FAILED"} - see {@link WebhookDeliveryCommand#eventType()}.
+ * @param eventType      {@code "PAYMENT_STATUS_CHANGED"}, {@code "REFUND_COMPLETED"},
+ *                       {@code "REFUND_FAILED"}, or (M24) {@code "REFUND_EXPIRED"} - see
+ *                       {@link WebhookDeliveryCommand#eventType()}.
  * @param paymentId      the payment this delivery is about.
  * @param refundId       the refund this delivery is about, or {@code null} for a payment
  *                       status-change notification.

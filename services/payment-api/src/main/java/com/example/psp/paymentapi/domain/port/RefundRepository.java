@@ -2,6 +2,7 @@ package com.example.psp.paymentapi.domain.port;
 
 import com.example.psp.paymentapi.domain.model.Refund;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -34,4 +35,22 @@ public interface RefundRepository {
      * #refundHistory}), and neither should be distinguishable by response shape.
      */
     Optional<Refund> findByIdAndPaymentId(UUID id, UUID paymentId);
+
+    /**
+     * M24: {@code adapters.in.scheduler.RefundExpirationScheduler}'s candidate query - the
+     * refund-path mirror of {@code PaymentRepository#findExpirationCandidates}. A refund is a
+     * candidate when it was created before {@code now} minus its merchant's configured
+     * {@code refundExpirationSeconds} window AND no terminal {@code refund_status_history} row
+     * (COMPLETED/FAILED/EXPIRED) has been recorded for it yet - see
+     * {@code adapters.out.persistence.RefundJpaRepository}'s native query for the exact SQL.
+     *
+     * <p>Unlike the payment version, this never conditionally writes {@code refunds.*} itself
+     * (there is nothing to write - {@link Refund}'s own status is always {@code REQUESTED}, never
+     * advances). The only effect of a candidate found here is
+     * {@code application.ExpireRefundsUseCase} publishing an {@code EXPIRED}
+     * {@code refunds.refund-status-changed.v1} record, consumed back into
+     * {@code refund_status_history} by this service's own existing
+     * {@code adapters.in.kafka.RefundStatusChangedListener} - history-only, all the way through.
+     */
+    List<Refund> findExpirationCandidates(Instant now);
 }

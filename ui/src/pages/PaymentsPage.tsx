@@ -222,11 +222,13 @@ const REFUND_TRAIL_LABEL: Record<string, string> = {
   VERIFIED: "Status verified",
   COMPLETED: "Refund completed",
   FAILED: "Refund failed",
+  EXPIRED: "Refund expired",
 };
 
 const REFUND_TRAIL_TONE: Record<string, string> = {
   COMPLETED: "text-emerald-700",
   FAILED: "text-rose-700",
+  EXPIRED: "text-violet-700",
   PENDING: "text-amber-700",
   IPN_RECEIVED: "text-sky-700",
   VERIFIED: "text-sky-700",

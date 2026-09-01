@@ -12,7 +12,9 @@ const DEFAULT_EXPIRATION_SECONDS = 900;
 
 type MerchantForm = UpsertMerchantConfigRequest & {
   merchantId: string;
-  paymentExpirationSeconds: number;  // required in the form, optional on the wire
+  // required in the form, optional on the wire
+  paymentExpirationSeconds: number;
+  refundExpirationSeconds: number;
 };
 
 const EMPTY_FORM: MerchantForm = {
@@ -24,6 +26,7 @@ const EMPTY_FORM: MerchantForm = {
   webhookUrl: "",
   declineRateAlertThresholdBps: 2500,
   paymentExpirationSeconds: DEFAULT_EXPIRATION_SECONDS,
+  refundExpirationSeconds: DEFAULT_EXPIRATION_SECONDS,
 };
 
 const toForm = (m: MerchantView): MerchantForm => ({
@@ -35,6 +38,7 @@ const toForm = (m: MerchantView): MerchantForm => ({
   webhookUrl: m.webhookUrl ?? "",
   declineRateAlertThresholdBps: m.declineRateAlertThresholdBps,
   paymentExpirationSeconds: m.paymentExpirationSeconds ?? DEFAULT_EXPIRATION_SECONDS,
+  refundExpirationSeconds: m.refundExpirationSeconds ?? DEFAULT_EXPIRATION_SECONDS,
 });
 
 const toRequest = (form: MerchantForm): UpsertMerchantConfigRequest => ({
@@ -45,6 +49,7 @@ const toRequest = (form: MerchantForm): UpsertMerchantConfigRequest => ({
   webhookUrl: form.webhookUrl?.trim() ? form.webhookUrl : null,
   declineRateAlertThresholdBps: form.declineRateAlertThresholdBps,
   paymentExpirationSeconds: form.paymentExpirationSeconds,
+  refundExpirationSeconds: form.refundExpirationSeconds,
 });
 
 export function MerchantConfigPage() {
@@ -238,6 +243,7 @@ function MerchantRowGroup({
   editor: React.ReactNode;
 }) {
   const expiration = m.paymentExpirationSeconds ?? DEFAULT_EXPIRATION_SECONDS;
+  const refundExpiration = m.refundExpirationSeconds ?? DEFAULT_EXPIRATION_SECONDS;
   return (
     <>
       <tr
@@ -260,7 +266,9 @@ function MerchantRowGroup({
         <td className="px-4 py-2 text-xs">
           {(m.allowedCurrencies?.length ? m.allowedCurrencies : [m.payoutCurrency]).join(" · ")}
         </td>
-        <td className="px-4 py-2 text-xs text-slate-600">{formatExpiration(expiration)}</td>
+        <td className="px-4 py-2 text-xs text-slate-600">
+          {formatExpiration(expiration)} <span className="text-slate-400">/</span> {formatExpiration(refundExpiration)}
+        </td>
         <td className="px-4 py-2 font-mono text-[11px] text-slate-500">{m.webhookUrl ? "✓ set" : "–"}</td>
         <td className="px-4 py-2 text-xs text-slate-600">{new Date(m.updatedAt).toLocaleString()}</td>
         <td className="px-2 py-2 text-right">
@@ -402,24 +410,40 @@ function MerchantFormFields({
         </div>
 
         <div className="space-y-3">
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium text-slate-700">
-              Payment expiration (seconds){" "}
-              <span className="text-xs font-normal text-slate-500">
-                (payments still CREATED/PENDING after this become EXPIRED)
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-slate-700">
+                Payment expiration (s){" "}
+                <span className="text-xs font-normal text-slate-500">(CREATED/PENDING → EXPIRED)</span>
               </span>
-            </span>
-            <input
-              type="number"
-              min={30}
-              step={30}
-              value={form.paymentExpirationSeconds}
-              onChange={(e) =>
-                setForm({ ...form, paymentExpirationSeconds: Math.max(30, Number(e.target.value) || 0) })
-              }
-              className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
-            />
-          </label>
+              <input
+                type="number"
+                min={30}
+                step={30}
+                value={form.paymentExpirationSeconds}
+                onChange={(e) =>
+                  setForm({ ...form, paymentExpirationSeconds: Math.max(30, Number(e.target.value) || 0) })
+                }
+                className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-slate-700">
+                Refund expiration (s){" "}
+                <span className="text-xs font-normal text-slate-500">(no outcome → EXPIRED)</span>
+              </span>
+              <input
+                type="number"
+                min={30}
+                step={30}
+                value={form.refundExpirationSeconds}
+                onChange={(e) =>
+                  setForm({ ...form, refundExpirationSeconds: Math.max(30, Number(e.target.value) || 0) })
+                }
+                className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
           <label className="block">
             <span className="mb-1 block text-sm font-medium text-slate-700">
               Decline-rate alert: {(form.declineRateAlertThresholdBps / 100).toFixed(2)}%

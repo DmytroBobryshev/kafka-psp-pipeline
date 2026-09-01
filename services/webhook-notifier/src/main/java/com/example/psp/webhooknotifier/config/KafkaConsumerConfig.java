@@ -4,6 +4,7 @@ import com.example.psp.common.events.avro.MerchantConfigChanged;
 import com.example.psp.common.events.avro.PaymentStatusChanged;
 import com.example.psp.common.events.avro.RefundCompleted;
 import com.example.psp.common.events.avro.RefundFailed;
+import com.example.psp.common.events.avro.RefundStatusChanged;
 import com.example.psp.common.events.avro.WebhookDeliveryRequested;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
@@ -184,6 +185,46 @@ public class KafkaConsumerConfig {
         factory.getContainerProperties().setObservationEnabled(true);
         // No DLQ for this topic - same reasoning as the payment-status-changed planner factory
         // above (adapters.in.kafka.RefundFailedListener's javadoc).
+        factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
+        return factory;
+    }
+
+    // ============================================================================================
+    // Planner (M24): refunds.refund-status-changed.v1 -> the SAME webhook-notifier.planner.v1
+    // group as the two factories above - a FOURTH consumer identity in this one logical role.
+    // adapters.in.kafka.RefundExpiredListener is the one planner listener in this service that
+    // does NOT plan a delivery for every record it consumes - see that class's javadoc for the
+    // EXPIRED-only allowlist.
+    // ============================================================================================
+
+    @Bean
+    public ConsumerFactory<String, RefundStatusChanged> refundStatusChangedConsumerFactory(
+            KafkaProperties kafkaProperties,
+            WebhookNotifierProperties properties,
+            @Value("${webhook-notifier.schema-registry.url}") String schemaRegistryUrl) {
+        Map<String, Object> props = kafkaProperties.buildConsumerProperties(null);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, properties.kafka().plannerGroupId());
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
+        configureAvroDeserializers(
+                props, schemaRegistryUrl, properties.kafka().deserializationErrorHandlingEnabled());
+        return new DefaultKafkaConsumerFactory<>(props);
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, RefundStatusChanged>
+            refundStatusChangedKafkaListenerContainerFactory(
+                    @Qualifier("refundStatusChangedConsumerFactory")
+                            ConsumerFactory<String, RefundStatusChanged> consumerFactory,
+                    ObservationRegistry observationRegistry) {
+        ConcurrentKafkaListenerContainerFactory<String, RefundStatusChanged> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(consumerFactory);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.getContainerProperties().setObservationRegistry(observationRegistry);
+        factory.getContainerProperties().setObservationEnabled(true);
+        // No DLQ for this topic - same reasoning as the other planner factories above
+        // (adapters.in.kafka.RefundExpiredListener's javadoc).
         factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
         return factory;
     }

@@ -10,8 +10,8 @@ import java.time.Instant;
  *
  * @param id            the delivery's stable id ({@code causationEventId} of the event that
  *                      caused it), as a string.
- * @param eventType     {@code "PAYMENT_STATUS_CHANGED"}, {@code "REFUND_COMPLETED"}, or
- *                      {@code "REFUND_FAILED"}.
+ * @param eventType     {@code "PAYMENT_STATUS_CHANGED"}, {@code "REFUND_COMPLETED"},
+ *                      {@code "REFUND_FAILED"}, or (M24) {@code "REFUND_EXPIRED"}.
  * @param paymentId     the payment this delivery is about.
  * @param refundId      the refund this delivery is about, or {@code null} for a payment
  *                      status-change delivery.

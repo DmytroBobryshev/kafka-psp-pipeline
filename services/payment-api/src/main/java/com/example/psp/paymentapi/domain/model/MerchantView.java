@@ -22,6 +22,9 @@ public record MerchantView(
         // by adapters.out.persistence.PaymentJpaRepository's expiration-candidate query (via the
         // merchant_configs projection this class backs).
         int paymentExpirationSeconds,
+        // M24: mirrors MerchantConfig's field of the same name - read by GET /api/merchants and by
+        // adapters.out.persistence.RefundJpaRepository's expiration-candidate query.
+        int refundExpirationSeconds,
         Instant updatedAt) {
 
     public MerchantView {

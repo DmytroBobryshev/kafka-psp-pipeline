@@ -168,7 +168,11 @@ group_acl payment-api prefixed "payment-api.merchant-view."            Read Desc
 # M23: the refund trail's read-side projection (refund_status_history) - four independent
 # consumer identities (refund-status-view / refund-completed-view / refund-failed-view /
 # refund-funds-reserved-view), one prefix grant since every group id starts "payment-api.refund-".
-topic_acl payment-api literal  "refunds.refund-status-changed.v1"      Read Describe
+# M24: refunds.refund-status-changed.v1 also gains Write - adapters.out.kafka.
+# KafkaRefundExpirationPublisher, the refund-expiration sweep's own producer
+# (adapters.in.scheduler.RefundExpirationScheduler), publishes EXPIRED records back onto this SAME
+# topic, consumed back through the Read grant below by this service's own listener.
+topic_acl payment-api literal  "refunds.refund-status-changed.v1"      Read Write Describe
 topic_acl payment-api literal  "refunds.refund-completed.v1"           Read Describe
 topic_acl payment-api literal  "refunds.refund-failed.v1"              Read Describe
 topic_acl payment-api literal  "refunds.funds-reserved.v1"             Read Describe
@@ -233,6 +237,11 @@ txn_acl   ledger prefixed "ledger-tx-"                                Write Desc
 topic_acl webhook-notifier literal  "payments.payment-status-changed.v1" Read Describe
 topic_acl webhook-notifier literal  "refunds.refund-completed.v1"        Read Describe
 topic_acl webhook-notifier literal  "refunds.refund-failed.v1"           Read Describe
+# M24: a fourth planner source (adapters.in.kafka.RefundExpiredListener) - plans a delivery only
+# for this topic's EXPIRED records (PENDING/IPN_RECEIVED/VERIFIED are skipped, see that class's
+# javadoc). Consumed under the SAME webhook-notifier.planner.v1 group id as the two refund topics
+# above, so no extra group grant is needed beyond the "webhook-notifier." prefix below.
+topic_acl webhook-notifier literal  "refunds.refund-status-changed.v1"   Read Describe
 # Merchant webhookUrl projection (adapters.in.kafka.MerchantConfigChangedListener) - the M8 bug
 # fix: resolves the delivery target from the merchant's OWN registered webhook instead of always
 # falling back to the simulated endpoint. A second, independent consumer group over the same

@@ -1,5 +1,6 @@
-# webhook-notifier (:8088) - 11 bindings, matching init-security.sh's
-# "--- webhook-notifier ---" block.
+# webhook-notifier (:8088) - 12 bindings, matching init-security.sh's
+# "--- webhook-notifier ---" block. M24: was 11 - refunds.refund-status-changed.v1 added as a
+# fourth planner source (no new group grant - it shares the existing planner group prefix).
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -18,6 +19,13 @@ spec:
       - resource: { type: topic, name: refunds.refund-completed.v1, patternType: literal }
         operations: [Read, Describe]
       - resource: { type: topic, name: refunds.refund-failed.v1, patternType: literal }
+        operations: [Read, Describe]
+      # M24: a fourth planner source - adapters.in.kafka.RefundExpiredListener plans a delivery
+      # only for this topic's EXPIRED records (PENDING/IPN_RECEIVED/VERIFIED are skipped, see that
+      # class's javadoc). Consumed under the SAME webhook-notifier.planner.v1 group id as the two
+      # refund topics above, so it needs no extra group grant beyond the "webhook-notifier."
+      # prefix already below.
+      - resource: { type: topic, name: refunds.refund-status-changed.v1, patternType: literal }
         operations: [Read, Describe]
       # Merchant webhookUrl projection (adapters.in.kafka.MerchantConfigChangedListener) - the M8
       # bug fix: resolves the delivery target from the merchant's OWN registered webhook. A

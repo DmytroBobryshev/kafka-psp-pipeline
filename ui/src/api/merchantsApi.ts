@@ -10,6 +10,7 @@ export interface MerchantView {
   webhookUrl: string | null;
   declineRateAlertThresholdBps: number;
   paymentExpirationSeconds?: number;
+  refundExpirationSeconds?: number;
   updatedAt: string;
 }
 

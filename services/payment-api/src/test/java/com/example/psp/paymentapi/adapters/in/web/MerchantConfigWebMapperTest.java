@@ -22,7 +22,7 @@ class MerchantConfigWebMapperTest {
 
     @Test
     void absentPaymentExpirationSecondsResolvesToTheDefault() {
-        UpsertMerchantConfigRequest request = request(null);
+        UpsertMerchantConfigRequest request = request(null, null);
 
         UpsertMerchantConfigCommand command = mapper.toCommand("acme", request);
 
@@ -32,15 +32,36 @@ class MerchantConfigWebMapperTest {
 
     @Test
     void explicitPaymentExpirationSecondsPassesThroughUnchanged() {
-        UpsertMerchantConfigRequest request = request(1800);
+        UpsertMerchantConfigRequest request = request(1800, null);
 
         UpsertMerchantConfigCommand command = mapper.toCommand("acme", request);
 
         assertThat(command.paymentExpirationSeconds()).isEqualTo(1800);
     }
 
+    // M24: the refund-path mirror of the two paymentExpirationSeconds resolution tests above.
+
     @Test
-    void toResponseCarriesPaymentExpirationSecondsThrough() {
+    void absentRefundExpirationSecondsResolvesToTheDefault() {
+        UpsertMerchantConfigRequest request = request(null, null);
+
+        UpsertMerchantConfigCommand command = mapper.toCommand("acme", request);
+
+        assertThat(command.refundExpirationSeconds())
+                .isEqualTo(MerchantConfig.DEFAULT_REFUND_EXPIRATION_SECONDS);
+    }
+
+    @Test
+    void explicitRefundExpirationSecondsPassesThroughUnchanged() {
+        UpsertMerchantConfigRequest request = request(null, 2400);
+
+        UpsertMerchantConfigCommand command = mapper.toCommand("acme", request);
+
+        assertThat(command.refundExpirationSeconds()).isEqualTo(2400);
+    }
+
+    @Test
+    void toResponseCarriesPaymentAndRefundExpirationSecondsThrough() {
         MerchantConfig config =
                 new MerchantConfig(
                         "acme",
@@ -50,14 +71,17 @@ class MerchantConfigWebMapperTest {
                         List.of("EUR"),
                         null,
                         1500,
-                        1800);
+                        1800,
+                        2400);
 
         MerchantConfigResponse response = mapper.toResponse(config);
 
         assertThat(response.paymentExpirationSeconds()).isEqualTo(1800);
+        assertThat(response.refundExpirationSeconds()).isEqualTo(2400);
     }
 
-    private static UpsertMerchantConfigRequest request(Integer paymentExpirationSeconds) {
+    private static UpsertMerchantConfigRequest request(
+            Integer paymentExpirationSeconds, Integer refundExpirationSeconds) {
         return new UpsertMerchantConfigRequest(
                 "ACME Corp",
                 MerchantStatus.ACTIVE,
@@ -65,6 +89,7 @@ class MerchantConfigWebMapperTest {
                 List.of("EUR"),
                 null,
                 1500,
-                paymentExpirationSeconds);
+                paymentExpirationSeconds,
+                refundExpirationSeconds);
     }
 }

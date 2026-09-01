@@ -354,6 +354,11 @@ class PaymentQueryUseCaseTest {
         public Optional<Refund> findByIdAndPaymentId(UUID id, UUID paymentId) {
             throw new UnsupportedOperationException("not exercised by this test");
         }
+
+        @Override
+        public List<Refund> findExpirationCandidates(Instant now) {
+            throw new UnsupportedOperationException("not exercised by this test");
+        }
     }
 
     /** {@code history()} never touches refund_status_history - every method throws if that breaks. */
@@ -395,6 +400,11 @@ class PaymentQueryUseCaseTest {
         @Override
         public Optional<Refund> findByIdAndPaymentId(UUID id, UUID paymentId) {
             return Optional.ofNullable(byId.get(id)).filter(r -> r.getPaymentId().equals(paymentId));
+        }
+
+        @Override
+        public List<Refund> findExpirationCandidates(Instant now) {
+            throw new UnsupportedOperationException("not exercised by this test");
         }
     }
 

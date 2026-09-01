@@ -70,6 +70,10 @@ webhook-notifier:
     # adapters.in.kafka.RefundCompletedListener/RefundFailedListener.
     refund-completed-topic: refunds.refund-completed.v1
     refund-failed-topic: refunds.refund-failed.v1
+    # M24: a FOURTH planner source, same group - adapters.in.kafka.RefundExpiredListener plans a
+    # delivery only for this topic's EXPIRED records (PENDING/IPN_RECEIVED/VERIFIED are skipped,
+    # see that class's javadoc).
+    refund-status-changed-topic: refunds.refund-status-changed.v1
     # M9 Phase 2: the delivery chain moved to a NEW v2 topic set (Avro, base + 3 retry tiers +
     # dlq) rather than cutting v1 in place - see the README's M9 Phase 2 section for why. The old
     # v1 chain (including v1.dlq, holding M8's poisoned-record evidence) is retired: still

@@ -34,6 +34,7 @@ public class PostgresMerchantViewRepository implements MerchantViewRepository {
                 view.webhookUrl(),
                 view.declineRateAlertThresholdBps(),
                 view.paymentExpirationSeconds(),
+                view.refundExpirationSeconds(),
                 view.updatedAt());
     }
 

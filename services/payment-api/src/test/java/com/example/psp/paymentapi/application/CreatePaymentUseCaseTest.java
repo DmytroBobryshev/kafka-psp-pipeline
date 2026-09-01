@@ -74,6 +74,7 @@ class CreatePaymentUseCaseTest {
                         null,
                         1500,
                         900,
+                        900,
                         Instant.now());
         CreatePaymentUseCase useCase =
                 new CreatePaymentUseCase(
@@ -99,6 +100,7 @@ class CreatePaymentUseCaseTest {
                         List.of("EUR", "USD", "GBP"),
                         null,
                         1500,
+                        900,
                         900,
                         Instant.now());
         CreatePaymentUseCase useCase =
@@ -126,6 +128,7 @@ class CreatePaymentUseCaseTest {
                         null,
                         1500,
                         900,
+                        900,
                         Instant.now());
         CreatePaymentUseCase useCase =
                 new CreatePaymentUseCase(
@@ -151,6 +154,7 @@ class CreatePaymentUseCaseTest {
                         List.of(),
                         null,
                         1500,
+                        900,
                         900,
                         Instant.now());
         CreatePaymentUseCase useCase =
@@ -179,6 +183,7 @@ class CreatePaymentUseCaseTest {
                         List.of("EUR"),
                         null,
                         1500,
+                        900,
                         900,
                         Instant.now()));
     }

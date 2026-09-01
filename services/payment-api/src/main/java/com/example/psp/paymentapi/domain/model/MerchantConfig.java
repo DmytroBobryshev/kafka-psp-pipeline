@@ -29,7 +29,9 @@ public record MerchantConfig(
         List<String> allowedCurrencies,
         String webhookUrl,
         int declineRateAlertThresholdBps,
-        int paymentExpirationSeconds) {
+        int paymentExpirationSeconds,
+        // M24: the refund-path mirror of paymentExpirationSeconds - see DEFAULT_REFUND_EXPIRATION_SECONDS.
+        int refundExpirationSeconds) {
 
     /**
      * M22: the default a merchant gets when {@code PUT .../config}'s
@@ -40,6 +42,15 @@ public record MerchantConfig(
      * {@code merchant_configs} row at all.
      */
     public static final int DEFAULT_PAYMENT_EXPIRATION_SECONDS = 900;
+
+    /**
+     * M24: the refund-path mirror of {@link #DEFAULT_PAYMENT_EXPIRATION_SECONDS} - same role, same
+     * value, for {@code refundExpirationSeconds}: the default when {@code PUT .../config}'s field is
+     * absent, the Avro field's own default, and what {@code adapters.out.persistence.RefundJpaRepository}'s
+     * expiration-candidate query falls back to (via {@code COALESCE}) for a merchant with no
+     * {@code merchant_configs} row at all.
+     */
+    public static final int DEFAULT_REFUND_EXPIRATION_SECONDS = 900;
 
     public MerchantConfig {
         requireNonBlank(merchantId, "merchantId");
@@ -74,6 +85,13 @@ public record MerchantConfig(
             throw new IllegalArgumentException(
                     "paymentExpirationSeconds must be within [30, 86400] seconds, was "
                             + paymentExpirationSeconds);
+        }
+        // M24: same 30s..24h bounds as paymentExpirationSeconds, same redundant-by-design layer
+        // (adapters.in.web.UpsertMerchantConfigRequest enforces the same bounds at the DTO level).
+        if (refundExpirationSeconds < 30 || refundExpirationSeconds > 86_400) {
+            throw new IllegalArgumentException(
+                    "refundExpirationSeconds must be within [30, 86400] seconds, was "
+                            + refundExpirationSeconds);
         }
     }
 

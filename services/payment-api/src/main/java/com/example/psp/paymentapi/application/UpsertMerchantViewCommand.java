@@ -19,5 +19,7 @@ public record UpsertMerchantViewCommand(
         int declineRateAlertThresholdBps,
         // M22: mirrors the Avro event's field of the same name (default 900 on the wire).
         int paymentExpirationSeconds,
+        // M24: mirrors the Avro event's field of the same name (default 900 on the wire).
+        int refundExpirationSeconds,
         Instant updatedAt) {
 }

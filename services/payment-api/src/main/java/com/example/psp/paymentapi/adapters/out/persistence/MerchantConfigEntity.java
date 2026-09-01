@@ -53,6 +53,10 @@ public class MerchantConfigEntity {
     @Column(name = "payment_expiration_seconds", nullable = false)
     private int paymentExpirationSeconds;
 
+    // M24, V13: NOT NULL DEFAULT 900 - see domain.model.MerchantConfig#DEFAULT_REFUND_EXPIRATION_SECONDS.
+    @Column(name = "refund_expiration_seconds", nullable = false)
+    private int refundExpirationSeconds;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 }

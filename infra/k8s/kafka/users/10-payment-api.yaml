@@ -1,5 +1,9 @@
 # payment-api (:8085) - 23 bindings, matching init-security.sh's "--- payment-api ---" block.
 # M23: was 18 - the refund trail's read-side projection added 4 topic Read grants + 1 group prefix.
+# M24: refunds.refund-status-changed.v1 gains Write (was Read-only) - the refund-expiration sweep's
+# own producer (adapters.out.kafka.KafkaRefundExpirationPublisher) publishes EXPIRED records back
+# onto this SAME topic, consumed back through the existing Read grant by this service's own
+# RefundStatusChangedListener - no new binding count, an existing grant widened.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -59,8 +63,9 @@ spec:
         operations: [Read, Describe]
       # M23: the refund trail's read-side projection (refund_status_history) - four independent
       # consumer identities, all named "payment-api.refund-*", covered by one group prefix below.
+      # M24: also Write - see this file's top-of-block comment.
       - resource: { type: topic, name: refunds.refund-status-changed.v1, patternType: literal }
-        operations: [Read, Describe]
+        operations: [Read, Write, Describe]
       - resource: { type: topic, name: refunds.refund-completed.v1, patternType: literal }
         operations: [Read, Describe]
       - resource: { type: topic, name: refunds.refund-failed.v1, patternType: literal }

@@ -35,6 +35,10 @@ public interface MerchantConfigWebMapper {
             target = "paymentExpirationSeconds",
             source = "request.paymentExpirationSeconds",
             qualifiedByName = "resolvePaymentExpirationSeconds")
+    @Mapping(
+            target = "refundExpirationSeconds",
+            source = "request.refundExpirationSeconds",
+            qualifiedByName = "resolveRefundExpirationSeconds")
     UpsertMerchantConfigCommand toCommand(String merchantId, UpsertMerchantConfigRequest request);
 
     /** Enum {@code ->} String is MapStruct's built-in conversion; named explicitly for grep-ability. */
@@ -52,5 +56,11 @@ public interface MerchantConfigWebMapper {
     @Named("resolvePaymentExpirationSeconds")
     static int resolvePaymentExpirationSeconds(Integer requested) {
         return requested == null ? MerchantConfig.DEFAULT_PAYMENT_EXPIRATION_SECONDS : requested;
+    }
+
+    /** M24: the refund-path mirror of {@link #resolvePaymentExpirationSeconds} - same null -> default resolution. */
+    @Named("resolveRefundExpirationSeconds")
+    static int resolveRefundExpirationSeconds(Integer requested) {
+        return requested == null ? MerchantConfig.DEFAULT_REFUND_EXPIRATION_SECONDS : requested;
     }
 }

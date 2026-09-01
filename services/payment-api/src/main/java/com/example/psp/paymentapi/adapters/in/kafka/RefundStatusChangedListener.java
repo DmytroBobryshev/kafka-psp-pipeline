@@ -12,11 +12,13 @@ import org.springframework.stereotype.Component;
 
 /**
  * M23: payment-api's consumer of {@code refunds.refund-status-changed.v1} (PENDING/IPN_RECEIVED/
- * VERIFIED) - group {@code payment-api.refund-status-view.v1}
- * ({@code config.RefundHistoryKafkaConfig}), mirroring
- * {@code adapters.in.kafka.PaymentStatusChangedListener}'s shape for the payment trail. History-
- * only: {@link RecordRefundHistoryUseCase} never touches the {@code Refund} aggregate's own
- * status.
+ * VERIFIED, and since M24, this service's OWN {@code EXPIRED} publish -
+ * {@code application.ExpireRefundsUseCase}/{@code adapters.out.kafka.KafkaRefundExpirationPublisher})
+ * - group {@code payment-api.refund-status-view.v1} ({@code config.RefundHistoryKafkaConfig}),
+ * mirroring {@code adapters.in.kafka.PaymentStatusChangedListener}'s shape for the payment trail.
+ * History-only: {@link RecordRefundHistoryUseCase} never touches the {@code Refund} aggregate's
+ * own status - which is exactly why EXPIRED needed no change here at all: this listener already
+ * records whatever status string the event carries, unconditionally.
  *
  * <p>No DLQ - same documented scope boundary as {@code PaymentStatusChangedListener} (a derived,
  * lossy read-model listener, ADR-0006).

@@ -169,10 +169,18 @@ public class PaymentQueryUseCase {
                             entry.getStatus(),
                             entry.getOccurredAt(),
                             entry.getEventId(),
-                            STATUS_FUNDS_RESERVED.equals(entry.getStatus()) ? SOURCE_LEDGER : SOURCE_PSP_CONNECTOR,
+                            refundEntrySource(entry.getStatus()),
                             entry.getProviderReference()));
         }
 
         return items.stream().sorted(Comparator.comparing(RefundHistoryItem::occurredAt)).toList();
+    }
+
+    // FUNDS_RESERVED comes from the ledger, EXPIRED from this service's own sweep; everything
+    // else on the refund trail is psp-connector's.
+    private static String refundEntrySource(String status) {
+        if (STATUS_FUNDS_RESERVED.equals(status)) return SOURCE_LEDGER;
+        if (PaymentStatus.EXPIRED.name().equals(status)) return SOURCE_PAYMENT_API;
+        return SOURCE_PSP_CONNECTOR;
     }
 }

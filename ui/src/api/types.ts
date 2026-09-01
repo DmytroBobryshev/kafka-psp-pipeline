@@ -130,6 +130,8 @@ export interface UpsertMerchantConfigRequest {
   declineRateAlertThresholdBps: number;
   /** 30..86400; payments still CREATED/PENDING after this become EXPIRED. Absent = 900. */
   paymentExpirationSeconds?: number;
+  /** 30..86400; refunds with no terminal outcome after this become EXPIRED. Absent = 900. */
+  refundExpirationSeconds?: number;
 }
 
 /** Shared by payment-api's PUT 200 and analytics' GET /merchants/{id}/config. */

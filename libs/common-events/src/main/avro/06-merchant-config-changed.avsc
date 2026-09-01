@@ -50,6 +50,12 @@
       "type": "int",
       "default": 900,
       "doc": "How long (seconds since payments.created_at) a payment may sit in CREATED/PENDING before payment-api's own expiration scheduler moves it to EXPIRED and publishes payments.payment-status-changed.v1 status=EXPIRED. Default 900 (15 minutes) - both this field's default AND the value payment-api's projection falls back to for a merchant with no config row at all (LEFT JOIN + COALESCE), so a merchant that has never called PUT /api/merchants/{id}/config still gets a bounded window rather than an indefinitely-CREATED payment."
+    },
+    {
+      "name": "refundExpirationSeconds",
+      "type": "int",
+      "default": 900,
+      "doc": "The refund-path mirror of paymentExpirationSeconds: how long (seconds since refunds.created_at) a refund may sit with no terminal refund_status_history row (COMPLETED/FAILED/EXPIRED) before payment-api's own refund-expiration sweep publishes refunds.refund-status-changed.v1 status=EXPIRED - a history-only, merchant-facing verdict layered on top of the ledger's own independent ReservationTtlSweeper (which already guarantees the money itself never leaks). Default 900 (15 minutes), same default and same LEFT JOIN + COALESCE fallback convention as paymentExpirationSeconds."
     }
   ]
 }
