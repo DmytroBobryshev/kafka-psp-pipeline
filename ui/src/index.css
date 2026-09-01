@@ -7,6 +7,12 @@
     "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+html {
+  /* pages differ in height; without a reserved gutter the scrollbar pops in and out on
+     navigation and shifts the whole layout sideways */
+  scrollbar-gutter: stable;
+}
+
 body {
   font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
