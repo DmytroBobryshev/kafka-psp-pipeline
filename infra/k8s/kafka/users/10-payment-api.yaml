@@ -42,9 +42,11 @@ spec:
         operations: [Read, Describe]
       # M19: the transactions panel's status-view listener - the same event ledger and
       # webhook-notifier already read, consumed here too as a third independent local projection
-      # (ADR-0005).
+      # (ADR-0005). M22: also Write - the expiration engine's own producer
+      # (adapters.out.kafka.KafkaPaymentExpirationPublisher) publishes EXPIRED records back onto
+      # this SAME topic, consumed back through the Read grant above by this service's own listener.
       - resource: { type: topic, name: payments.payment-status-changed.v1, patternType: literal }
-        operations: [Read, Describe]
+        operations: [Read, Write, Describe]
       # Fixed group id (payment-api.status-view.v1), unlike the per-instance replies group above -
       # an ordinary work-sharing consumer, so a prefix grant here is just this service's usual
       # "don't break on the next group-id suffix bump" convention, not a per-instance necessity.

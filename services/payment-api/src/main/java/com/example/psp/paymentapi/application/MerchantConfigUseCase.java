@@ -41,7 +41,8 @@ public class MerchantConfigUseCase {
                         command.payoutCurrency(),
                         command.allowedCurrencies(),
                         command.webhookUrl(),
-                        command.declineRateAlertThresholdBps());
+                        command.declineRateAlertThresholdBps(),
+                        command.paymentExpirationSeconds());
 
         merchantConfigPublisher.publishConfigChanged(config);
         return config;

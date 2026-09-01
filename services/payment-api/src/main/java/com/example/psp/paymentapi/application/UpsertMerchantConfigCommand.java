@@ -19,5 +19,9 @@ public record UpsertMerchantConfigCommand(
         String payoutCurrency,
         List<String> allowedCurrencies,
         String webhookUrl,
-        int declineRateAlertThresholdBps) {
+        int declineRateAlertThresholdBps,
+        // M22: already resolved to a concrete value by the web mapper - absent-in-the-request ->
+        // MerchantConfig.DEFAULT_PAYMENT_EXPIRATION_SECONDS - so this command, like every other
+        // field here, carries a value ready to hand straight to the MerchantConfig constructor.
+        int paymentExpirationSeconds) {
 }

@@ -4,6 +4,7 @@ import com.example.psp.paymentapi.domain.model.Payment;
 import com.example.psp.paymentapi.domain.model.PaymentPage;
 import com.example.psp.paymentapi.domain.model.PaymentStatus;
 import com.example.psp.paymentapi.domain.port.PaymentRepository;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -20,6 +21,10 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 public class PostgresPaymentRepository implements PaymentRepository {
+
+    // M22: the two FROM states applyExpiredStatus's guard accepts - see the port's javadoc.
+    private static final List<PaymentStatus> EXPIRABLE_FROM_STATUSES =
+            List.of(PaymentStatus.CREATED, PaymentStatus.PENDING);
 
     private final PaymentJpaRepository jpaRepository;
     private final PaymentPersistenceMapper mapper;
@@ -53,6 +58,20 @@ public class PostgresPaymentRepository implements PaymentRepository {
         // conditional UPDATE rather than updateStatus's unconditional one.
         jpaRepository.updateStatusIfCurrentStatus(
                 paymentId, PaymentStatus.PENDING, PaymentStatus.CREATED, java.time.Instant.now());
+    }
+
+    @Override
+    public void applyExpiredStatus(UUID paymentId) {
+        // M22: EXPIRED applies FROM CREATED or PENDING - see the port's javadoc for the guard and
+        // for why a later terminal outcome is still allowed to overwrite this (updateStatus above
+        // is unconditional, so it does).
+        jpaRepository.updateStatusIfCurrentStatusIn(
+                paymentId, PaymentStatus.EXPIRED, EXPIRABLE_FROM_STATUSES, java.time.Instant.now());
+    }
+
+    @Override
+    public List<Payment> findExpirationCandidates(Instant now) {
+        return jpaRepository.findExpirationCandidates(now).stream().map(mapper::toDomain).toList();
     }
 
     @Override

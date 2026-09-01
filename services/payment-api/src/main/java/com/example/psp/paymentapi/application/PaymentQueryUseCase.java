@@ -113,7 +113,10 @@ public class PaymentQueryUseCase {
                             entry.getStatus(),
                             entry.getOccurredAt(),
                             entry.getEventId(),
-                            SOURCE_PSP_CONNECTOR,
+                            // EXPIRED events are payment-api's own sweep, not a provider outcome
+                            PaymentStatus.EXPIRED.name().equals(entry.getStatus())
+                                    ? SOURCE_PAYMENT_API
+                                    : SOURCE_PSP_CONNECTOR,
                             entry.getProviderReference()));
         }
 

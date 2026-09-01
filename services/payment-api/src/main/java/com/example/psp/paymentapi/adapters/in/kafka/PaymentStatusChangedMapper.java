@@ -59,6 +59,14 @@ public interface PaymentStatusChangedMapper {
      * {@code payments.status} - {@link ApplyPaymentOutcomeCommand}'s javadoc explains why a
      * {@code null} domainStatus is exactly that instruction, not a mapping gap.
      *
+     * <p>{@code "EXPIRED"} (M22 - published only by THIS service's own
+     * {@code adapters.in.scheduler.PaymentExpirationScheduler}, consumed back through this exact
+     * listener like any other producer's event) maps straight across to
+     * {@link PaymentStatus#EXPIRED}: unlike DECLINED, this table now has a same-named terminal
+     * state for it. {@code ApplyPaymentOutcomeUseCase#execute} is what makes applying it
+     * conditional (CREATED/PENDING only) rather than absolute - this mapper's job stops at "which
+     * enum value", the same division of labour PENDING already established.
+     *
      * <p>Any other status is a contract violation this mapper cannot classify (the schema's own
      * doc says the event is "never emitted for a TIMEOUT outcome" - ADR-0006 category A is not a
      * business outcome) - it throws rather than silently defaulting, so it fails loudly at the
@@ -70,6 +78,7 @@ public interface PaymentStatusChangedMapper {
             case "PENDING" -> PaymentStatus.PENDING;
             case "SUCCEEDED" -> PaymentStatus.SUCCEEDED;
             case "DECLINED" -> PaymentStatus.FAILED;
+            case "EXPIRED" -> PaymentStatus.EXPIRED;
             case "IPN_RECEIVED", "VERIFIED" -> null;
             default ->
                     throw new IllegalArgumentException(

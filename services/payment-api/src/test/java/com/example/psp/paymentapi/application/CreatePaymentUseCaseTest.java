@@ -73,6 +73,7 @@ class CreatePaymentUseCaseTest {
                         List.of("EUR"),
                         null,
                         1500,
+                        900,
                         Instant.now());
         CreatePaymentUseCase useCase =
                 new CreatePaymentUseCase(
@@ -98,6 +99,7 @@ class CreatePaymentUseCaseTest {
                         List.of("EUR", "USD", "GBP"),
                         null,
                         1500,
+                        900,
                         Instant.now());
         CreatePaymentUseCase useCase =
                 new CreatePaymentUseCase(
@@ -123,6 +125,7 @@ class CreatePaymentUseCaseTest {
                         List.of("EUR", "USD"),
                         null,
                         1500,
+                        900,
                         Instant.now());
         CreatePaymentUseCase useCase =
                 new CreatePaymentUseCase(
@@ -148,6 +151,7 @@ class CreatePaymentUseCaseTest {
                         List.of(),
                         null,
                         1500,
+                        900,
                         Instant.now());
         CreatePaymentUseCase useCase =
                 new CreatePaymentUseCase(
@@ -175,6 +179,7 @@ class CreatePaymentUseCaseTest {
                         List.of("EUR"),
                         null,
                         1500,
+                        900,
                         Instant.now()));
     }
 
@@ -244,6 +249,18 @@ class CreatePaymentUseCaseTest {
         public void applyPendingStatus(UUID paymentId) {
             throw new UnsupportedOperationException(
                     "applyPendingStatus() is not part of the create-payment use case under test");
+        }
+
+        @Override
+        public void applyExpiredStatus(UUID paymentId) {
+            throw new UnsupportedOperationException(
+                    "applyExpiredStatus() is not part of the create-payment use case under test");
+        }
+
+        @Override
+        public List<Payment> findExpirationCandidates(java.time.Instant now) {
+            throw new UnsupportedOperationException(
+                    "findExpirationCandidates() is not part of the create-payment use case under test");
         }
     }
 

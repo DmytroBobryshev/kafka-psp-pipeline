@@ -71,6 +71,15 @@ class PaymentStatusChangedMapperTest {
     }
 
     @Test
+    void expiredMapsToExpiredDomainStatus() {
+        ApplyPaymentOutcomeCommand command = mapper.toCommand(event("EXPIRED", ""));
+
+        assertThat(command.domainStatus()).isEqualTo(PaymentStatus.EXPIRED);
+        assertThat(command.rawStatus()).isEqualTo("EXPIRED");
+        assertThat(command.providerReference()).isNull();
+    }
+
+    @Test
     void unknownStatusThrows() {
         assertThatThrownBy(() -> mapper.toCommand(event("SOMETHING_ELSE", "")))
                 .isInstanceOf(IllegalArgumentException.class);

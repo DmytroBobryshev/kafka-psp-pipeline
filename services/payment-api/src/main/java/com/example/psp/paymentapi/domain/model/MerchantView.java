@@ -18,6 +18,10 @@ public record MerchantView(
         List<String> allowedCurrencies,
         String webhookUrl,
         int declineRateAlertThresholdBps,
+        // M22: mirrors MerchantConfig's field of the same name - read by GET /api/merchants and
+        // by adapters.out.persistence.PaymentJpaRepository's expiration-candidate query (via the
+        // merchant_configs projection this class backs).
+        int paymentExpirationSeconds,
         Instant updatedAt) {
 
     public MerchantView {

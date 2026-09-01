@@ -246,6 +246,87 @@ class ApplyPaymentOutcomeUseCaseTest {
         assertThat(history.recorded).hasSize(3);
     }
 
+    @Test
+    void expiredAppliesWhenPaymentIsStillCreated() {
+        // M22: EXPIRED's guard accepts CREATED, same as PENDING's.
+        RecordingRepository repository = new RecordingRepository();
+        ApplyPaymentOutcomeUseCase useCase = new ApplyPaymentOutcomeUseCase(repository, new RecordingHistoryRepository());
+        UUID paymentId = UUID.randomUUID();
+
+        useCase.execute(command(paymentId, PaymentStatus.EXPIRED));
+
+        assertThat(repository.currentStatus(paymentId)).isEqualTo(PaymentStatus.EXPIRED);
+    }
+
+    @Test
+    void expiredAppliesWhenPaymentIsPending() {
+        // M22: EXPIRED's guard ALSO accepts PENDING - the second FROM state PENDING's own guard
+        // does not need (applyPendingStatus only ever applies FROM CREATED).
+        RecordingRepository repository = new RecordingRepository();
+        ApplyPaymentOutcomeUseCase useCase = new ApplyPaymentOutcomeUseCase(repository, new RecordingHistoryRepository());
+        UUID paymentId = UUID.randomUUID();
+
+        useCase.execute(command(paymentId, PaymentStatus.PENDING));
+        useCase.execute(command(paymentId, PaymentStatus.EXPIRED));
+
+        assertThat(repository.currentStatus(paymentId)).isEqualTo(PaymentStatus.EXPIRED);
+    }
+
+    @Test
+    void expiredNeverDowngradesSucceeded() {
+        RecordingRepository repository = new RecordingRepository();
+        ApplyPaymentOutcomeUseCase useCase = new ApplyPaymentOutcomeUseCase(repository, new RecordingHistoryRepository());
+        UUID paymentId = UUID.randomUUID();
+
+        useCase.execute(command(paymentId, PaymentStatus.SUCCEEDED));
+        useCase.execute(command(paymentId, PaymentStatus.EXPIRED));
+
+        assertThat(repository.currentStatus(paymentId)).isEqualTo(PaymentStatus.SUCCEEDED);
+    }
+
+    @Test
+    void expiredNeverDowngradesFailed() {
+        RecordingRepository repository = new RecordingRepository();
+        ApplyPaymentOutcomeUseCase useCase = new ApplyPaymentOutcomeUseCase(repository, new RecordingHistoryRepository());
+        UUID paymentId = UUID.randomUUID();
+
+        useCase.execute(command(paymentId, PaymentStatus.FAILED));
+        useCase.execute(command(paymentId, PaymentStatus.EXPIRED));
+
+        assertThat(repository.currentStatus(paymentId)).isEqualTo(PaymentStatus.FAILED);
+    }
+
+    @Test
+    void expiredIsANoOpOnceAlreadyExpired() {
+        // A redelivered/re-swept EXPIRED (the scheduler's deterministic eventId means a second
+        // sweep republishes the same event) must not somehow re-apply on top of itself in a way
+        // that breaks the guard - status stays EXPIRED, no exception, no double effect.
+        RecordingRepository repository = new RecordingRepository();
+        ApplyPaymentOutcomeUseCase useCase = new ApplyPaymentOutcomeUseCase(repository, new RecordingHistoryRepository());
+        UUID paymentId = UUID.randomUUID();
+
+        useCase.execute(command(paymentId, PaymentStatus.EXPIRED));
+        useCase.execute(command(paymentId, PaymentStatus.EXPIRED));
+
+        assertThat(repository.currentStatus(paymentId)).isEqualTo(PaymentStatus.EXPIRED);
+    }
+
+    @Test
+    void aLateSucceededStillOverwritesAnExpiredPayment() {
+        // The one deliberate exception to the "never downgrade" family above: a late-arriving
+        // terminal provider outcome IS allowed to overwrite EXPIRED - the provider's own answer is
+        // authoritative over this service's own expiry guess (updateStatus's unconditional UPDATE,
+        // unlike applyExpiredStatus's conditional one - see ApplyPaymentOutcomeUseCase#execute).
+        RecordingRepository repository = new RecordingRepository();
+        ApplyPaymentOutcomeUseCase useCase = new ApplyPaymentOutcomeUseCase(repository, new RecordingHistoryRepository());
+        UUID paymentId = UUID.randomUUID();
+
+        useCase.execute(command(paymentId, PaymentStatus.EXPIRED));
+        useCase.execute(command(paymentId, PaymentStatus.SUCCEEDED));
+
+        assertThat(repository.currentStatus(paymentId)).isEqualTo(PaymentStatus.SUCCEEDED);
+    }
+
     private static ApplyPaymentOutcomeCommand command(UUID paymentId, PaymentStatus status) {
         return new ApplyPaymentOutcomeCommand(
                 paymentId, status, status.name(), null, UUID.randomUUID(), Instant.now());
@@ -288,6 +369,22 @@ class ApplyPaymentOutcomeUseCaseTest {
                 currentByPaymentId.put(paymentId, PaymentStatus.PENDING);
             }
             // else: no-downgrade guard - the real conditional UPDATE simply matches zero rows.
+        }
+
+        @Override
+        public void applyExpiredStatus(UUID paymentId) {
+            // Mirrors the real adapter's "UPDATE ... WHERE status IN (CREATED, PENDING)" - same
+            // "never touched = implicitly CREATED" convention as applyPendingStatus above.
+            PaymentStatus current = currentByPaymentId.getOrDefault(paymentId, PaymentStatus.CREATED);
+            if (current == PaymentStatus.CREATED || current == PaymentStatus.PENDING) {
+                currentByPaymentId.put(paymentId, PaymentStatus.EXPIRED);
+            }
+            // else: no-downgrade guard - the real conditional UPDATE simply matches zero rows.
+        }
+
+        @Override
+        public List<Payment> findExpirationCandidates(Instant now) {
+            throw new UnsupportedOperationException("not exercised by this use case");
         }
 
         @Override

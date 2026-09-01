@@ -17,5 +17,7 @@ public record UpsertMerchantViewCommand(
         List<String> allowedCurrencies,
         String webhookUrl,
         int declineRateAlertThresholdBps,
+        // M22: mirrors the Avro event's field of the same name (default 900 on the wire).
+        int paymentExpirationSeconds,
         Instant updatedAt) {
 }

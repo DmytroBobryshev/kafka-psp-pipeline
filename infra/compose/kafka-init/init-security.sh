@@ -155,7 +155,10 @@ group_acl payment-api prefixed "payment-api.replies."                  Read Desc
 # M19: the transactions panel's status-view listener (adapters.in.kafka.PaymentStatusChangedListener) -
 # the same event ledger and webhook-notifier already read, consumed here too as a third
 # independent local projection (ADR-0005), not a new source of truth.
-topic_acl payment-api literal  "payments.payment-status-changed.v1"    Read Describe
+# M22: also Write - adapters.out.kafka.KafkaPaymentExpirationPublisher, the expiration engine's
+# own producer (adapters.in.scheduler.PaymentExpirationScheduler), publishes EXPIRED records back
+# onto this SAME topic, consumed back through the Read grant above by this service's own listener.
+topic_acl payment-api literal  "payments.payment-status-changed.v1"    Read Write Describe
 # Fixed group id (payment-api.status-view.v1) - an ordinary work-sharing consumer, unlike the
 # per-instance replies group above. Prefixed anyway, matching this principal's usual convention.
 group_acl payment-api prefixed "payment-api.status-view."              Read Describe

@@ -17,10 +17,14 @@ import java.util.List;
  * <p>{@code merchantId} is deliberately absent: it is the path variable, so the URL is the single
  * place the identity is stated and a body/path mismatch is impossible by construction.
  *
- * <p>The verb is {@code PUT}, not {@code PATCH}, and every field except {@code webhookUrl} is
- * required - because a compacted topic stores whole-state snapshots (see
- * {@link com.example.psp.paymentapi.domain.model.MerchantConfig}). A {@code PATCH} would have to
- * read the current value to merge into, and the only place that value lives is the topic itself.
+ * <p>The verb is {@code PUT}, not {@code PATCH}, and every field except {@code webhookUrl} and
+ * (M22) {@code paymentExpirationSeconds} is required - because a compacted topic stores
+ * whole-state snapshots (see {@link com.example.psp.paymentapi.domain.model.MerchantConfig}). A
+ * {@code PATCH} would have to read the current value to merge into, and the only place that value
+ * lives is the topic itself. {@code paymentExpirationSeconds} is the one other genuinely optional
+ * field: {@code null} means "use the default" (900s, {@code adapters.in.web.
+ * MerchantConfigWebMapper} resolves it before the command reaches the domain constructor) rather
+ * than every caller having to know and repeat that default explicitly.
  */
 public record UpsertMerchantConfigRequest(
         @NotBlank(message = "displayName must not be blank") String displayName,
@@ -41,5 +45,12 @@ public record UpsertMerchantConfigRequest(
         String webhookUrl,
         @Min(value = 0, message = "declineRateAlertThresholdBps must not be negative")
                 @Max(value = 10_000, message = "declineRateAlertThresholdBps must not exceed 10000 (100%)")
-                int declineRateAlertThresholdBps) {
+                int declineRateAlertThresholdBps,
+        // M22: null -> 900 (MerchantConfigWebMapper resolves the default); @Min/@Max are
+        // skipped by Bean Validation when the value is null, so a caller that omits this field
+        // entirely never trips these bounds - only an explicit out-of-range value does, with the
+        // usual 400 problem+json (common-web's GlobalExceptionHandler).
+        @Min(value = 30, message = "paymentExpirationSeconds must be at least 30")
+                @Max(value = 86_400, message = "paymentExpirationSeconds must not exceed 86400 (24h)")
+                Integer paymentExpirationSeconds) {
 }

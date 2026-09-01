@@ -28,7 +28,18 @@ public record MerchantConfig(
         String payoutCurrency,
         List<String> allowedCurrencies,
         String webhookUrl,
-        int declineRateAlertThresholdBps) {
+        int declineRateAlertThresholdBps,
+        int paymentExpirationSeconds) {
+
+    /**
+     * M22: the default a merchant gets when {@code PUT .../config}'s
+     * {@code paymentExpirationSeconds} is absent, AND what the compacted topic's own Avro default
+     * carries (06-merchant-config-changed.avsc) - kept as one named constant so the two never
+     * drift independently. Also the value {@code adapters.out.persistence.PaymentJpaRepository}'s
+     * expiration-candidate query falls back to (via {@code COALESCE}) for a merchant with no
+     * {@code merchant_configs} row at all.
+     */
+    public static final int DEFAULT_PAYMENT_EXPIRATION_SECONDS = 900;
 
     public MerchantConfig {
         requireNonBlank(merchantId, "merchantId");
@@ -55,6 +66,14 @@ public record MerchantConfig(
         if (declineRateAlertThresholdBps < 0 || declineRateAlertThresholdBps > 10_000) {
             throw new IllegalArgumentException(
                     "declineRateAlertThresholdBps must be within [0, 10000] (basis points of a whole)");
+        }
+        // M22: 30s..24h - the web DTO enforces the same bounds (adapters.in.web.
+        // UpsertMerchantConfigRequest), and this is the redundant-by-design layer a bug bypassing
+        // that DTO cannot get around (same pattern as declineRateAlertThresholdBps above).
+        if (paymentExpirationSeconds < 30 || paymentExpirationSeconds > 86_400) {
+            throw new IllegalArgumentException(
+                    "paymentExpirationSeconds must be within [30, 86400] seconds, was "
+                            + paymentExpirationSeconds);
         }
     }
 

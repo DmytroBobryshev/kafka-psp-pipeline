@@ -32,7 +32,8 @@ class MerchantConfigUseCaseTest {
                         "EUR",
                         List.of("EUR", "USD"),
                         "https://acme.test/hook",
-                        1500);
+                        1500,
+                        1800);
 
         MerchantConfig published = useCase.upsert(command);
 
@@ -40,6 +41,85 @@ class MerchantConfigUseCaseTest {
         assertThat(publisher.tombstones).isEmpty();
         assertThat(published.merchantId()).isEqualTo("acme");
         assertThat(published.declineRateAlertThresholdBps()).isEqualTo(1500);
+        // M22: the command's paymentExpirationSeconds flows through to the published snapshot
+        // unchanged, same field-copy roundtrip every other field on this command already gets.
+        assertThat(published.paymentExpirationSeconds()).isEqualTo(1800);
+    }
+
+    @Test
+    void upsertAppliesTheDefaultPaymentExpirationSecondsWhenTheCommandCarriesIt() {
+        // M22: adapters.in.web.MerchantConfigWebMapper resolves an absent request field to
+        // MerchantConfig.DEFAULT_PAYMENT_EXPIRATION_SECONDS BEFORE the command reaches this use
+        // case - by the time it is here, the command always carries a concrete value. This test
+        // exercises that concrete default value flowing through, same as any other field.
+        UpsertMerchantConfigCommand command =
+                new UpsertMerchantConfigCommand(
+                        "acme",
+                        "ACME Corp",
+                        MerchantStatus.ACTIVE,
+                        "EUR",
+                        List.of("EUR"),
+                        null,
+                        1500,
+                        MerchantConfig.DEFAULT_PAYMENT_EXPIRATION_SECONDS);
+
+        MerchantConfig published = useCase.upsert(command);
+
+        assertThat(published.paymentExpirationSeconds()).isEqualTo(900);
+    }
+
+    @Test
+    void rejectsAPaymentExpirationSecondsBelowTheMinimum() {
+        UpsertMerchantConfigCommand invalid =
+                new UpsertMerchantConfigCommand(
+                        "acme", "ACME Corp", MerchantStatus.ACTIVE, "EUR", List.of("EUR"), null, 1500, 29);
+
+        assertThatThrownBy(() -> useCase.upsert(invalid))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("paymentExpirationSeconds");
+
+        assertThat(publisher.upserts).isEmpty();
+    }
+
+    @Test
+    void rejectsAPaymentExpirationSecondsAboveTheMaximum() {
+        UpsertMerchantConfigCommand invalid =
+                new UpsertMerchantConfigCommand(
+                        "acme",
+                        "ACME Corp",
+                        MerchantStatus.ACTIVE,
+                        "EUR",
+                        List.of("EUR"),
+                        null,
+                        1500,
+                        86_401);
+
+        assertThatThrownBy(() -> useCase.upsert(invalid))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("paymentExpirationSeconds");
+
+        assertThat(publisher.upserts).isEmpty();
+    }
+
+    @Test
+    void acceptsThePaymentExpirationSecondsBoundaryValues() {
+        // 30 and 86400 are inclusive bounds, not exclusive - both must succeed.
+        UpsertMerchantConfigCommand atMinimum =
+                new UpsertMerchantConfigCommand(
+                        "acme", "ACME Corp", MerchantStatus.ACTIVE, "EUR", List.of("EUR"), null, 1500, 30);
+        UpsertMerchantConfigCommand atMaximum =
+                new UpsertMerchantConfigCommand(
+                        "acme",
+                        "ACME Corp",
+                        MerchantStatus.ACTIVE,
+                        "EUR",
+                        List.of("EUR"),
+                        null,
+                        1500,
+                        86_400);
+
+        assertThat(useCase.upsert(atMinimum).paymentExpirationSeconds()).isEqualTo(30);
+        assertThat(useCase.upsert(atMaximum).paymentExpirationSeconds()).isEqualTo(86_400);
     }
 
     @Test
@@ -67,7 +147,7 @@ class MerchantConfigUseCaseTest {
     void domainInvariantsAreEnforcedByTheUseCaseNotOnlyByTheWebDto() {
         UpsertMerchantConfigCommand invalid =
                 new UpsertMerchantConfigCommand(
-                        "acme", "ACME Corp", MerchantStatus.ACTIVE, "EUR", List.of("EUR"), null, 20_000);
+                        "acme", "ACME Corp", MerchantStatus.ACTIVE, "EUR", List.of("EUR"), null, 20_000, 900);
 
         assertThatThrownBy(() -> useCase.upsert(invalid))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -80,7 +160,14 @@ class MerchantConfigUseCaseTest {
     void rejectsAPayoutCurrencyThatIsNotInAllowedCurrencies() {
         UpsertMerchantConfigCommand invalid =
                 new UpsertMerchantConfigCommand(
-                        "acme", "ACME Corp", MerchantStatus.ACTIVE, "GBP", List.of("EUR", "USD"), null, 1500);
+                        "acme",
+                        "ACME Corp",
+                        MerchantStatus.ACTIVE,
+                        "GBP",
+                        List.of("EUR", "USD"),
+                        null,
+                        1500,
+                        900);
 
         assertThatThrownBy(() -> useCase.upsert(invalid))
                 .isInstanceOf(IllegalArgumentException.class)

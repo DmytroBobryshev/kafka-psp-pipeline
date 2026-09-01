@@ -49,6 +49,10 @@ public class MerchantConfigEntity {
     @Column(name = "decline_rate_alert_threshold_bps", nullable = false)
     private int declineRateAlertThresholdBps;
 
+    // M22, V11: NOT NULL DEFAULT 900 - see domain.model.MerchantConfig#DEFAULT_PAYMENT_EXPIRATION_SECONDS.
+    @Column(name = "payment_expiration_seconds", nullable = false)
+    private int paymentExpirationSeconds;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 }

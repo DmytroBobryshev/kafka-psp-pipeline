@@ -1,6 +1,8 @@
 package com.example.psp.paymentapi.adapters.out.persistence;
 
 import com.example.psp.paymentapi.domain.model.PaymentStatus;
+import java.util.Collection;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -48,6 +50,46 @@ public interface PaymentJpaRepository extends JpaRepository<PaymentEntity, UUID>
             @Param("status") PaymentStatus status,
             @Param("requiredCurrentStatus") PaymentStatus requiredCurrentStatus,
             @Param("at") java.time.Instant at);
+
+    /**
+     * M22: the IN-list generalisation of {@link #updateStatusIfCurrentStatus} behind
+     * {@code domain.port.PaymentRepository#applyExpiredStatus} - identical shape, plus the guard
+     * clause taking a set of acceptable FROM states (CREATED, PENDING) instead of exactly one,
+     * since EXPIRED may legally apply from either. A second, always-{@code IN}-based query rather
+     * than two calls to {@link #updateStatusIfCurrentStatus} for the same reason
+     * {@code PaymentJpaRepository#search} takes optional filters instead of branching between
+     * hand-written queries: one round trip, one query plan.
+     */
+    @Modifying
+    @Query("UPDATE PaymentEntity p SET p.status = :status, p.statusUpdatedAt = :at"
+            + " WHERE p.id = :paymentId AND p.status IN :allowedCurrentStatuses")
+    void updateStatusIfCurrentStatusIn(
+            @Param("paymentId") UUID paymentId,
+            @Param("status") PaymentStatus status,
+            @Param("allowedCurrentStatuses") Collection<PaymentStatus> allowedCurrentStatuses,
+            @Param("at") java.time.Instant at);
+
+    /**
+     * M22: {@code adapters.in.scheduler.PaymentExpirationScheduler}'s candidate query -
+     * {@code domain.port.PaymentRepository#findExpirationCandidates}'s real implementation.
+     * Native SQL (JPQL has no clean way to join an unrelated entity's table by a foreign key that
+     * is not a mapped association - {@code PaymentEntity} deliberately has none to
+     * {@code MerchantConfigEntity}, same "no FK, the join is a query-time convenience only" shape
+     * as {@code PaymentJpaRepository#search}'s optional filters). {@code LEFT JOIN} +
+     * {@code COALESCE(..., 900)}: a merchant with no {@code merchant_configs} row at all (never
+     * called {@code PUT /api/merchants/{id}/config}) still gets the same 900s default
+     * {@link com.example.psp.paymentapi.domain.model.MerchantConfig#DEFAULT_PAYMENT_EXPIRATION_SECONDS}
+     * names as everyone else, rather than being invisible to the sweep forever.
+     */
+    @Query(
+            value =
+                    "SELECT p.* FROM payments p "
+                            + "LEFT JOIN merchant_configs mc ON mc.merchant_id = p.merchant_id "
+                            + "WHERE p.status IN ('CREATED', 'PENDING') "
+                            + "AND p.created_at < CAST(:now AS timestamptz) "
+                            + "- (COALESCE(mc.payment_expiration_seconds, 900) * INTERVAL '1 second')",
+            nativeQuery = true)
+    List<PaymentEntity> findExpirationCandidates(@Param("now") java.time.Instant now);
 
     /**
      * M19's transactions-panel query. Both filters are optional: {@code (:x IS NULL OR field =

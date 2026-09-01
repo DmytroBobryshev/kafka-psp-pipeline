@@ -20,5 +20,6 @@ public record MerchantConfigResponse(
         String payoutCurrency,
         List<String> allowedCurrencies,
         String webhookUrl,
-        int declineRateAlertThresholdBps) {
+        int declineRateAlertThresholdBps,
+        int paymentExpirationSeconds) {
 }

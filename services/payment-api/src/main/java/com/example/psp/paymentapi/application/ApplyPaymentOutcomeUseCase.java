@@ -78,11 +78,17 @@ public class ApplyPaymentOutcomeUseCase {
                 command.eventId());
 
         // M21: domainStatus == null means IPN_RECEIVED/VERIFIED - history-only, payments.status is
-        // left untouched. Every other status (PENDING/SUCCEEDED/FAILED) still applies exactly as
-        // before M21.
+        // left untouched. Every other status (PENDING/SUCCEEDED/FAILED/EXPIRED) still applies.
         if (command.domainStatus() == PaymentStatus.PENDING) {
             paymentRepository.applyPendingStatus(command.paymentId());
+        } else if (command.domainStatus() == PaymentStatus.EXPIRED) {
+            // M22: conditional, like PENDING above - never downgrades an already-resolved payment.
+            paymentRepository.applyExpiredStatus(command.paymentId());
         } else if (command.domainStatus() != null) {
+            // SUCCEEDED/FAILED: the unconditional absolute UPDATE. This is also what lets a
+            // late-arriving terminal outcome overwrite an EXPIRED row - the provider's own answer
+            // is authoritative over this service's own expiry guess (see PaymentRepository
+            // #applyExpiredStatus's javadoc).
             paymentRepository.updateStatus(command.paymentId(), command.domainStatus());
         }
 

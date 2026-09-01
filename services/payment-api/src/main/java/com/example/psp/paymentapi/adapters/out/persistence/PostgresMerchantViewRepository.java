@@ -33,6 +33,7 @@ public class PostgresMerchantViewRepository implements MerchantViewRepository {
                 String.join(",", view.allowedCurrencies()),
                 view.webhookUrl(),
                 view.declineRateAlertThresholdBps(),
+                view.paymentExpirationSeconds(),
                 view.updatedAt());
     }
 

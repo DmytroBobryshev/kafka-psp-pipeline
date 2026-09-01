@@ -170,6 +170,16 @@ class PaymentQueryUseCaseTest {
         }
 
         @Override
+        public void applyExpiredStatus(UUID paymentId) {
+            throw new UnsupportedOperationException("not exercised by this test");
+        }
+
+        @Override
+        public List<Payment> findExpirationCandidates(java.time.Instant now) {
+            throw new UnsupportedOperationException("not exercised by this test");
+        }
+
+        @Override
         public PaymentPage search(String merchantId, PaymentStatus status, int page, int size) {
             throw new UnsupportedOperationException("not exercised by this test");
         }

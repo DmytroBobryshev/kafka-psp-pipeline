@@ -4,6 +4,7 @@ import com.example.psp.paymentapi.application.UpsertMerchantConfigCommand;
 import com.example.psp.paymentapi.domain.model.MerchantConfig;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
+import org.mapstruct.Named;
 import org.mapstruct.ReportingPolicy;
 
 /**
@@ -30,9 +31,26 @@ public interface MerchantConfigWebMapper {
     @Mapping(
             target = "declineRateAlertThresholdBps",
             source = "request.declineRateAlertThresholdBps")
+    @Mapping(
+            target = "paymentExpirationSeconds",
+            source = "request.paymentExpirationSeconds",
+            qualifiedByName = "resolvePaymentExpirationSeconds")
     UpsertMerchantConfigCommand toCommand(String merchantId, UpsertMerchantConfigRequest request);
 
     /** Enum {@code ->} String is MapStruct's built-in conversion; named explicitly for grep-ability. */
     @Mapping(target = "status", expression = "java(config.status().name())")
     MerchantConfigResponse toResponse(MerchantConfig config);
+
+    /**
+     * M22: {@code null} (the field absent from the request body) resolves to
+     * {@link MerchantConfig#DEFAULT_PAYMENT_EXPIRATION_SECONDS} here, once, so every downstream
+     * layer (command, domain, Avro, projection) always sees a concrete {@code int} - the same
+     * "resolve the optional field at the boundary" shape as {@code webhookUrl} staying
+     * {@code null} straight through instead (webhookUrl has no default to resolve TO; this field
+     * does).
+     */
+    @Named("resolvePaymentExpirationSeconds")
+    static int resolvePaymentExpirationSeconds(Integer requested) {
+        return requested == null ? MerchantConfig.DEFAULT_PAYMENT_EXPIRATION_SECONDS : requested;
+    }
 }

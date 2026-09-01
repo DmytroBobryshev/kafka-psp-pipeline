@@ -3,6 +3,8 @@ package com.example.psp.paymentapi.domain.port;
 import com.example.psp.paymentapi.domain.model.Payment;
 import com.example.psp.paymentapi.domain.model.PaymentPage;
 import com.example.psp.paymentapi.domain.model.PaymentStatus;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -55,6 +57,42 @@ public interface PaymentRepository {
      * reasoning as {@link #updateStatus}.
      */
     void applyPendingStatus(UUID paymentId);
+
+    /**
+     * M22: a NO-DOWNGRADE, conditional UPDATE for {@code EXPIRED} - {@code UPDATE ... SET status
+     * = 'EXPIRED' ... WHERE id = :paymentId AND status IN ('CREATED', 'PENDING')}. Same shape as
+     * {@link #applyPendingStatus}, generalised from a single required FROM state to a set of two:
+     * an EXPIRED outcome (published by {@code adapters.in.scheduler.PaymentExpirationScheduler})
+     * must never downgrade a payment that has already resolved to SUCCEEDED/FAILED, nor
+     * re-EXPIRE one that is already EXPIRED (the scheduler republishes the same deterministic
+     * eventId on every tick until the row actually leaves CREATED/PENDING, so this guard is what
+     * makes those republishes idempotent no-ops rather than redundant work).
+     *
+     * <p><b>The one status this guard deliberately does NOT protect against:</b> a
+     * late-arriving terminal outcome from psp-connector (SUCCEEDED/DECLINED) still applies via
+     * {@link #updateStatus}'s unconditional absolute UPDATE, even to a row already EXPIRED here -
+     * the provider's own answer is authoritative over this service's own expiry guess, so it is
+     * allowed to overwrite it. See {@code application.ApplyPaymentOutcomeUseCase#execute}.
+     *
+     * <p>A no-op (not an error) if {@code paymentId} is unknown to this table, or if the row has
+     * already left CREATED/PENDING - same reasoning as {@link #applyPendingStatus}.
+     */
+    void applyExpiredStatus(UUID paymentId);
+
+    /**
+     * M22: candidates for {@code adapters.in.scheduler.PaymentExpirationScheduler}'s sweep - every
+     * payment still {@code CREATED}/{@code PENDING} whose {@code createdAt} is older than its own
+     * merchant's configured {@code paymentExpirationSeconds} window (or the 900s default, for a
+     * merchant with no {@code merchant_configs} row at all - see the real adapter's javadoc for
+     * the LEFT JOIN + COALESCE this implies).
+     *
+     * @param now the instant to measure the window against - passed in rather than read from the
+     *     database's own clock so {@code application.ExpirePaymentsUseCase} stays testable with an
+     *     injected {@link java.time.Clock} (same reasoning as ledger's own
+     *     {@code SweepExpiredReservationsUseCase#execute}, which computes its cutoff in Java for
+     *     the identical reason).
+     */
+    List<Payment> findExpirationCandidates(Instant now);
 
     /**
      * M19's transactions-panel query: every payment for {@code merchantId} (or every merchant, if

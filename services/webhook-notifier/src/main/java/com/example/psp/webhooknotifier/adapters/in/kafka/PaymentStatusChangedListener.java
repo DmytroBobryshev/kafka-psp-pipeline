@@ -29,17 +29,25 @@ import org.springframework.stereotype.Component;
  * non-terminal, pre-provider-call event); M21 added {@code "IPN_RECEIVED"}/{@code "VERIFIED"}
  * (stage 3/4 trail events, emitted before the terminal outcome). None of the three has anything to
  * tell a merchant yet, so this filters by a terminal ALLOWLIST rather than growing an ever-longer
- * skip-list of non-terminal statuses one at a time - only {@code SUCCEEDED}/{@code DECLINED}
- * becomes a planned delivery; anything else is acknowledged and dropped before {@link
- * PlanWebhookDeliveryUseCase} - which stays reused unchanged across all three planner sources (see
- * its own javadoc) - ever sees it.
+ * skip-list of non-terminal statuses one at a time - {@code SUCCEEDED}/{@code DECLINED}/(M22)
+ * {@code EXPIRED} become a planned delivery; anything else is acknowledged and dropped before
+ * {@link PlanWebhookDeliveryUseCase} - which stays reused unchanged across all three planner
+ * sources (see its own javadoc) - ever sees it.
+ *
+ * <p>{@code EXPIRED} (M22, published by payment-api's own
+ * {@code adapters.in.scheduler.PaymentExpirationScheduler}) is terminal from a merchant-visibility
+ * standpoint even though it is produced by a different service than the other two: a merchant
+ * whose payment timed out still needs the same notification a decline would trigger - {@code
+ * eventType} stays the same {@code PAYMENT_STATUS_CHANGED} constant
+ * ({@code adapters.in.kafka.PaymentStatusChangedMapper}), so this widened allowlist is the only
+ * change EXPIRED needed on this side of the pipeline.
  */
 @Component
 public class PaymentStatusChangedListener {
 
     private static final Logger log = LoggerFactory.getLogger(PaymentStatusChangedListener.class);
 
-    private static final Set<String> TERMINAL_STATUSES = Set.of("SUCCEEDED", "DECLINED");
+    private static final Set<String> TERMINAL_STATUSES = Set.of("SUCCEEDED", "DECLINED", "EXPIRED");
 
     private final PlanWebhookDeliveryUseCase useCase;
     private final PaymentStatusChangedMapper mapper;

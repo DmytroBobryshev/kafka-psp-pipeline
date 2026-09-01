@@ -39,6 +39,7 @@ public class MerchantViewProjectionUseCase {
                         command.allowedCurrencies(),
                         command.webhookUrl(),
                         command.declineRateAlertThresholdBps(),
+                        command.paymentExpirationSeconds(),
                         command.updatedAt()));
     }
 

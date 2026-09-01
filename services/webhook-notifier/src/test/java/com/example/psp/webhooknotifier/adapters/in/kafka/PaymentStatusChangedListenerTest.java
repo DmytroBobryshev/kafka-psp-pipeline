@@ -47,6 +47,27 @@ class PaymentStatusChangedListenerTest {
         assertSkippedAndAcknowledged("VERIFIED");
     }
 
+    @Test
+    void expiredStatusIsPlannedAndAcknowledgedJustLikeSucceededOrDeclined() {
+        // M22: EXPIRED joined the terminal allowlist - a merchant whose payment timed out still
+        // gets notified, same as a decline. eventType stays PAYMENT_STATUS_CHANGED (the mapper's
+        // constant mapping is unchanged by status value).
+        RecordingPublisher publisher = new RecordingPublisher();
+        RetryChain chain =
+                new RetryChain("base", List.of(new RetryChain.Tier("retry5s", Duration.ofSeconds(5))), "dlq");
+        PlanWebhookDeliveryUseCase useCase = new PlanWebhookDeliveryUseCase(publisher, chain);
+        PaymentStatusChangedListener listener =
+                new PaymentStatusChangedListener(useCase, new PaymentStatusChangedMapperImpl());
+        RecordingAcknowledgment ack = new RecordingAcknowledgment();
+
+        listener.onMessage(eventWithStatus("EXPIRED"), ack);
+
+        assertThat(publisher.published).hasSize(1);
+        assertThat(publisher.published.get(0).eventType()).isEqualTo("PAYMENT_STATUS_CHANGED");
+        assertThat(publisher.published.get(0).status()).isEqualTo("EXPIRED");
+        assertThat(ack.acknowledged).isTrue();
+    }
+
     private static void assertSkippedAndAcknowledged(String status) {
         RecordingPublisher publisher = new RecordingPublisher();
         RetryChain chain =
