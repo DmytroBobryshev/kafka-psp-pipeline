@@ -2,7 +2,10 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getAllWindows, getMerchantWindows, getProjectedWindows, getStreamsState } from "../api/analyticsApi";
 import { listPayments } from "../api/paymentsApi";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { KebabMenu } from "../components/KebabMenu";
+import { FALLBACK_BADGE, STATUS_BADGE } from "../lib/badges";
+import { useCopy } from "../lib/clipboard";
 import { ApiError } from "../api/client";
 import type { WindowMetricsResponse } from "../api/types";
 
@@ -18,6 +21,8 @@ const LOOKBACKS = [5, 15, 60] as const;
  */
 export function DashboardPage() {
   const [merchantId, setMerchantId] = useState("");
+  const navigate = useNavigate();
+  const { copy, copiedKey } = useCopy();
   const [lookback, setLookback] = useState<number>(15);
   const [projected, setProjected] = useState(false);
   const trimmed = merchantId.trim();
@@ -121,35 +126,65 @@ export function DashboardPage() {
         ))}
       </div>
 
-      <div className="mb-6 rounded-lg border border-slate-300 bg-white p-4">
-        <div className="mb-2 flex items-center justify-between">
+      <div className="mb-6 rounded-lg border border-slate-300 bg-white">
+        <div className="flex items-center justify-between px-4 py-3">
           <h3 className="text-sm font-semibold text-slate-700">Latest operations</h3>
           <Link to="/payments" search={{ merchantId: undefined, paymentId: undefined }} className="rounded-md border border-slate-400 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 shadow-sm hover:bg-slate-200">
             open transactions panel →
           </Link>
         </div>
-        <div className="grid grid-cols-[110px_1fr_110px_110px_80px] gap-3 border-b border-slate-300 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-          <span>Payment</span>
-          <span>Merchant</span>
-          <span className="text-right">Amount</span>
-          <span className="text-right">Status</span>
-          <span className="text-right">Time</span>
-        </div>
-        <ul className="divide-y divide-slate-100 text-xs">
-          {(latest.data?.items ?? []).map((p) => (
-            <li key={p.id} className="grid grid-cols-[110px_1fr_110px_110px_80px] items-center gap-3 py-1.5">
-              <span className="truncate font-mono text-slate-600">{p.id.slice(0, 8)}…</span>
-              <span className="truncate">{p.merchantId}</span>
-              <span className="text-right tabular-nums">{p.amount} {p.currency}</span>
-              <span className="text-right">
-                <span className={`rounded px-2 py-0.5 font-semibold ${p.status === "SUCCEEDED" ? "bg-emerald-100 text-emerald-800 ring-1 ring-inset ring-emerald-600/40" : p.status === "FAILED" ? "bg-rose-100 text-rose-800 ring-1 ring-inset ring-rose-600/40" : "bg-slate-200 text-slate-800 ring-1 ring-inset ring-slate-500/40"}`}>
-                  {p.status}
-                </span>
-              </span>
-              <span className="text-right text-slate-500">{new Date(p.createdAt).toLocaleTimeString()}</span>
-            </li>
-          ))}
-        </ul>
+        <table className="w-full text-sm">
+          <thead className="bg-slate-100 text-left text-xs uppercase tracking-wide text-slate-600">
+            <tr>
+              <th className="px-4 py-3">Payment</th>
+              <th className="px-4 py-3">Merchant</th>
+              <th className="px-4 py-3 text-right">Amount</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Created</th>
+              <th className="w-10 px-2 py-3" />
+            </tr>
+          </thead>
+          <tbody>
+            {(latest.data?.items ?? []).map((p) => (
+              <tr
+                key={p.id}
+                onClick={() => navigate({ to: "/payments", search: { merchantId: undefined, paymentId: p.id } })}
+                className="cursor-pointer border-t border-slate-200 hover:bg-slate-100"
+              >
+                <td className="px-4 py-2 font-mono text-xs">{p.id.slice(0, 8)}…</td>
+                <td className="px-4 py-2">{p.merchantId}</td>
+                <td className="px-4 py-2 text-right tabular-nums">{p.amount} {p.currency}</td>
+                <td className="px-4 py-2">
+                  <span className={`rounded px-2 py-0.5 text-xs font-semibold ${STATUS_BADGE[p.status] ?? FALLBACK_BADGE}`}>
+                    {p.status}
+                  </span>
+                </td>
+                <td className="px-4 py-2 text-xs text-slate-600">{new Date(p.createdAt).toLocaleString()}</td>
+                <td className="px-2 py-2 text-right">
+                  <KebabMenu
+                    items={[
+                      {
+                        label: "View in transactions →",
+                        onClick: () => navigate({ to: "/payments", search: { merchantId: undefined, paymentId: p.id } }),
+                      },
+                      {
+                        label: copiedKey === p.id ? "Copied ✓" : "Copy payment ID",
+                        onClick: () => copy(p.id, p.id),
+                      },
+                      {
+                        label: "All from this merchant",
+                        onClick: () => navigate({ to: "/payments", search: { merchantId: p.merchantId, paymentId: undefined } }),
+                      },
+                    ]}
+                  />
+                </td>
+              </tr>
+            ))}
+            {latest.data?.items.length === 0 && (
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-500">No operations yet.</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
 
       {restoring && (

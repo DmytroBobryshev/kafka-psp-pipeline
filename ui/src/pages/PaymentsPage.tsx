@@ -10,17 +10,12 @@ import {
 } from "../api/paymentsApi";
 import { getRefundState, requestRefund } from "../api/refundApi";
 import { useCopy } from "../lib/clipboard";
+import { KebabMenu } from "../components/KebabMenu";
+import { FALLBACK_BADGE, STATUS_BADGE } from "../lib/badges";
 import type { RefundResponse } from "../api/types";
 import type { PaymentResponse } from "../api/types";
 
-const STATUSES = ["", "CREATED", "PENDING", "SUCCEEDED", "FAILED"] as const;
-
-const STATUS_BADGE: Record<string, string> = {
-  SUCCEEDED: "bg-emerald-100 text-emerald-800 ring-1 ring-inset ring-emerald-600/40",
-  FAILED: "bg-rose-100 text-rose-800 ring-1 ring-inset ring-rose-600/40",
-  PENDING: "bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-600/40",
-  CREATED: "bg-slate-200 text-slate-800 ring-1 ring-inset ring-slate-500/40",
-};
+const STATUSES = ["", "CREATED", "PENDING", "SUCCEEDED", "FAILED", "EXPIRED"] as const;
 
 /**
  * The single transactions panel (payments + their refunds + deliveries in one place): every payment the platform has ever taken, straight from payment-api's
@@ -29,11 +24,11 @@ const STATUS_BADGE: Record<string, string> = {
  * history, on-demand provider status (M12 request-reply over Kafka) and webhook deliveries.
  */
 export function PaymentsPage() {
-  const search = useSearch({ strict: false }) as { merchantId?: string };
+  const search = useSearch({ strict: false }) as { merchantId?: string; paymentId?: string };
   const [merchantId, setMerchantId] = useState(search.merchantId ?? "");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(0);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(search.paymentId ?? null);
   const [showRefundForm, setShowRefundForm] = useState(false);
   const [showProvider, setShowProvider] = useState(false);
   const { copy, copiedKey } = useCopy();
@@ -158,7 +153,7 @@ function PaymentRowGroup(props: {
         <td className="px-4 py-2">{p.merchantId}</td>
         <td className="px-4 py-2 text-right">{p.amount} {p.currency}</td>
         <td className="px-4 py-2">
-          <span className={`rounded px-2 py-0.5 text-xs font-semibold ${STATUS_BADGE[p.status] ?? "bg-slate-200 text-slate-700"}`}>
+          <span className={`rounded px-2 py-0.5 text-xs font-semibold ${STATUS_BADGE[p.status] ?? FALLBACK_BADGE}`}>
             {p.status}
           </span>
         </td>
@@ -191,52 +186,6 @@ function PaymentRowGroup(props: {
             />
           </td>
         </tr>
-      )}
-    </>
-  );
-}
-
-function KebabMenu({
-  items,
-}: {
-  items: { label: string; onClick: () => void; disabled?: boolean; title?: string }[];
-}) {
-  // position:fixed escapes the table container's clipping, so the menu never gets cut off
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  return (
-    <>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          if (pos) { setPos(null); return; }
-          const r = e.currentTarget.getBoundingClientRect();
-          setPos({ top: r.bottom + 4, left: r.right - 192 });
-        }}
-        title="Actions"
-        className="rounded-md border border-slate-400 bg-white px-2 py-0.5 text-base font-bold leading-tight text-slate-700 shadow-sm hover:bg-slate-200 hover:text-slate-900"
-      >
-        ⋮
-      </button>
-      {pos && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={(e) => { e.stopPropagation(); setPos(null); }} />
-          <div
-            style={{ top: pos.top, left: pos.left }}
-            className="fixed z-20 w-48 rounded-md border border-slate-300 bg-white py-1 text-left shadow-lg"
-          >
-            {items.map((it) => (
-              <button
-                key={it.label}
-                disabled={it.disabled}
-                title={it.title}
-                onClick={(e) => { e.stopPropagation(); setPos(null); it.onClick(); }}
-                className="block w-full px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-40"
-              >
-                {it.label}
-              </button>
-            ))}
-          </div>
-        </>
       )}
     </>
   );
@@ -446,6 +395,7 @@ function PaymentDetail({
             IPN_RECEIVED: "text-sky-700",
             VERIFIED: "text-sky-700",
             CREATED: "text-slate-700",
+            EXPIRED: "text-violet-700",
           };
           const LABEL: Record<string, string> = {
             CREATED: "Created",
@@ -454,6 +404,7 @@ function PaymentDetail({
             VERIFIED: "Status verified",
             SUCCEEDED: "Paid",
             FAILED: "Declined",
+            EXPIRED: "Expired",
           };
           let entries: Entry[];
           if (statusTrail.data?.length) {
