@@ -1,11 +1,5 @@
-# M3: run payment-api against the infra/compose stack (infra/compose/README.md, .env).
-# Activate with SPRING_PROFILES_ACTIVE=docker-compose (naming convention set by PLAN.md 0.2 for
-# every profile that targets the docker-compose stack, e.g. the Eureka discovery-server profile).
 spring:
   datasource:
-    # infra/compose/.env: PAYMENT_API_DB / PAYMENT_API_DB_USER / PAYMENT_API_DB_PASSWORD. This
-    # user can only ever connect to the payment_api database (ADR-0005's per-service Postgres
-    # grant, enforced at the container level, not just by convention here).
     url: jdbc:postgresql://localhost:5432/payment_api
     username: payment_api
     password: payment_api_pw
@@ -13,9 +7,6 @@ spring:
 
   jpa:
     hibernate:
-      # Flyway owns the schema (db/migration/V1__create_payments_table.sql); Hibernate only
-      # verifies the entity mapping matches what Flyway created - it must never generate DDL of
-      # its own in a service with a real migration tool.
       ddl-auto: validate
     open-in-view: false
 
@@ -24,37 +15,13 @@ spring:
     locations: classpath:db/migration
 
   kafka:
-    # Three brokers' HOST-side (EXTERNAL) listeners (infra/compose/README.md's advertised-
-    # listeners section) - a real multi-broker bootstrap list, not just kafka1, so the client can
-    # still discover the cluster if the first broker in the list happens to be down.
     bootstrap-servers: localhost:29092,localhost:29093,localhost:29094
 
-    # ---- M14: SASL/SCRAM-SHA-512 ---------------------------------------------------------------
-    # The EXTERNAL listener above requires authentication as of M14. `spring.kafka.properties` is
-    # the COMMON block: Spring Boot merges it into the producer, the consumer AND the admin client,
-    # which is what makes one four-line block enough for a service that is several of those at
-    # once. Putting it under spring.kafka.consumer.properties instead is the classic half-fix - the
-    # consumer connects and the producer does not.
-    #
-    # The USERNAME is committed on purpose: it is this service's identity, not a secret, and it is
-    # the exact string the ACLs in infra/compose/kafka-init/init-security.sh key off
-    # (User:payment-api). The PASSWORD is a placeholder resolved from the environment, and has no
-    # default - a service that silently starts with the wrong credential produces authorization
-    # errors that look like a missing ACL and waste an hour, so it fails fast instead:
-    #
-    #   set -a; . infra/compose/.env; set +a
-    #   SPRING_PROFILES_ACTIVE=docker-compose mvn -pl services/payment-api -am spring-boot:run
-    #
-    # This block lives in the docker-compose profile ONLY. The default profile and the test profile
-    # stay unauthenticated, so @EmbeddedKafka in `mvn verify` is unaffected.
     properties:
       security.protocol: SASL_PLAINTEXT
       sasl.mechanism: SCRAM-SHA-512
       sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="payment-api" password="${PAYMENT_API_KAFKA_PASSWORD}";'
 
-# M16/ADR-0009: registers with the discovery-server container's published host port so
-# api-gateway (also on the HOST) can resolve lb://payment-api through Eureka. hostname: localhost
-# so the registered address is dialable by another host process, not the machine's real hostname.
 eureka:
   client:
     enabled: true
@@ -64,23 +31,15 @@ eureka:
     hostname: localhost
     lease-renewal-interval-in-seconds: 5
 
-# M9 Phase 1: payment-api runs on the HOST (java -jar ...), so it reaches Schema Registry via its
-# published host port - localhost:8081, per infra/compose/.env's SCHEMA_REGISTRY_PORT - the same
-# host/compose-network split every other infra address in this file already follows.
 payment-api:
   schema-registry:
     url: http://localhost:8081
-  # M13: same host/compose-network split as schema-registry above - payment-api runs on the HOST,
-  # so it reaches MinIO via its published host port (infra/compose/.env's MINIO_API_PORT).
   disputes:
     minio:
       endpoint: http://localhost:${MINIO_API_PORT:9000}
       access-key: ${MINIO_ROOT_USER:minioadmin}
       secret-key: ${MINIO_ROOT_PASSWORD}
 
-# M15: same host/compose-network split as schema-registry above - payment-api runs on the HOST, so
-# it reaches Tempo via its published OTLP/HTTP port (infra/compose/.env's TEMPO_OTLP_HTTP_PORT,
-# default 4318), not the compose-DNS name tempo:4318 an in-network client would use.
 management:
   otlp:
     tracing:

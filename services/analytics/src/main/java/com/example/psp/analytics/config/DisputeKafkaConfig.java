@@ -20,16 +20,6 @@ import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.util.backoff.FixedBackOff;
 
-/**
- * Consumer wiring for {@code adapters.in.kafka.DisputeOpenedListener} (M13) - a plain,
- * single-record {@code @KafkaListener}, independent of both the Kafka Streams application
- * ({@code config.KafkaStreamsConfig}) and the batch listener ({@code config.
- * BatchListenerKafkaConfig}). Mirrors payment-api's {@code PaymentStatusViewKafkaConfig}: the same
- * Avro {@code ConsumerFactory} pattern ({@code ErrorHandlingDeserializer} wrapping {@link
- * KafkaAvroDeserializer}, {@code specific.avro.reader=true}) and the same "no DLQ, zero-retry
- * {@link DefaultErrorHandler}, log and skip" shape - see {@code adapters.in.kafka.
- * DisputeOpenedListener}'s javadoc for why this consumer carries no DLQ.
- */
 @Configuration
 public class DisputeKafkaConfig {
 
@@ -67,8 +57,6 @@ public class DisputeKafkaConfig {
         factory.getContainerProperties().setObservationRegistry(observationRegistry);
         factory.getContainerProperties().setObservationEnabled(true);
 
-        // No DLQ (see DisputeOpenedListener's javadoc) - zero retries, log and skip via the
-        // default (no-recoverer) DefaultErrorHandler.
         factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
         return factory;
     }

@@ -8,16 +8,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * M11 step 2: listens on {@code refunds.refund-requested.v1} using the SAME transactional
- * machinery M7's {@link com.example.psp.ledger.adapters.in.kafka.PaymentStatusChangedListener}
- * established - {@code containerFactory} wires
- * {@code ContainerProperties.setKafkaAwareTransactionManager(...)} (see
- * {@code config.RefundKafkaConsumerConfig}), so this method runs inside the same per-record Kafka
- * transaction shape: no {@code Acknowledgment} parameter, offsets committed atomically with
- * whatever this use case publishes, via the container - not by anything in this class. See
- * {@code PaymentStatusChangedListener}'s javadoc for the full mechanics; unchanged here.
- */
 @Component
 public class RefundRequestedListener {
 
@@ -46,8 +36,5 @@ public class RefundRequestedListener {
 
         useCase.execute(mapper.toCommand(event));
 
-        // No ack.acknowledge() - returning normally is what commits both the produced event
-        // (refunds.funds-reserved.v1 or refunds.refund-failed.v1) and the consumed offset,
-        // together, exactly like PaymentStatusChangedListener.
     }
 }

@@ -6,13 +6,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the persistence boundary (ADR-0007): domain {@code <->} MongoDB document.
- * Same convention as {@code MetricsProjectionMapper} (M10) - {@code unmappedTargetPolicy = ERROR}
- * so a field added to the document without a mapping fails the build, and {@code projectedAt} is
- * supplied by the caller rather than mapped, since it is a write-time fact, not part of the
- * domain record.
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface AuthorizationLatencyMapper {
 

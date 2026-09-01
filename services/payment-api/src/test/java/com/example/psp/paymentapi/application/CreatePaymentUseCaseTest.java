@@ -23,11 +23,6 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
-/**
- * Plain JUnit against {@code application/} + {@code domain/} - no Spring context, no Kafka, no
- * database. This is exactly the ArchUnit-enforced payoff described in ADR-0007: the interesting
- * logic is testable without any framework in the loop.
- */
 class CreatePaymentUseCaseTest {
 
     @Test
@@ -107,8 +102,6 @@ class CreatePaymentUseCaseTest {
                 new CreatePaymentUseCase(
                         repository, new StubMerchantViewRepository(merchant), new RecordingFakePublisher());
 
-        // GBP is allowed even though it is not the payoutCurrency (EUR) - the gate checks
-        // membership in the whole set, not equality with the single settlement currency.
         Payment result =
                 useCase.execute(new CreatePaymentCommand("merchant-3", new Money(BigDecimal.TEN, "GBP")));
 
@@ -188,7 +181,6 @@ class CreatePaymentUseCaseTest {
                         Instant.now()));
     }
 
-    /** Fake port: returns the fixed {@link MerchantView} passed at construction, or empty. */
     private static final class StubMerchantViewRepository implements MerchantViewRepository {
         private final MerchantView view;
 
@@ -231,13 +223,6 @@ class CreatePaymentUseCaseTest {
             return Optional.ofNullable(store.get(id));
         }
 
-        /**
-         * Neither of the two methods below is exercised by this test - CreatePaymentUseCase only
-         * saves. They are implemented because the port declares them, and they throw rather than
-         * fake anything: an in-memory filter/paginate would be a second, untested implementation of
-         * PaymentQueryUseCase's contract living in a test file, and a silent no-op updateStatus
-         * would let a future test pass while asserting nothing.
-         */
         @Override
         public PaymentPage search(String merchantId, PaymentStatus status, int page, int size) {
             throw new UnsupportedOperationException(

@@ -8,11 +8,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the refund web hexagon boundary (M11, ADR-0007).
- * {@code componentModel = "spring"}, {@code unmappedTargetPolicy = ERROR} - same rule as every
- * other boundary mapper in this codebase.
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface RefundWebMapper {
 

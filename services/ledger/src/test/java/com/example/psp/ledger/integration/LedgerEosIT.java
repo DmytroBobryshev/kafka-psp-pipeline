@@ -52,50 +52,6 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 
-/**
- * M19 "Plus" for the ledger: <b>{@code M} distinct payment-status events, delivered {@code M + D}
- * times, produce exactly {@code M} ledger entries, exactly {@code M} published
- * {@code ledger.ledger-entry-recorded.v1} records visible under {@code read_committed}, and a
- * balance equal to the sum of the {@code M}.</b>
- *
- * <h2>The two mechanisms this exercises, and which one actually does the work</h2>
- *
- * <p>M7's README makes a claim worth having a test for: Kafka's exactly-once semantics are NOT what
- * keeps the balance correct. Both mechanisms are live here and each is asserted from the side it
- * governs:
- *
- * <ul>
- *   <li><b>The Kafka transaction</b> ({@code config.KafkaProducerConfig}'s
- *       {@code transactional.id} + the container's {@code KafkaAwareTransactionManager}) covers
- *       Kafka only: the produced record and the consumed offset commit together, atomically. Its
- *       visible consequence is the {@code read_committed} count on the outbound topic - which is
- *       what a real broker is needed for, since a transaction coordinator and an LSO are not
- *       things a mock can fake.
- *   <li><b>{@code uq_ledger_entries_inbound_event_id}</b> (V1) covers the database, which no Kafka
- *       transaction can reach. Its visible consequence is that the {@value #DUPLICATE_COUNT}
- *       redelivered events - byte-identical envelope {@code eventId}s, exactly what psp-connector's
- *       drill-9 republish produces - move no money. Drop the constraint and the Kafka transaction
- *       keeps working while the balance quietly doubles for those payments.
- * </ul>
- *
- * <p>Deliveries are addressed to a single merchant on purpose: {@code merchant_balances} is one row
- * per merchant, so this is also the single-writer-per-balance path, and {@code balance = M * amount}
- * only holds if nothing double-applied.
- *
- * <h2>Containers</h2>
- *
- * <p>Real KRaft Kafka ({@code apache/kafka} via {@code org.testcontainers.kafka.KafkaContainer},
- * which already sets {@code transaction.state.log.replication.factor=1} and
- * {@code transaction.state.log.min.isr=1} - a transactional producer refuses to start on a
- * single-broker cluster without them) and real Postgres, so Flyway V1-V2 create the actual
- * constraint under test. Both are {@code static} singletons started once per JVM rather than
- * {@code @Container}-managed per class; Ryuk reaps them at JVM exit.
- *
- * <p>No Schema Registry container: {@code mock://<scope>} makes Confluent's serializers resolve a
- * JVM-static {@code MockSchemaRegistryClient}, shared by the application (same JVM, it is an
- * {@code @SpringBootTest}) and by this test's own producer/consumer. Identical schema ids,
- * identical wire bytes, one fewer image.
- */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("integration-test")
 class LedgerEosIT {
@@ -121,10 +77,8 @@ class LedgerEosIT {
 
     private static final String ENTRY_TOPIC = "ledger.ledger-entry-recorded.v1.eos-it";
 
-    /** Distinct payments. */
     private static final int PAYMENT_COUNT = 8;
 
-    /** How many of those are ALSO delivered a second time, under the same envelope eventId. */
     private static final int DUPLICATE_COUNT = 3;
 
     private static final String MERCHANT_ID = "merchant-eos-it";
@@ -137,9 +91,6 @@ class LedgerEosIT {
 
     @BeforeAll
     static void createIntegrationTopics() {
-        // The two IT-scoped topics, plus the refunds.* topics the ledger's OTHER listeners
-        // (M11 saga) subscribe to - created up front so those containers get a clean assignment
-        // instead of racing the broker's auto-creation.
         createTopics(
                 Map.of(
                         STATUS_TOPIC, 1,
@@ -167,8 +118,6 @@ class LedgerEosIT {
         registry.add("ledger.kafka.payment-status-changed-topic", () -> STATUS_TOPIC);
         registry.add("ledger.kafka.ledger-entry-recorded-topic", () -> ENTRY_TOPIC);
         registry.add("spring.kafka.consumer.group-id", () -> "ledger.eos-it.v1");
-        // transactional.id must be stable per logical instance (KafkaProducerConfig's javadoc
-        // spends three paragraphs on why); "one IT run = one instance" makes this one right.
         registry.add("ledger.kafka.transactional-id-prefix", () -> "ledger-tx-eos-it-");
     }
 
@@ -188,9 +137,6 @@ class LedgerEosIT {
             }
             producer.flush();
 
-            // The redeliveries. Same envelope eventId, same payload - exactly the shape
-            // psp-connector's M19 drill-9 republish puts on this topic, and exactly what an
-            // operator resetting this group's offsets to earliest would replay.
             for (int i = 0; i < DUPLICATE_COUNT; i++) {
                 UUID eventId = eventIds.get(i);
                 producer.send(
@@ -271,11 +217,6 @@ class LedgerEosIT {
                 .isEqualTo(PAYMENT_COUNT);
     }
 
-    // ---------------------------------------------------------------------------------------
-    // Fixtures
-    // ---------------------------------------------------------------------------------------
-
-    /** A {@code payments.payment-status-changed.v1} exactly as psp-connector publishes it. */
     private static PaymentStatusChanged succeeded(UUID eventId, UUID paymentId) {
         EventEnvelope envelope =
                 EventEnvelope.newBuilder()
@@ -294,8 +235,6 @@ class LedgerEosIT {
                 .setEnvelope(envelope)
                 .setPaymentId(paymentId.toString())
                 .setMerchantId(MERCHANT_ID)
-                // scale 4 - 03-payment-status-changed.avsc declares decimal(19,4) and Avro's
-                // decimal conversion rejects any other scale.
                 .setAmount(AMOUNT)
                 .setCurrency("EUR")
                 .setStatus("SUCCEEDED")
@@ -315,12 +254,6 @@ class LedgerEosIT {
         return new KafkaProducer<>(props);
     }
 
-    /**
-     * {@code isolation.level=read_committed} is the assertion, not a detail: it is what makes the
-     * count reflect only records whose Kafka transaction committed. Under the default
-     * {@code read_uncommitted} an aborted transaction's records would be counted too, and the
-     * "exactly M" assertion would be measuring something else entirely.
-     */
     private static KafkaConsumer<String, LedgerEntryRecorded> entryRecordedConsumer() {
         Map<String, Object> props = new HashMap<>();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
@@ -371,7 +304,6 @@ class LedgerEosIT {
         }
     }
 
-    /** By topic, not by listener id - the production {@code @KafkaListener}s declare no id. */
     private MessageListenerContainer listenerContainerFor(String topic) {
         return listenerEndpointRegistry.getListenerContainers().stream()
                 .filter(

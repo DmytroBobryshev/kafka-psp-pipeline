@@ -9,14 +9,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 
-/**
- * Real Postgres adapter for {@link RefundAttemptLogRepository}. Talks to the {@code psp_connector}
- * database (infra/compose, ADR-0005) via Spring Data JPA; same
- * {@code saveAndFlush}-inside-its-own-implicit-transaction shape as
- * {@code PostgresAttemptLogRepository} (M5) - not itself {@code @Transactional}, so a
- * {@code DataIntegrityViolationException} surfaces synchronously from this call, inside this
- * method's own try/catch.
- */
 @Repository
 public class PostgresRefundAttemptLogRepository implements RefundAttemptLogRepository {
 
@@ -38,9 +30,6 @@ public class PostgresRefundAttemptLogRepository implements RefundAttemptLogRepos
 
     @Override
     public Optional<RefundAttempt> findByInboundEventId(UUID inboundEventId) {
-        // The refund table has no separate inbound_event_id column: the inbound event id IS
-        // causation_event_id (uq_refund_attempts_causation_event_id, V3) - same translation as
-        // existsByInboundEventId above.
         return jpaRepository.findByCausationEventId(inboundEventId).map(mapper::toDomain);
     }
 

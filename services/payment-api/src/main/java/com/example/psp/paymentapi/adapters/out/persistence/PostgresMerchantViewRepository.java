@@ -10,7 +10,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 
-/** Postgres adapter for {@link MerchantViewRepository}, same shape as {@link PostgresPaymentRepository}. */
 @Repository
 public class PostgresMerchantViewRepository implements MerchantViewRepository {
 

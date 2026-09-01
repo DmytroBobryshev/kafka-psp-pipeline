@@ -20,34 +20,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.stereotype.Component;
 
-/**
- * Real Kafka adapter for {@link DlqReader}. A short-lived {@link Consumer}, created fresh per call
- * under its own dedicated {@code group.id} ({@code psp-connector.dlq-replay.consumer-group} - see
- * {@code config.KafkaConsumerConfig#dlqReplayConsumerFactory}, entirely separate from
- * {@code psp-connector.v1}), reads at most one bounded batch, commits exactly the offsets it
- * actually processed, and closes - the same shape webhook-notifier's M8
- * {@code adapters.out.kafka.KafkaDlqReader} uses.
- *
- * <h2>Raw bytes, not the decoded Avro record</h2>
- *
- * <p>The consumer factory this reads from deserializes the key as a plain string and the value as
- * plain bytes (see {@code config.KafkaConsumerConfig}) - it never decodes the DLQ record's value as
- * the generated {@code PaymentRequested} Avro class. Replay's whole job is to put the record back on
- * {@code payments.payment-requested.v1} byte-for-byte unchanged, so there is nothing to decode
- * <em>for</em>; reading raw bytes also means this reader can never itself throw a deserialization
- * error on a record already sitting in a dead-letter queue, so unlike every OTHER consumer factory
- * in this service, it needs no {@code ErrorHandlingDeserializer} wrapper at all.
- *
- * <h2>The guard, mechanically</h2>
- *
- * <p>The consumer factory's {@code max.poll.records} is set to
- * {@code psp-connector.dlq-replay.max-batch-size} (default 50), so one {@link Consumer#poll} can
- * never physically return more than that many records regardless of what the caller asked for.
- * {@code maxRecords} additionally clamps that ceiling DOWN per call, and only the offsets of the
- * records actually taken are committed - any remainder from the same {@code poll()} is left
- * uncommitted and is read again (and re-clamped) on the NEXT call, so no record is ever skipped by
- * an over-eager commit.
- */
 @Component
 public class KafkaDlqReader implements DlqReader {
 
@@ -75,8 +47,6 @@ public class KafkaDlqReader implements DlqReader {
 
         try (Consumer<String, byte[]> consumer = dlqReplayConsumerFactory.createConsumer()) {
             consumer.subscribe(List.of(dlqTopic));
-            // Triggers the initial partition assignment (a bare subscribe() does not poll) so the
-            // real poll below can return data on the very first call.
             consumer.poll(Duration.ZERO);
 
             ConsumerRecords<String, byte[]> polled = consumer.poll(pollTimeout);

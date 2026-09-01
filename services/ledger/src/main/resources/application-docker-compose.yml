@@ -1,11 +1,5 @@
-# M7: run the ledger against the infra/compose stack (infra/compose/README.md, .env).
-# Activate with SPRING_PROFILES_ACTIVE=docker-compose (same convention as payment-api and
-# psp-connector).
 spring:
   datasource:
-    # infra/compose/.env: LEDGER_DB / LEDGER_DB_USER / LEDGER_DB_PASSWORD. This user can only ever
-    # connect to the `ledger` database (ADR-0005's per-service Postgres grant, enforced at the
-    # container level - `psql -U ledger -d payment_api` fails with "permission denied").
     url: jdbc:postgresql://localhost:5432/ledger
     username: ledger
     password: ledger_pw
@@ -13,8 +7,6 @@ spring:
 
   jpa:
     hibernate:
-      # Flyway owns the schema (db/migration/V1__create_ledger_tables.sql); Hibernate only verifies
-      # the entity mapping matches what Flyway created.
       ddl-auto: validate
     open-in-view: false
 
@@ -23,37 +15,13 @@ spring:
     locations: classpath:db/migration
 
   kafka:
-    # Three brokers' HOST-side (EXTERNAL) listeners - same rationale as payment-api's and
-    # psp-connector's equivalent entries (infra/compose/README.md's advertised-listeners section).
-    # All three matter more here than elsewhere: the transaction coordinator for this producer's
-    # transactional.id is whichever broker leads the hashed __transaction_state partition, and it
-    # is generally not the same broker as any data-partition leader.
     bootstrap-servers: localhost:29092,localhost:29093,localhost:29094
 
-    # ---- M14: SASL/SCRAM-SHA-512 ---------------------------------------------------------------
-    # The EXTERNAL listener above requires authentication as of M14. `spring.kafka.properties` is
-    # the COMMON block: Spring Boot merges it into the producer, the consumer AND the admin client,
-    # which is what makes one four-line block enough for a service that is several of those at
-    # once. Putting it under spring.kafka.consumer.properties instead is the classic half-fix - the
-    # consumer connects and the producer does not.
-    #
-    # The USERNAME is committed on purpose: it is this service's identity, not a secret, and it is
-    # the exact string the ACLs in infra/compose/kafka-init/init-security.sh key off
-    # (User:ledger). The PASSWORD is a placeholder resolved from the environment, and has no
-    # default - a service that silently starts with the wrong credential produces authorization
-    # errors that look like a missing ACL and waste an hour, so it fails fast instead:
-    #
-    #   set -a; . infra/compose/.env; set +a
-    #   SPRING_PROFILES_ACTIVE=docker-compose mvn -pl services/ledger -am spring-boot:run
-    #
-    # This block lives in the docker-compose profile ONLY. The default profile and the test profile
-    # stay unauthenticated, so @EmbeddedKafka in `mvn verify` is unaffected.
     properties:
       security.protocol: SASL_PLAINTEXT
       sasl.mechanism: SCRAM-SHA-512
       sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="ledger" password="${LEDGER_KAFKA_PASSWORD}";'
 
-# M16/ADR-0009: same convention as payment-api/application-docker-compose.yml's identical block.
 eureka:
   client:
     enabled: true
@@ -63,13 +31,10 @@ eureka:
     hostname: localhost
     lease-renewal-interval-in-seconds: 5
 
-# M9 Phase 2: ledger runs on the HOST (java -jar ...), so it reaches Schema Registry via its
-# published host port - localhost:8081, same convention as psp-connector's equivalent entry.
 ledger:
   schema-registry:
     url: http://localhost:8081
 
-# M15: same host/compose-network split as schema-registry above.
 management:
   otlp:
     tracing:

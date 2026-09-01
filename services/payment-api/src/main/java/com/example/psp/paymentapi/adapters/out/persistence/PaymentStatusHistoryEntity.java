@@ -10,17 +10,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/**
- * JPA entity for the {@code payment_status_history} table (M20; schema owned by
- * {@code db/migration/V9__create_payment_status_history_table.sql}, Flyway-managed - ADR-0005).
- * Deliberately NOT {@code @Data} - same rule as {@link PaymentEntity}/{@code RefundEntity}.
- *
- * <p>{@code eventId} is NOT annotated {@code unique = true} here - same convention as
- * psp-connector's {@code PaymentAttemptEntity#inboundEventId}: the docker-compose profile runs
- * Hibernate with {@code ddl-auto=validate}, which only checks column existence/type against
- * Flyway's schema, not constraints, so the real UNIQUE constraint lives solely in the V9
- * migration SQL.
- */
 @Entity
 @Table(name = "payment_status_history")
 @Getter
@@ -34,13 +23,9 @@ public class PaymentStatusHistoryEntity {
     @Column(name = "payment_id", nullable = false)
     private UUID paymentId;
 
-    // M21: the event's raw wire status string (was PaymentStatus via @Enumerated through M20) -
-    // see domain.model.PaymentStatusHistoryEntry's javadoc for why.
     @Column(nullable = false, length = 20)
     private String status;
 
-    // M21 (V10): the provider's own event id, or null - see
-    // domain.model.PaymentStatusHistoryEntry#getProviderReference()'s javadoc.
     @Column(name = "provider_reference", length = 64)
     private String providerReference;
 

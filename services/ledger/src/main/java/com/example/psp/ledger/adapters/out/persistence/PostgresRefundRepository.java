@@ -18,13 +18,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 
-/**
- * Real Postgres adapter for {@link RefundRepository} (M11). Deliberately <b>not</b>
- * {@code @Transactional} itself - the transaction lives one level down in
- * {@link RefundWriteTransaction}, precisely so the {@code catch} blocks below sit outside it. See
- * that class's javadoc for why the split is load-bearing rather than stylistic (same reasoning as
- * {@code PostgresLedgerRepository}, M7).
- */
 @Repository
 public class PostgresRefundRepository implements RefundRepository {
 
@@ -57,10 +50,6 @@ public class PostgresRefundRepository implements RefundRepository {
         try {
             return writeTransaction.reserveOrFail(reservation, inboundEventId, insufficientBalanceReason);
         } catch (DataIntegrityViolationException e) {
-            // refund_processed_events rejected the insert: a concurrent delivery of this same
-            // inbound event won the check-then-act race the use case's check-first path cannot
-            // close alone. Normal outcome of at-least-once delivery under concurrency - reported by
-            // return value, never rethrown (RefundRepository#tryReserveOrFail's contract).
             log.debug(
                     "Unique constraint rejected duplicate refund-requested inboundEventId={} refundId={}",
                     inboundEventId,
@@ -112,9 +101,6 @@ public class PostgresRefundRepository implements RefundRepository {
 
     @Override
     public ReleaseOutcome tryReleaseForTimeout(UUID refundId) {
-        // No inbound Kafka event to race on - the guarded transition's own compare-and-swap is the
-        // sole race guard here (see RefundWriteTransaction#release). A DataIntegrityViolationException
-        // is not reachable on this path, but the catch is kept for defence-in-depth and symmetry.
         try {
             return writeTransaction.release(refundId, "TIMEOUT", null);
         } catch (DataIntegrityViolationException e) {

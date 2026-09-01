@@ -5,15 +5,6 @@ import com.example.psp.ledger.domain.model.RefundRequest;
 import com.example.psp.ledger.domain.model.RefundSagaState;
 import org.springframework.stereotype.Component;
 
-/**
- * Builds the Avro wire records for the ledger's three M11 refund-saga publications
- * ({@code refunds.funds-reserved.v1}, {@code refunds.refund-failed.v1},
- * {@code refunds.reservation-released.v1}) from a hand-written {@link EventEnvelope} plus the
- * relevant domain type. A plain class with three methods, not a MapStruct {@code @Mapper} - same
- * established exception as {@code LedgerEntryAvroEventFactory} (M9 Phase 2) and every other
- * *AvroEventFactory in this codebase: each target is a small flat record reached through the
- * generated {@code newBuilder()}/{@code build()}, not worth an annotation-processed interface.
- */
 @Component
 public class RefundEventAvroFactory {
 

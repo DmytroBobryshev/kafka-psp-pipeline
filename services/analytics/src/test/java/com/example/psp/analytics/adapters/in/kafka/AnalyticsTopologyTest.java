@@ -43,21 +43,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/**
- * Runs the <b>real</b> topology (M10) under {@code TopologyTestDriver} - no broker, no Schema
- * Registry (a {@code mock://} URL gives Confluent's serdes an in-memory registry), no Mongo.
- *
- * <p>This is where the module's behavioural claims are actually asserted rather than described:
- * tumbling window boundaries, the grace period accepting one late record and dropping a later
- * one, {@code leftJoin} keeping payments for unconfigured merchants, and - the headline - a
- * <b>tombstone removing the row from the {@code GlobalKTable}</b> with no tombstone-handling code
- * anywhere in the topology.
- *
- * <p>{@code statestore.cache.max.bytes=0} below is the standard {@code TopologyTestDriver}
- * setting and also a demonstration: with the cache off, every input record produces a downstream
- * emit, which is exactly the behaviour {@code config.KafkaStreamsConfig}'s comment warns about for
- * the Mongo projection.
- */
 class AnalyticsTopologyTest {
 
     private static final String PAYMENTS_TOPIC = "payments.payment-status-changed.v1";
@@ -65,7 +50,6 @@ class AnalyticsTopologyTest {
     private static final String REQUESTED_TOPIC = "payments.payment-requested.v1";
     private static final String MERCHANT = "acme";
 
-    /** 12:00:00Z exactly - a tumbling-window boundary, so window maths is readable. */
     private static final Instant BASE = Instant.parse("2026-08-11T12:00:00Z");
 
     @TempDir private Path stateDir;
@@ -180,11 +164,7 @@ class AnalyticsTopologyTest {
 
         payments.pipeInput(MERCHANT, payment("SUCCEEDED", BASE.plusSeconds(10)));
 
-        // Advance stream time to 12:01:20 - past the first window's end (12:01:00) but still
-        // inside its 30s grace (until 12:01:30).
         payments.pipeInput(MERCHANT, payment("SUCCEEDED", BASE.plusSeconds(80)));
-        // A record whose EVENT time is back in the first window: accepted, because grace has not
-        // expired.
         payments.pipeInput(MERCHANT, payment("DECLINED", BASE.plusSeconds(20)));
 
         assertThat(projections.latestFor(MERCHANT, BASE).metrics().totalCount()).isEqualTo(2L);
@@ -193,9 +173,6 @@ class AnalyticsTopologyTest {
         payments.pipeInput(MERCHANT, payment("SUCCEEDED", BASE.plusSeconds(120)));
         payments.pipeInput(MERCHANT, payment("DECLINED", BASE.plusSeconds(30)));
 
-        // Silently dropped - the first window is closed for good. "Silently" is literal: Streams
-        // counts it in the `late-record-drop` metric and emits nothing, which is why a grace
-        // period that is too short is invisible unless you look at that metric.
         assertThat(projections.latestFor(MERCHANT, BASE).metrics().totalCount()).isEqualTo(2L);
     }
 
@@ -207,8 +184,6 @@ class AnalyticsTopologyTest {
         MerchantMetricsWindow window = projections.latestFor("never-configured", BASE);
         assertThat(window.metrics().totalCount()).isEqualTo(1L);
         assertThat(window.metrics().merchantDisplayName()).isNull();
-        // An unknown merchant cannot breach a threshold it does not have - but its volume is NOT
-        // lost, which an inner join would have done.
         assertThat(window.metrics().declineRateAlert()).isFalse();
     }
 
@@ -238,8 +213,6 @@ class AnalyticsTopologyTest {
         merchantConfig.pipeInput(MERCHANT, config("ACME Corp", 1500));
         payments.pipeInput(MERCHANT, payment("SUCCEEDED", BASE.plusSeconds(5)));
 
-        // Exactly what the interactive-query adapter does at runtime, minus the KafkaStreams
-        // lifecycle checks: fetch(key, from, to) on a window store.
         WindowStore<String, MerchantWindowMetrics> store =
                 driver.getWindowStore(StreamsStores.MERCHANT_METRICS);
 
@@ -252,10 +225,6 @@ class AnalyticsTopologyTest {
 
         assertThat(windowStarts).containsExactly(BASE.toEpochMilli());
     }
-
-    // ---------------------------------------------------------------------------------------
-    // M13: the stream-stream join
-    // ---------------------------------------------------------------------------------------
 
     @Test
     void joinsARequestAndItsStatusChangeIntoAGenuineAuthorizationLatency() {
@@ -272,8 +241,6 @@ class AnalyticsTopologyTest {
         assertThat(latency.declined()).isFalse();
         assertThat(latency.requestedAt()).isEqualTo(BASE);
         assertThat(latency.decidedAt()).isEqualTo(BASE.plusSeconds(30));
-        // The genuine authorization-latency figure: decidedAt - requestedAt, in milliseconds -
-        // NOT the M10 avgPipelineLatencyMillis measure (now - occurredAt).
         assertThat(latency.latencyMillis()).isEqualTo(30_000L);
     }
 
@@ -286,18 +253,11 @@ class AnalyticsTopologyTest {
         payments.pipeInput(
                 MERCHANT, paymentWithId(paymentId, MERCHANT, "SUCCEEDED", BASE.plus(Duration.ofMinutes(10))));
 
-        // Not lost - just not joined. The payment-requested and payment-status-changed records
-        // themselves are untouched (this test only asserts the derived, analytics-only latency
-        // view); see the topology's class javadoc, "What happens to a record outside the
-        // window".
         assertThat(authorizationLatencies.has(paymentId)).isFalse();
     }
 
     @Test
     void aStatusChangeWithNoMatchingRequestProducesNoLatencyRecord() {
-        // Status change for a payment that never had a payment-requested record piped in at all
-        // (e.g. still upstream of this join, or genuinely lost before it) - the inner join simply
-        // never fires for it.
         payments.pipeInput(MERCHANT, paymentWithId("pay-m13-orphan", MERCHANT, "SUCCEEDED", BASE));
 
         assertThat(authorizationLatencies.has("pay-m13-orphan")).isFalse();
@@ -324,8 +284,6 @@ class AnalyticsTopologyTest {
         return paymentWithId(UUID.randomUUID().toString(), merchantId, status, occurredAt);
     }
 
-    /** Same shape as {@link #payment}, with an explicit {@code paymentId} - what the M13 join
-     * matches on. */
     private static PaymentStatusChanged paymentWithId(
             String paymentId, String merchantId, String status, Instant occurredAt) {
         return PaymentStatusChanged.newBuilder()
@@ -340,8 +298,6 @@ class AnalyticsTopologyTest {
                 .build();
     }
 
-    /** {@code payments.payment-requested.v1} - keyed by {@code paymentId} (ADR-0003), the M13
-     * join's other input. */
     private static PaymentRequested requestedPayment(String paymentId, String merchantId, Instant occurredAt) {
         return PaymentRequested.newBuilder()
                 .setEnvelope(envelope("payments.payment-requested.v1", paymentId, occurredAt))
@@ -380,7 +336,6 @@ class AnalyticsTopologyTest {
                 .build();
     }
 
-    /** In-memory stand-in for MongoDB; keyed exactly like the real projection's {@code _id}. */
     private static final class RecordingProjectionRepository implements MetricsProjectionRepository {
 
         private final Map<String, MerchantMetricsWindow> byKey = new LinkedHashMap<>();
@@ -406,8 +361,6 @@ class AnalyticsTopologyTest {
         }
     }
 
-    /** In-memory stand-in for the M13 {@code authorization_latency} Mongo projection, keyed
-     * exactly like the real one: {@code paymentId}. */
     private static final class RecordingAuthorizationLatencyProjectionRepository
             implements AuthorizationLatencyProjectionRepository {
 

@@ -19,13 +19,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
-/**
- * Real Kafka adapter for {@link RefundStatusPublisher} (M11). Publishes to
- * {@code refunds.refund-completed.v1} or {@code refunds.refund-failed.v1}, keyed by
- * {@code merchantId} (ADR-0003 - same key as {@code payments.payment-status-changed.v1}, for the
- * same reason: every refund-saga event for one merchant must land on one partition, in order, so
- * the ledger's compensation listener has a single in-flight writer per balance).
- */
 @Component
 public class KafkaRefundStatusPublisher implements RefundStatusPublisher {
 
@@ -113,7 +106,6 @@ public class KafkaRefundStatusPublisher implements RefundStatusPublisher {
                 correlationId);
     }
 
-    /** Shared shape for PENDING/IPN_RECEIVED/VERIFIED - mirrors KafkaPaymentStatusPublisher#publishNonTerminal. */
     private void publishNonTerminal(
             String status,
             UUID refundId,
@@ -158,8 +150,6 @@ public class KafkaRefundStatusPublisher implements RefundStatusPublisher {
         String eventType = completed ? REFUND_COMPLETED_EVENT_TYPE : REFUND_FAILED_EVENT_TYPE;
         String topic = completed ? refundCompletedTopic : refundFailedTopic;
 
-        // Stored statusEventId, not a fresh mint - same replay-identity contract as
-        // KafkaPaymentStatusPublisher (M19 drill 9); fresh mint is the pre-V4-row fallback only.
         UUID eventId = attempt.getStatusEventId() != null ? attempt.getStatusEventId() : UuidV7.generate();
         EventEnvelope envelope =
                 EventEnvelope.causedBy(
@@ -179,15 +169,11 @@ public class KafkaRefundStatusPublisher implements RefundStatusPublisher {
                         : avroEventFactory.toRefundFailed(envelope, attempt);
 
         ProducerRecord<String, Object> record = new ProducerRecord<>(topic, attempt.getMerchantId(), event);
-        // M15: see KafkaPaymentStatusPublisher's identical comment - the traceparent header is
-        // now injected by KafkaTemplate's observation instrumentation, not written by hand here.
         record.headers()
                 .add("event-id", envelope.eventId().toString().getBytes(StandardCharsets.UTF_8))
                 .add("event-type", envelope.eventType().getBytes(StandardCharsets.UTF_8))
                 .add("aggregate-id", envelope.aggregateId().getBytes(StandardCharsets.UTF_8));
 
-        // Blocks until the broker acknowledges - same contract and same M19 drill 9 rationale as
-        // KafkaPaymentStatusPublisher: the listener's ack must never precede the publish.
         try {
             SendResult<String, Object> result = kafkaTemplate.send(record).get();
             RecordMetadata metadata = result.getRecordMetadata();

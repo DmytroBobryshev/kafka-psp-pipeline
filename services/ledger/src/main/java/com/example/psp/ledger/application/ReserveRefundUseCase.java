@@ -11,19 +11,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-/**
- * M11 step 2: consumes {@code refunds.refund-requested.v1}. Reserves funds against the merchant's
- * balance - a reservation row plus a balance effect, in one Postgres transaction
- * ({@code RefundRepository#tryReserveOrFail}) - and publishes {@code refunds.funds-reserved.v1}.
- * If the merchant's balance cannot cover the amount, no reservation is made and
- * {@code refunds.refund-failed.v1} is published instead (ADR-0006 category B: a business outcome,
- * not an error - never retried, never DLQ'd).
- *
- * <p>Idempotent the M5/M7 way: {@link RefundRepository#hasProcessedInboundEvent} is the
- * check-first path (the common replay case, caught before any write); the constraint-race path
- * lives inside {@code tryReserveOrFail} itself and is reported back as
- * {@link ReserveOutcome.Decision#ALREADY_PROCESSED}, never by throwing.
- */
 @Service
 public class ReserveRefundUseCase {
 
@@ -113,9 +100,6 @@ public class ReserveRefundUseCase {
                         request, command.inboundEventId(), command.traceId(), command.correlationId());
             }
             case ALREADY_PROCESSED -> {
-                // Constraint-race path: a concurrent delivery of the same inbound event won the
-                // insert into refund_processed_events between the check-first read above and this
-                // call. Normal outcome of at-least-once delivery under concurrency - never an error.
                 deduplicatedCounter.increment();
                 log.info(
                         "Deduplicated refund-requested inboundEventId={} refundId={} path=constraint-race",

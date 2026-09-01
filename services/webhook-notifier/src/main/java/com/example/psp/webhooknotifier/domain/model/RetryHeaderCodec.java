@@ -5,20 +5,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Function;
 
-/**
- * Converts a {@link RetryEnvelope} to and from the header vocabulary in {@link RetryHeaderNames},
- * as plain {@code String} key/value pairs - deliberately not {@code byte[]} or any
- * {@code org.apache.kafka..} header type, so this stays framework-free (ADR-0007) and both
- * {@code adapters.in.kafka.WebhookDeliveryExecutorListener} (read) and
- * {@code adapters.out.kafka.KafkaWebhookDeliveryPublisher} (write) - one inbound, one outbound,
- * never allowed to depend on each other - can each do their own trivial
- * {@code String <-> byte[]} conversion at the Kafka boundary around a single shared codec.
- */
 public final class RetryHeaderCodec {
 
     private RetryHeaderCodec() {}
 
-    /** Header names/values to attach to an outbound record for {@code envelope}. */
     public static Map<String, String> encode(RetryEnvelope envelope) {
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put(RetryHeaderNames.ATTEMPT_COUNT, String.valueOf(envelope.attemptCount()));
@@ -41,12 +31,6 @@ public final class RetryHeaderCodec {
         return headers;
     }
 
-    /**
-     * Rebuilds a {@link RetryEnvelope} from an inbound record's headers. {@code headerLookup}
-     * returns {@code null} for an absent header - true for every {@code original-*}/
-     * {@code exception-*}/{@code replay-*} header on the very first delivery attempt, and for
-     * {@code replay-*} on any delivery that has never been through the DLQ replay endpoint.
-     */
     public static RetryEnvelope decode(Function<String, String> headerLookup) {
         String attemptCountRaw = headerLookup.apply(RetryHeaderNames.ATTEMPT_COUNT);
         int attemptCount = attemptCountRaw == null ? 1 : Integer.parseInt(attemptCountRaw);

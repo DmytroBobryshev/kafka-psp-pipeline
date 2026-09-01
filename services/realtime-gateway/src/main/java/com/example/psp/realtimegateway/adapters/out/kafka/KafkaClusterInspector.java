@@ -31,18 +31,6 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.stereotype.Component;
 
-/**
- * Real {@link ClusterInspector} adapter for M17's "Cluster ops" page (page 5), backed by an
- * {@code org.apache.kafka.clients.admin.Admin} AdminClient - see {@code config.ClusterAdminConfig}
- * for how it is built and authenticated.
- *
- * <p>Every request issued here carries {@code config.ClusterAdminConfig}'s
- * {@code ADMIN_REQUEST_TIMEOUT_MS}, and every {@link ExecutionException}/{@link TimeoutException}/
- * interrupt is translated to {@link ClusterOperationException} - {@code domain/} and
- * {@code application/} never see a raw Kafka future failure, and
- * {@code adapters.in.web.ClusterOpsController} turns that into a {@code 502} (this class's javadoc
- * is the mechanical half of that story; the exception's javadoc is the "why 502" half).
- */
 @Component
 public class KafkaClusterInspector implements ClusterInspector {
 
@@ -88,9 +76,6 @@ public class KafkaClusterInspector implements ClusterInspector {
 
     private static TopicSummary toTopicSummary(TopicDescription description) {
         int partitionCount = description.partitions().size();
-        // Every partition of a healthy topic carries the same replication factor - the first
-        // partition's replica count is representative, and partitions() is never empty for a
-        // topic that describeTopics actually returned.
         int replicationFactor =
                 description.partitions().isEmpty() ? 0 : description.partitions().get(0).replicas().size();
         return new TopicSummary(description.name(), partitionCount, replicationFactor);

@@ -11,13 +11,6 @@ import com.tngtech.archunit.lang.ArchRule;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-/**
- * Enforces the hexagon (ADR-0004, ADR-0007) for realtime-gateway: {@code domain/} is pure Java,
- * and dependencies point inward only - {@code adapters -> application -> domain}. Same rule set
- * as every other service's {@code HexagonalArchitectureTest}, adapted to this service's package
- * tree and domain class names. No persistence-framework rule variant needed beyond the shared one
- * below - this service has no database at all (module brief), so it trivially passes.
- */
 class HexagonalArchitectureTest {
 
     private static final String BASE_PACKAGE = "com.example.psp.realtimegateway";
@@ -136,8 +129,6 @@ class HexagonalArchitectureTest {
 
     @Test
     void domainClassesShouldOnlyResideInDomainPackage() {
-        // Sanity check: guards against someone quietly renaming the package and silently
-        // disabling every rule above.
         ArchRule rule =
                 classes()
                         .that()

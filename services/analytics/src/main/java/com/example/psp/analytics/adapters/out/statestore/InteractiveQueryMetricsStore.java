@@ -25,35 +25,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.kafka.config.StreamsBuilderFactoryBean;
 import org.springframework.stereotype.Component;
 
-/**
- * Interactive queries: reads this instance's live Kafka Streams state stores (M10).
- *
- * <p>This is the adapter behind {@link WindowMetricsQueryPort}. It answers from RocksDB in this
- * JVM - no broker round-trip, no database - which is why it can show the <b>currently open</b>
- * 1-minute window, a value that exists nowhere else yet.
- *
- * <h2>Two store types, two very different queries</h2>
- *
- * <ul>
- *   <li>{@link StreamsStores#MERCHANT_METRICS} is a <b>window store</b>. Its key space is
- *       (key, windowStart), so every read takes a time range: {@code fetch(key, from, to)} for one
- *       merchant, {@code fetchAll(from, to)} for all of them. It is local: it only holds the
- *       partitions assigned to this instance.</li>
- *   <li>{@link StreamsStores#MERCHANT_CONFIG} is the <b>GlobalKTable</b>'s key/value store. A
- *       plain {@code get(key)}, and - unlike the window store - it is complete on every instance,
- *       because a global store replicates every partition everywhere.</li>
- * </ul>
- *
- * <h2>Why every method checks the state first</h2>
- *
- * <p>{@code KafkaStreams#store} throws {@code InvalidStateStoreException} whenever the store is
- * not currently available: before {@code start()}, during a rebalance, and - the interesting
- * case - for the entire duration of a <b>state restore</b>, when the instance is replaying
- * {@code analytics-streams.v1-merchant-metrics-1m-changelog} into a fresh RocksDB directory.
- * That window is exactly what the "state restore proof" makes visible, so this adapter reports it
- * as "not ready" and lets the REST layer answer 503, rather than throwing or - worse - returning
- * an empty list that looks like "no traffic".
- */
 @Component
 public class InteractiveQueryMetricsStore implements WindowMetricsQueryPort {
 
@@ -61,12 +32,6 @@ public class InteractiveQueryMetricsStore implements WindowMetricsQueryPort {
 
     private final StreamsBuilderFactoryBean streamsBuilderFactoryBean;
 
-    /**
-     * The window size the topology was built with. {@code ReadOnlyWindowStore} hands back only a
-     * window's START (the size is a property of the topology, not of the stored record), so
-     * {@code windowEnd} in a response has to be reconstructed - and it must be reconstructed from
-     * the same configured value the aggregation used, not a hard-coded minute.
-     */
     private final java.time.Duration windowSize;
 
     public InteractiveQueryMetricsStore(
@@ -93,8 +58,6 @@ public class InteractiveQueryMetricsStore implements WindowMetricsQueryPort {
         ReadOnlyWindowStore<String, MerchantWindowMetrics> store = windowStore();
         List<MerchantMetricsWindow> results = new ArrayList<>();
 
-        // WindowStoreIterator<V> yields KeyValue<Long windowStartMs, V> - the key is implicit
-        // because it was supplied. Iterators hold an open RocksDB snapshot and MUST be closed.
         try (WindowStoreIterator<MerchantWindowMetrics> iterator = store.fetch(merchantId, from, to)) {
             while (iterator.hasNext()) {
                 KeyValue<Long, MerchantWindowMetrics> entry = iterator.next();
@@ -136,9 +99,6 @@ public class InteractiveQueryMetricsStore implements WindowMetricsQueryPort {
                         StoreQueryParameters.fromNameAndType(
                                 StreamsStores.MERCHANT_CONFIG, QueryableStoreTypes.keyValueStore()));
 
-        // A null here is the whole tombstone story in one line: payment-api published a record
-        // with this key and a null value, Streams deleted the row, and there is nothing to return.
-        // No "deleted" flag is consulted, because none exists.
         MerchantConfigChanged config = store.get(merchantId);
         if (config == null) {
             log.debug("GlobalKTable lookup miss for merchantId={} (never configured, or tombstoned)", merchantId);

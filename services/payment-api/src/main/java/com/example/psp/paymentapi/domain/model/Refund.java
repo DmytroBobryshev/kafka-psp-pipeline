@@ -5,20 +5,6 @@ import java.util.Objects;
 import java.util.UUID;
 import lombok.Getter;
 
-/**
- * The {@code Refund} aggregate root (M11) - payment-api's own local record of a refund it
- * requested, entirely separate from the ledger's {@code refund_saga_state} (ADR-0008 rule 1: each
- * saga participant persists its own view; there is no shared saga table). Pure Java, no framework
- * dependency (ADR-0007) - same identity-based-equality convention as {@link Payment}.
- *
- * <p>This aggregate's status is always {@code REQUESTED} and never advances: payment-api does not
- * consume any downstream refunds.* event in this module's declared scope (that state machine lives
- * in the ledger - see services/ledger/README.md's M11 section). This row exists so
- * {@code POST /payments/{paymentId}/refunds} can (a) validate a new request against previously
- * requested amounts for the same payment, and (b) be the transactional-outbox partner that makes
- * "record the refund" and "publish refunds.refund-requested.v1" atomic - the exact M6 pattern
- * {@link Payment}/{@code CreatePaymentUseCase} already established, applied to a second aggregate.
- */
 @Getter
 public final class Refund {
 
@@ -42,12 +28,10 @@ public final class Refund {
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
     }
 
-    /** Creates a brand-new refund request. */
     public static Refund request(UUID paymentId, String merchantId, Money amount, String reason) {
         return new Refund(UUID.randomUUID(), paymentId, merchantId, amount, reason, Instant.now());
     }
 
-    /** Reconstitutes a refund from persisted state - used by {@code adapters/out/persistence}. */
     public static Refund reconstitute(
             UUID id, UUID paymentId, String merchantId, Money amount, String reason, Instant createdAt) {
         return new Refund(id, paymentId, merchantId, amount, reason, createdAt);

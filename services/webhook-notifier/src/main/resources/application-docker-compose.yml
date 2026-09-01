@@ -1,43 +1,16 @@
-# M8: run webhook-notifier against the infra/compose stack (infra/compose/README.md, .env).
-# Activate with SPRING_PROFILES_ACTIVE=docker-compose (same convention as every other service).
 spring:
   data:
     mongodb:
-      # infra/compose/.env: WEBHOOK_NOTIFIER_DB / WEBHOOK_NOTIFIER_DB_USER / WEBHOOK_NOTIFIER_DB_PASSWORD.
-      # authSource=webhook_notifier because infra/compose/mongo/init/01-init-databases.sh creates
-      # this user scoped to (and only to) the webhook_notifier database - same "physical vs
-      # logical separation" shortcut as Postgres (ADR-0005).
       uri: mongodb://webhook_notifier:webhook_notifier_pw@localhost:27017/webhook_notifier?authSource=webhook_notifier
 
   kafka:
-    # Three brokers' HOST-side (EXTERNAL) listeners - same rationale as every other service's
-    # equivalent entry (infra/compose/README.md's advertised-listeners section).
     bootstrap-servers: localhost:29092,localhost:29093,localhost:29094
 
-    # ---- M14: SASL/SCRAM-SHA-512 ---------------------------------------------------------------
-    # The EXTERNAL listener above requires authentication as of M14. `spring.kafka.properties` is
-    # the COMMON block: Spring Boot merges it into the producer, the consumer AND the admin client,
-    # which is what makes one four-line block enough for a service that is several of those at
-    # once. Putting it under spring.kafka.consumer.properties instead is the classic half-fix - the
-    # consumer connects and the producer does not.
-    #
-    # The USERNAME is committed on purpose: it is this service's identity, not a secret, and it is
-    # the exact string the ACLs in infra/compose/kafka-init/init-security.sh key off
-    # (User:webhook-notifier). The PASSWORD is a placeholder resolved from the environment, and has no
-    # default - a service that silently starts with the wrong credential produces authorization
-    # errors that look like a missing ACL and waste an hour, so it fails fast instead:
-    #
-    #   set -a; . infra/compose/.env; set +a
-    #   SPRING_PROFILES_ACTIVE=docker-compose mvn -pl services/webhook-notifier -am spring-boot:run
-    #
-    # This block lives in the docker-compose profile ONLY. The default profile and the test profile
-    # stay unauthenticated, so @EmbeddedKafka in `mvn verify` is unaffected.
     properties:
       security.protocol: SASL_PLAINTEXT
       sasl.mechanism: SCRAM-SHA-512
       sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="webhook-notifier" password="${WEBHOOK_NOTIFIER_KAFKA_PASSWORD}";'
 
-# M16/ADR-0009: same convention as payment-api/application-docker-compose.yml's identical block.
 eureka:
   client:
     enabled: true
@@ -47,16 +20,10 @@ eureka:
     hostname: localhost
     lease-renewal-interval-in-seconds: 5
 
-# M9 Phase 2: webhook-notifier runs on the HOST (java -jar ...), so it reaches Schema Registry via
-# its published host port - localhost:8081, same convention as psp-connector's/ledger's
-# equivalent entries.
 webhook-notifier:
   schema-registry:
     url: http://localhost:8081
 
-# M15: same host/compose-network split as schema-registry above - webhook-notifier runs on the
-# HOST, so it reaches Tempo via its published OTLP/HTTP port (infra/compose/.env's
-# TEMPO_OTLP_HTTP_PORT, default 4318).
 management:
   otlp:
     tracing:

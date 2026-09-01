@@ -10,15 +10,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 
-/**
- * Real Postgres adapter for {@link LedgerRepository}. Talks to the {@code ledger} database
- * (infra/compose, ADR-0005) via Spring Data JPA; {@link LedgerPersistenceMapper} keeps the JPA
- * entities out of {@code domain/} and {@code application/} entirely (ADR-0007).
- *
- * <p>Deliberately <b>not</b> {@code @Transactional} itself: the transaction lives one level down in
- * {@link LedgerWriteTransaction}, precisely so the {@code catch} below sits outside it. See that
- * class's javadoc for why that split is load-bearing rather than stylistic.
- */
 @Repository
 public class PostgresLedgerRepository implements LedgerRepository {
 
@@ -43,16 +34,6 @@ public class PostgresLedgerRepository implements LedgerRepository {
         try {
             return Optional.of(writeTransaction.applyAtomically(entry));
         } catch (DataIntegrityViolationException e) {
-            // uq_ledger_entries_inbound_event_id rejected the insert: a concurrent delivery of this
-            // same inbound event won the check-then-act race that
-            // application.RecordLedgerEntryUseCase's check-first path cannot close on its own. The
-            // database is the authority, and losing to it is a normal outcome of at-least-once
-            // delivery under concurrency - reported by return value, never rethrown
-            // (LedgerRepository#tryApply's contract).
-            //
-            // Rethrowing here would abort the Kafka transaction, which would redeliver the record,
-            // which would hit exactly the same constraint again: an infinite loop built out of a
-            // situation that is not even an error.
             log.debug(
                     "Unique constraint rejected duplicate ledger entry inboundEventId={} merchantId={}",
                     entry.getInboundEventId(),

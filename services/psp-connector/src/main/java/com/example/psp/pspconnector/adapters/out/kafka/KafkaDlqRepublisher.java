@@ -15,20 +15,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
-/**
- * Real Kafka adapter for {@link DlqRepublisher}. Republishes a DLQ record to
- * {@code payments.payment-requested.v1} through a dedicated, plain byte-array
- * {@link KafkaTemplate} ({@code config.KafkaProducerConfig#dlqReplayKafkaTemplate}) - NOT this
- * service's normal {@code KafkaTemplate<String, Object>}, whose {@code value-serializer} is
- * {@code KafkaAvroSerializer}. That serializer needs an Avro-typed object to encode, and this
- * adapter only ever holds the DLQ record's already-encoded raw bytes (see
- * {@code domain.model.DlqRecord}'s javadoc) - sending those bytes through unchanged, key and
- * headers included, is what makes this republish byte-for-byte identical to the original record.
- *
- * <p>Blocks on the send, same as {@code KafkaPaymentStatusPublisher}: a REST-triggered, bounded
- * batch operation should surface a failed republish to its caller rather than silently losing it -
- * the same M19 drill 9 lesson that publisher's javadoc documents.
- */
 @Component
 public class KafkaDlqRepublisher implements DlqRepublisher {
 

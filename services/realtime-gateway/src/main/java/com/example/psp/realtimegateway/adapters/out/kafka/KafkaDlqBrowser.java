@@ -30,41 +30,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.stereotype.Component;
 
-/**
- * Real {@link DlqBrowser} adapter for M17 page 3's generic DLQ browse - a non-destructive peek at
- * the last {@code max} records of a {@code *.dlq} topic.
- *
- * <h2>Why this is safe to call repeatedly without "consuming" anything</h2>
- *
- * <p>A fresh {@link Consumer} is created per call (via {@code config.ClusterAdminConfig}'s
- * {@code dlqPeekConsumerFactory}) and closed at the end of the same call. It never calls
- * {@code subscribe()} and never joins a consumer group - {@code group.id} is deliberately absent
- * from that factory's properties (see its javadoc), and this class uses {@code assign()} to attach
- * directly to every partition of the target topic instead. With no group membership, there is
- * nothing to commit and nothing recorded in {@code __consumer_offsets}: two peeks a second apart
- * see the same tail of the DLQ (modulo new records actually landing there), never an
- * already-"consumed" gap. This is also why the ACL grant for this class
- * (see {@code infra/k8s/kafka/users/15-realtime-gateway.yaml}) is {@code Read}/{@code Describe} on
- * specific DLQ topics ONLY - no consumer-group ACL entry exists for it at all.
- *
- * <h2>"Last max records", mechanically</h2>
- *
- * <ol>
- *   <li>{@code partitionsFor} + {@code assign} attach to every partition of the topic.
- *   <li>{@code beginningOffsets}/{@code endOffsets} bound each partition.
- *   <li>Each partition is seeked to {@code max(beginning, end - share)}, where {@code share} is an
- *       even split of {@code max} across the partition count - so a topic with more partitions
- *       than {@code max} still gets at least one record's worth of seek room per partition.
- *   <li>{@code poll()} is called at most twice (a single poll can legitimately return less than a
- *       full batch even when more data is available), and every record actually returned is
- *       sorted by timestamp and trimmed down to the requested {@code max}.
- * </ol>
- *
- * <p>This is a best-effort approximation of a single global "last N" ordering across multiple
- * independent partitions, not a strict guarantee - exactly like every other multi-partition
- * "recent records" view in this kind of tool (AKHQ included). It is exact for a single-partition
- * DLQ, which is what every DLQ in this cluster's topic-map is provisioned as today.
- */
 @Component
 public class KafkaDlqBrowser implements DlqBrowser {
 
@@ -153,16 +118,10 @@ public class KafkaDlqBrowser implements DlqBrowser {
                 preview.base64());
     }
 
-    /** Same convention as {@code webhook-notifier}'s {@code KafkaDlqReader#headerAsString}: never throws. */
     private static String decodeLenient(byte[] bytes) {
         return new String(bytes, StandardCharsets.UTF_8);
     }
 
-    /**
-     * Strict UTF-8 decode (unlike {@link #decodeLenient}) because a value that is NOT valid UTF-8
-     * must fall through to Base64, not silently render as replacement characters -
-     * {@link DlqRecordView}'s contract is "text OR base64, flagged", never "corrupted text".
-     */
     private static ValuePreview previewValue(byte[] value) {
         if (value == null) {
             return new ValuePreview(null, false);
@@ -180,14 +139,10 @@ public class KafkaDlqBrowser implements DlqBrowser {
                 return new ValuePreview(truncated, false);
             }
         } catch (CharacterCodingException notUtf8) {
-            // Falls through to Base64 below - this is the expected path for Avro-binary DLQ
-            // values (see this class's and DlqRecordView's javadoc): never re-thrown, never logged
-            // as an error, it is simply "not text".
         }
         return new ValuePreview(Base64.getEncoder().encodeToString(value), true);
     }
 
-    /** Rejects control characters (tab/CR/LF excepted) - valid UTF-8 that is still binary garbage. */
     private static boolean isPrintable(String text) {
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);

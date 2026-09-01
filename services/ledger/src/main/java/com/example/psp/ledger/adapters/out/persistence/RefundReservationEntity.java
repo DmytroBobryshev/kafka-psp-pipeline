@@ -11,13 +11,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/**
- * JPA entity for {@code refund_reservations} (M11; schema owned by
- * {@code db/migration/V2__create_refund_saga_tables.sql}, Flyway-managed - ADR-0005). An immutable
- * audit row, written exactly once by {@link RefundWriteTransaction#reserveOrFail} on a successful
- * reservation and never updated afterwards - see {@code domain.model.RefundReservation}'s javadoc
- * for why "is this reservation still active" is deliberately NOT a column here.
- */
 @Entity
 @Table(name = "refund_reservations")
 @Getter

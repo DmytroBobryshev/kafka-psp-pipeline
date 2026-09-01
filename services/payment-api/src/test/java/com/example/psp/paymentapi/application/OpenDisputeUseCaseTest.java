@@ -19,13 +19,6 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/**
- * M13. Pure unit test of {@link OpenDisputeUseCase} against recording/stub fakes - no Spring, no
- * Kafka, no MinIO, same style as {@code MerchantConfigUseCaseTest}. The point of interest is the
- * ROUTING: which of the two {@link DisputeEventPublisher} methods gets called, and whether
- * {@link DisputeDocumentStore#store} is invoked at all - a future refactor that starts uploading
- * small documents to MinIO "just in case", or that stops uploading large ones, fails here.
- */
 class OpenDisputeUseCaseTest {
 
     private static final long THRESHOLD_BYTES = 100L;
@@ -81,8 +74,6 @@ class OpenDisputeUseCaseTest {
 
     @Test
     void theDisabledKillswitchForcesInlineEvenAboveThreshold() {
-        // services/payment-api/README.md's "M13: claim check, measured" section: this is what the
-        // measured demo flips to reproduce a genuine RecordTooLargeException.
         payments.save(Payment.reconstitute(
                 PAYMENT_ID, MERCHANT_ID, Money.of(BigDecimal.TEN, "EUR"),
                 com.example.psp.paymentapi.domain.model.PaymentStatus.CREATED, java.time.Instant.now(), null));

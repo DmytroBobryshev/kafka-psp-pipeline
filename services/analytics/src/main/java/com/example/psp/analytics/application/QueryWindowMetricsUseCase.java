@@ -10,27 +10,6 @@ import java.util.List;
 import java.util.Optional;
 import org.springframework.stereotype.Service;
 
-/**
- * The read side (M10): interactive queries against the live state store, with the MongoDB
- * projection as the fallback.
- *
- * <p>Two sources, and the difference between them is the module's point:
- *
- * <table border="1">
- *   <caption>State store vs projection</caption>
- *   <tr><th></th><th>Interactive query</th><th>Mongo projection</th></tr>
- *   <tr><td>Sees the still-open window</td><td>Yes</td><td>Only once flushed downstream</td></tr>
- *   <tr><td>Survives process restart</td><td>Only after restore completes</td><td>Yes</td></tr>
- *   <tr><td>Survives a wiped state.dir</td><td>Yes, by replaying the changelog</td><td>Yes</td></tr>
- *   <tr><td>Survives store retention expiry</td><td>No</td><td>Yes</td></tr>
- *   <tr><td>Covers other instances' partitions</td><td>No</td><td>Yes</td></tr>
- * </table>
- *
- * <p>{@link #liveWindowsFor} answers from the store and never silently substitutes the
- * projection: a caller asking for live state during a restore should learn that the state is not
- * ready ({@code 503}), not receive stale numbers that look current. {@link #projectedWindowsFor}
- * is the explicit, separate endpoint for the durable copy.
- */
 @Service
 public class QueryWindowMetricsUseCase {
 
@@ -43,12 +22,10 @@ public class QueryWindowMetricsUseCase {
         this.projectionRepository = projectionRepository;
     }
 
-    /** {@code false} while the Streams client is starting, rebalancing or restoring. */
     public boolean stateStoreReady() {
         return queryPort.storeReady();
     }
 
-    /** {@code CREATED} / {@code REBALANCING} / {@code RUNNING} / ... - see the port's javadoc. */
     public String streamsClientState() {
         return queryPort.clientState();
     }
@@ -67,10 +44,6 @@ public class QueryWindowMetricsUseCase {
         return projectionRepository.findByMerchantSince(merchantId, Instant.now().minus(lookback));
     }
 
-    /**
-     * The {@code GlobalKTable} lookup, exposed so the tombstone proof has something to assert on:
-     * present before {@code DELETE /api/merchants/{id}/config}, empty after.
-     */
     public Optional<MerchantConfigSnapshot> merchantConfig(String merchantId) {
         return queryPort.merchantConfig(merchantId);
     }

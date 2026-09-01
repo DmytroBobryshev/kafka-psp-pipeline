@@ -6,11 +6,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the M13 batch listener's inbound boundary (ADR-0007): Avro {@code ->}
- * domain, one record at a time - {@code adapters.in.kafka.PaymentStatusChangedBatchListener} maps
- * the whole batch by applying this once per element.
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface PaymentStatusChangedAuditMapper {
 

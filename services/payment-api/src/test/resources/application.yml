@@ -1,9 +1,3 @@
-# Test-classpath override of src/main/resources/application.yml. PaymentApiApplicationTests only
-# needs the Spring context to load, not a real Postgres/Kafka - the real integration is exercised
-# for real against the live infra/compose stack, captured in services/payment-api/README.md, not
-# reproduced here. An in-memory H2 database (PostgreSQL compatibility mode) lets Hibernate build
-# the schema directly from the JPA entity so the context-load test needs neither Postgres nor
-# Flyway running.
 spring:
   application:
     name: payment-api
@@ -18,47 +12,23 @@ spring:
   flyway:
     enabled: false
   kafka:
-    # No broker is guaranteed to be running under plain `mvn test`. KafkaProducerFactory/
-    # KafkaTemplate construction never connects eagerly (the underlying KafkaProducer connects
-    # lazily on first send, which this test never triggers), so this value only matters if that
-    # assumption is ever wrong - kept short so a stray send() fails fast instead of hanging.
-    # Overridden at runtime by @EmbeddedKafka's broker address (M12 - see
-    # PaymentApiApplicationTests's javadoc) - this value only matters before that override
-    # applies.
     bootstrap-servers: localhost:29092
     producer:
       properties:
         max.block.ms: 2000
-    # M12: no spring.kafka.consumer.value-serializer override needed here - see main
-    # application.yml's comment on why config.ReplyingKafkaConfig overrides the producer's
-    # value-serializer (and the reply consumer's deserializer) explicitly in Java rather than via
-    # YAML, avoiding a duplicate-key collision with the M3 producer block above.
     consumer:
       auto-offset-reset: latest
 
 payment-api:
   kafka:
     payment-requested-topic: payments.payment-requested.v1
-    # M10. Same lazy-connection reasoning as bootstrap-servers above: the merchant-config
-    # ProducerFactory/KafkaTemplate are constructed at context load but never send here, so no
-    # broker and no Schema Registry are needed for PaymentApiApplicationTests to pass.
     merchant-config-changed-topic: merchants.merchant-config-changed.v1
-    # M12: only PRESENCE matters for query-topic (never sent from in this test); the reply topic
-    # DOES need to exist on the embedded broker - declared in @EmbeddedKafka above.
     provider-status-query-topic: psp.provider-status-query.v1
     provider-status-reply-topic: psp.provider-status-reply.v1
-    # M19: same lazy-connection reasoning as every other topic/group property in this file - only
-    # PRESENCE matters for context load; the topic itself is declared on the embedded broker below
-    # because config.PaymentStatusViewKafkaConfig's listener container subscribes to it at
-    # context-refresh time (same requirement as the M12 reply topic above).
     payment-status-changed-topic: payments.payment-status-changed.v1
     payment-status-view-group-id: payment-api.status-view.test.v1
-    # Only PRESENCE matters for context load, same reasoning as payment-status-view-group-id above.
     merchant-view-group-id: payment-api.merchant-view.test.v1
-    # M13: same "only PRESENCE matters, never sent from in this context-load test" reasoning.
     dispute-opened-topic: disputes.dispute-opened.test.v1
-    # M23: same "only PRESENCE matters for context load" reasoning - the four refund-trail
-    # listener containers subscribe at context-refresh time, same as payment-status-view above.
     refund-status-changed-topic: refunds.refund-status-changed.v1
     refund-completed-topic: refunds.refund-completed.v1
     refund-failed-topic: refunds.refund-failed.v1
@@ -67,14 +37,8 @@ payment-api:
     refund-completed-view-group-id: payment-api.refund-completed-view.test.v1
     refund-failed-view-group-id: payment-api.refund-failed-view.test.v1
     refund-funds-reserved-view-group-id: payment-api.refund-funds-reserved-view.test.v1
-  # M9 Phase 1: KafkaAvroSerializer#configure never connects eagerly (lazy on first serialize(),
-  # which this context-load test never triggers - same lazy-connection reasoning as
-  # bootstrap-servers above), so this value only needs to be present, not reachable.
   schema-registry:
     url: http://localhost:8081
-  # M13: OpenDisputeUseCase's two @Value thresholds, plus S3StorageConfig's S3Client - which, like
-  # the Kafka/Schema-Registry clients above, never connects eagerly (config.S3StorageConfig's
-  # javadoc). Only PRESENCE matters here; no MinIO runs under `mvn test`.
   disputes:
     claim-check-threshold-bytes: 524288
     claim-check-enabled: true

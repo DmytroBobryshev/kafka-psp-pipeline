@@ -7,13 +7,6 @@ import java.time.Instant;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
 
-/**
- * Builds the {@code psp.provider-status-reply.v1} Avro wire record (M12) from the outcome of
- * {@code application.CheckProviderStatusUseCase} plus the inbound {@link ProviderStatusQuery} it
- * is replying to. A plain method, not a MapStruct {@code @Mapper} - the same established exception
- * every other {@code *AvroEventFactory} in this codebase uses (see
- * {@code PaymentStatusAvroEventFactory}'s javadoc for the reasoning).
- */
 @Component
 public class ProviderStatusAvroEventFactory {
 

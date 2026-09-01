@@ -9,12 +9,6 @@ import com.example.psp.realtimegateway.domain.port.ClusterInspector;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-/**
- * Plain JUnit against {@code application/} + {@code domain/} - a fake {@link ClusterInspector}, no
- * Kafka. Exercises M17 page 5's three cluster-ops queries: this use case is a pure pass-through,
- * so the assertions confirm exactly that - the right port method is called with the right
- * argument, and its result is returned unchanged.
- */
 class InspectClusterUseCaseTest {
 
     @Test

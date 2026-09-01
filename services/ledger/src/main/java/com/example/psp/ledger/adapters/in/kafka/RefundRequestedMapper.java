@@ -7,12 +7,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the inbound Kafka hexagon boundary: event -&gt; command (ADR-0007). Same
- * shape as {@code PaymentStatusChangedMapper} (M9 Phase 2) - UUID-shaped Avro {@code string}
- * fields are converted explicitly, since the generated Avro record's {@code refundId}/
- * {@code paymentId}/{@code envelope.eventId} are plain strings.
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface RefundRequestedMapper {
 

@@ -11,14 +11,6 @@ import java.nio.ByteBuffer;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/**
- * M13's "dereference mapper" test - the one the task brief asks for by name. No Spring, no
- * Kafka broker: builds a {@link DisputeOpened} Avro record directly (both union branches) and
- * asserts {@link DisputeOpenedMapper} picks the right branch and copies every field it needs -
- * this is the ONLY place in the analytics module that ever does an {@code instanceof} check on
- * the generated union, so a mistake here (say, swapping which branch means claim-checked) would
- * otherwise only be caught by watching Mongo during a live demo.
- */
 class DisputeOpenedMapperTest {
 
     private final DisputeOpenedMapper mapper = new DisputeOpenedMapper();

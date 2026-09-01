@@ -10,12 +10,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * Plain JUnit against {@code application/} + {@code domain/} - a fake {@link DlqBrowser}, no
- * Kafka. Exercises M17 page 3's generic DLQ browse: the {@code .dlq} suffix guard (never reaches
- * the port for a non-DLQ topic) and the {@code max} clamp (the actual bound is
- * {@code BrowseDlqUseCase}'s job, exercised here rather than against a real consumer).
- */
 class BrowseDlqUseCaseTest {
 
     @Test

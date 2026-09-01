@@ -4,11 +4,6 @@ import com.example.psp.common.events.EventEnvelope;
 import com.example.psp.paymentapi.domain.model.Refund;
 import org.springframework.stereotype.Component;
 
-/**
- * Builds the Avro wire record for {@code refunds.refund-requested.v1} (M11) from the hand-written
- * {@link EventEnvelope} and the {@link Refund} aggregate. A plain method, not a MapStruct
- * {@code @Mapper} - same established exception as {@link PaymentAvroEventFactory}.
- */
 @Component
 public class RefundAvroEventFactory {
 

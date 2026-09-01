@@ -6,16 +6,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the outbound Kafka hexagon boundary: domain -&gt; event (ADR-0007). The
- * {@link EventEnvelope} is built by the caller ({@link KafkaPaymentEventPublisher}) - it needs
- * runtime context (trace id, correlation id) that has no source on {@link Payment} - and handed
- * in as a second source parameter; MapStruct maps it straight through to the {@code envelope}
- * target property because the parameter name and type match exactly.
- *
- * <p>{@code componentModel = "spring"}, {@code unmappedTargetPolicy = ERROR} - same rule as
- * every other boundary mapper in this service.
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface PaymentEventMapper {
 

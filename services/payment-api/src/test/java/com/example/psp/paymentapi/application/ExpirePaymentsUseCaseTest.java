@@ -18,22 +18,6 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/**
- * M22: pure unit test of {@link ExpirePaymentsUseCase} against fakes - no Spring, no Kafka, no
- * database, same style as every other use-case test in this module. The properties under test:
- *
- * <ul>
- *   <li>nothing is published when {@link PaymentRepository#findExpirationCandidates} returns no
- *       candidates - the scheduler tick is a genuine no-op, not an empty-batch publish;
- *   <li>the eventId handed to {@link PaymentExpirationEventPublisher#publishExpired} is
- *       deterministic - derived from {@code paymentId} alone, so the SAME candidate published on
- *       two separate ticks (a re-sweep because the listener has not yet caught up, or a retried
- *       tick after a transient failure) gets the byte-identical id both times;
- *   <li>the injected {@link Clock} - not {@code Instant.now()} - is what the use case queries the
- *       repository with and stamps on the published {@code occurredAt}, which is what makes this
- *       test deterministic in the first place.
- * </ul>
- */
 class ExpirePaymentsUseCaseTest {
 
     private static final Instant FIXED_NOW = Instant.parse("2026-01-01T12:00:00Z");
@@ -49,8 +33,6 @@ class ExpirePaymentsUseCaseTest {
 
         assertThat(published).isZero();
         assertThat(publisher.published).isEmpty();
-        // The use case still queried with the clock-derived instant - "nothing found" is a real
-        // answer from the repository, not a short-circuit that skips the query entirely.
         assertThat(repository.queriedWith).containsExactly(FIXED_NOW);
     }
 
@@ -74,9 +56,6 @@ class ExpirePaymentsUseCaseTest {
 
     @Test
     void republishingTheSameCandidateOnALaterTickReusesTheSameEventId() {
-        // Simulates the real scenario the deterministic scheme exists for: the candidate is still
-        // CREATED/PENDING on the NEXT tick (this service's own listener has not yet caught up), so
-        // the repository hands it back again - the id must not change between the two ticks.
         Payment candidate = payment(UUID.randomUUID(), "merchant-1");
         FakeRepository repository = new FakeRepository(List.of(candidate));
         RecordingPublisher publisher = new RecordingPublisher();
@@ -114,7 +93,6 @@ class ExpirePaymentsUseCaseTest {
                 null);
     }
 
-    /** Fake port: hands back a fixed candidate list, recording every instant it was queried with. */
     private static final class FakeRepository implements PaymentRepository {
         private final List<Payment> candidates;
         private final List<Instant> queriedWith = new ArrayList<>();
@@ -160,7 +138,6 @@ class ExpirePaymentsUseCaseTest {
         }
     }
 
-    /** Fake port: records every publishExpired call verbatim - no Kafka, no Avro. */
     private static final class RecordingPublisher implements PaymentExpirationEventPublisher {
         private final List<Call> published = new ArrayList<>();
 

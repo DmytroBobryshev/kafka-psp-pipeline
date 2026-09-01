@@ -7,13 +7,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-/**
- * The M13 batch listener's use case: one bulk write per batch. {@code application/} depends on
- * the port only (ADR-0007) and stays free of both {@code org.springframework.kafka} (so it
- * cannot construct or catch {@code BatchListenerFailedException} itself - that translation has to
- * happen in {@code adapters.in.kafka.PaymentStatusChangedBatchListener}, the only place allowed
- * to know Spring Kafka exists) and Mongo types.
- */
 @Service
 public class RecordPaymentStatusAuditBatchUseCase {
 

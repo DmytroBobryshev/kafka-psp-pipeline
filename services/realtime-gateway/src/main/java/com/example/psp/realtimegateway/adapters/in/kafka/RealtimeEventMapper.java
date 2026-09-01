@@ -11,22 +11,6 @@ import com.example.psp.common.events.avro.ReservationReleased;
 import com.example.psp.realtimegateway.domain.model.RealtimeEvent;
 import org.springframework.stereotype.Component;
 
-/**
- * Converts whichever of the 7 generated Avro classes this gateway consumes into the
- * transport-agnostic {@link RealtimeEvent} (ADR-0007: {@code domain/} must not know Avro exists).
- *
- * <p>A plain hand-written class, not a MapStruct {@code @Mapper} - the same established exception
- * every {@code *AvroEventFactory} in this codebase uses (see
- * {@code payment-api}'s {@code PaymentAvroEventFactory} javadoc for the reasoning), applied here
- * in the opposite direction (Avro -&gt; domain, fanning IN from 7 source shapes instead of
- * fanning out to one). Java 21 pattern-matching {@code switch} (JEP 441, final since Java 21) is
- * what makes a single method a clean, exhaustive dispatch instead of 7 near-duplicate listener
- * methods - see {@code adapters.in.kafka.RealtimeEventListener}, which is why this gateway needs
- * only ONE {@code @KafkaListener} for all 7 topics: every generated Avro class shares no common
- * interface beyond {@code SpecificRecordBase}, but the deserializer (with
- * {@code specific.avro.reader=true}) already hands back the correct concrete type per record, so
- * {@code instanceof}-pattern dispatch on the runtime type is exactly the right tool.
- */
 @Component
 public class RealtimeEventMapper {
 
@@ -106,9 +90,6 @@ public class RealtimeEventMapper {
                 envelope.getEventId(),
                 envelope.getEventType(),
                 envelope.getOccurredAt(),
-                // Null for a root event - a payment nobody caused. Every subsequent event in the
-                // chain carries the previous one's eventId here, which is what lets a client draw
-                // the causal chain instead of an arrival-ordered list.
                 str(envelope.getCausationId()),
                 str(envelope.getSource()),
                 paymentId,
@@ -119,7 +100,6 @@ public class RealtimeEventMapper {
                 providerReference);
     }
 
-    /** Avro string fields arrive as {@link CharSequence} (Utf8), not {@code String}. */
     private static String str(CharSequence value) {
         return value == null ? null : value.toString();
     }

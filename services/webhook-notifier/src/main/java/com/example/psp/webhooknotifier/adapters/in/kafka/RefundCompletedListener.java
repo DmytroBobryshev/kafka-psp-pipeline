@@ -8,19 +8,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-/**
- * M19's second planner listener (same {@code webhook-notifier.planner.v1} consumer group as
- * {@link PaymentStatusChangedListener}, per {@code config.KafkaConsumerConfig}'s
- * {@code refundCompletedKafkaListenerContainerFactory}): consumes
- * {@code refunds.refund-completed.v1} and plans exactly one webhook delivery per event, reusing
- * {@link PlanWebhookDeliveryUseCase} completely unchanged - it has never known which business
- * event produced the {@code WebhookDeliveryCommand} it publishes, and does not need to for this
- * either.
- *
- * <p>Same scope boundary as {@link PaymentStatusChangedListener}: no DLQ for this topic (a pure
- * translation step over a source topic that already has its own consumers/DLQs elsewhere), zero
- * retries via the shared error handler, manual-immediate ack.
- */
 @Component
 public class RefundCompletedListener {
 

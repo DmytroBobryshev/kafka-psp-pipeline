@@ -12,12 +12,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/**
- * JPA entity for the {@code merchant_configs} table (schema owned by
- * {@code db/migration/V7__create_merchant_configs_table.sql}). Written only through
- * {@link MerchantConfigJpaRepository#upsert}'s native {@code INSERT ... ON CONFLICT}; this
- * entity's setters back only the read path ({@code findById}/{@code search}).
- */
 @Entity
 @Table(name = "merchant_configs")
 @Getter

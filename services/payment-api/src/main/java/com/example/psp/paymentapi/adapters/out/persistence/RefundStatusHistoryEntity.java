@@ -10,15 +10,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/**
- * JPA entity for the {@code refund_status_history} table (M23; schema owned by
- * {@code db/migration/V12__create_refund_status_history_table.sql}, Flyway-managed - ADR-0005).
- * Deliberately NOT {@code @Data} - same rule as {@link PaymentStatusHistoryEntity}.
- *
- * <p>{@code eventId} is NOT annotated {@code unique = true} here - same convention as
- * {@link PaymentStatusHistoryEntity#getEventId()}: {@code ddl-auto=validate} only checks column
- * existence/type, the real UNIQUE constraint lives solely in the V12 migration SQL.
- */
 @Entity
 @Table(name = "refund_status_history")
 @Getter

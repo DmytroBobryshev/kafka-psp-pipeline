@@ -1,14 +1,7 @@
-# Test-classpath override of src/main/resources/application.yml. RealtimeGatewayApplicationTests
-# only needs the Spring context to load against an @EmbeddedKafka broker - the real integration is
-# exercised for real against the live infra/compose stack, captured in README.md, not reproduced
-# here. No database anywhere in this service, so unlike most other services' test yml there is no
-# H2/Flyway section to override.
 spring:
   application:
     name: realtime-gateway
   kafka:
-    # Overridden at runtime by @EmbeddedKafka's broker address - this value only matters before
-    # that override applies.
     bootstrap-servers: localhost:9092
     consumer:
       auto-offset-reset: earliest
@@ -26,9 +19,6 @@ realtime-gateway:
     refund-completed-topic: refunds.refund-completed.v1
     refund-failed-topic: refunds.refund-failed.v1
     reservation-released-topic: refunds.reservation-released.v1
-  # KafkaAvroDeserializer only resolves this lazily (on first poll() that actually needs to
-  # fetch/cache a schema) - this context-load test never publishes to any topic, so this value
-  # only needs to be present, not reachable.
   schema-registry:
     url: http://localhost:8081
   sse:

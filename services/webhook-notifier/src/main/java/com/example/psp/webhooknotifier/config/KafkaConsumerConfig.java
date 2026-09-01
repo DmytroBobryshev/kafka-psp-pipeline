@@ -30,57 +30,8 @@ import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.util.backoff.FixedBackOff;
 
-/**
- * Consumer wiring for both of webhook-notifier's consumer groups (docs/diagrams/topic-map.md:
- * {@code webhook-notifier.planner.v1} and {@code webhook-notifier.executor.v1}) plus the
- * dedicated, non-listening reader used by DLQ replay.
- *
- * <h2>M9 Phase 2 - Avro on the planner and executor, JSON on the DLQ replay reader</h2>
- *
- * <p>{@code payments.payment-status-changed.v1} (planner) and
- * {@code webhooks.webhook-delivery-requested.v2} plus its three retry tiers (executor) are now
- * Avro + Schema Registry - {@link #configureAvroDeserializers} wires
- * {@code io.confluent.kafka.serializers.KafkaAvroDeserializer} with
- * {@code specific.avro.reader=true}, the same pattern psp-connector's and ledger's consumer
- * configs already use. {@code webhooks.webhook-delivery-requested.v2.dlq} deliberately stays on
- * {@link #configureJsonDeserializers} (unchanged from M8): see
- * {@code adapters.out.kafka.KafkaWebhookDeliveryPublisher}'s and {@code KafkaProducerConfig}'s
- * javadoc for why the DLQ was never a candidate for Avro in the first place.
- *
- * <h2>The M8 poison-pill flag</h2>
- *
- * <p>{@code webhook-notifier.kafka.deserialization-error-handling-enabled} (default {@code true})
- * still gates {@link ErrorHandlingDeserializer} on EVERY consumer factory below, Avro or JSON
- * alike. Run with it set to {@code false} -
- * {@code --webhook-notifier.kafka.deserialization-error-handling-enabled=false} - to reproduce the
- * failure M8's "prove it" experiment is built around: publish a record whose bytes are not valid
- * for the target format, and the raw delegate deserializer throws straight out of {@code poll()},
- * before this application's code - listener, error handler, anything - ever runs. The container
- * has no record to hand off and nothing to advance past, so it re-fetches the SAME offset and
- * fails again, forever. Flip the property back to {@code true} and the SAME bad record is instead
- * caught by {@link ErrorHandlingDeserializer} before the listener runs, handed to
- * {@link DefaultErrorHandler}, and (on the executor factory) published straight to the DLQ by
- * {@link DeadLetterPublishingRecoverer} - the fix, applied without changing a single byte on the
- * topic.
- *
- * <h2>Why the executor's error handler never retries</h2>
- *
- * <p>Every RETRYABLE outcome (ADR-0006 category A: merchant 5xx, timeout) is caught and routed by
- * {@code application.ExecuteWebhookDeliveryUseCase} itself, inside the listener, via the
- * non-blocking {@code domain.model.RetryChain} - it never becomes a thrown exception the
- * container's error handler sees. What DOES reach {@link DefaultErrorHandler} here is only what
- * that use case could not classify at all: a deserialization failure (category C) or a genuine
- * bug (category D, "unknown = non-retryable" per ADR-0006). Both get exactly {@code FixedBackOff(0, 0)} -
- * zero retries - before {@link DeadLetterPublishingRecoverer} publishes straight to the DLQ, using
- * {@code webhookDeliveryDlqKafkaTemplate} (the byte-tolerant JSON template) - never the Avro one,
- * so a poison pill's raw bytes survive the trip.
- */
 @Configuration
 public class KafkaConsumerConfig {
-
-    // ============================================================================================
-    // Planner: payments.payment-status-changed.v1 -> webhook-notifier.planner.v1
-    // ============================================================================================
 
     @Bean
     public ConsumerFactory<String, PaymentStatusChanged> plannerConsumerFactory(
@@ -105,27 +56,12 @@ public class KafkaConsumerConfig {
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
-        // M15: hand-built bean, so Boot's spring.kafka.template.observation-enabled /
-        // spring.kafka.listener.observation-enabled property never reaches it - see
-        // infra/compose/README.md's M15 section.
         factory.getContainerProperties().setObservationRegistry(observationRegistry);
         factory.getContainerProperties().setObservationEnabled(true);
 
-        // No DLQ for this topic (see PaymentStatusChangedListener's javadoc) - zero retries, log
-        // and skip via the default (no-recoverer) DefaultErrorHandler.
         factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
         return factory;
     }
-
-    // ============================================================================================
-    // Planner (M19): refunds.refund-completed.v1 / refunds.refund-failed.v1 -> the SAME
-    // webhook-notifier.planner.v1 group as the payment-status-changed factory above - three
-    // consumer identities in this one logical role, exactly like the executor's single group
-    // already spans four physical topics (the base delivery topic plus three retry tiers). Each
-    // gets its own strongly-typed ConsumerFactory<String, X> bean, following this class's own
-    // established precedent (one Avro type per bean) rather than sharing the payment-status-
-    // changed factory's generic parameter, which is typed to a different specific-record class.
-    // ============================================================================================
 
     @Bean
     public ConsumerFactory<String, RefundCompleted> refundCompletedConsumerFactory(
@@ -152,8 +88,6 @@ public class KafkaConsumerConfig {
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         factory.getContainerProperties().setObservationRegistry(observationRegistry);
         factory.getContainerProperties().setObservationEnabled(true);
-        // No DLQ for this topic - same reasoning as the payment-status-changed planner factory
-        // above (adapters.in.kafka.RefundCompletedListener's javadoc).
         factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
         return factory;
     }
@@ -183,19 +117,9 @@ public class KafkaConsumerConfig {
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         factory.getContainerProperties().setObservationRegistry(observationRegistry);
         factory.getContainerProperties().setObservationEnabled(true);
-        // No DLQ for this topic - same reasoning as the payment-status-changed planner factory
-        // above (adapters.in.kafka.RefundFailedListener's javadoc).
         factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
         return factory;
     }
-
-    // ============================================================================================
-    // Planner (M24): refunds.refund-status-changed.v1 -> the SAME webhook-notifier.planner.v1
-    // group as the two factories above - a FOURTH consumer identity in this one logical role.
-    // adapters.in.kafka.RefundExpiredListener is the one planner listener in this service that
-    // does NOT plan a delivery for every record it consumes - see that class's javadoc for the
-    // EXPIRED-only allowlist.
-    // ============================================================================================
 
     @Bean
     public ConsumerFactory<String, RefundStatusChanged> refundStatusChangedConsumerFactory(
@@ -223,20 +147,9 @@ public class KafkaConsumerConfig {
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         factory.getContainerProperties().setObservationRegistry(observationRegistry);
         factory.getContainerProperties().setObservationEnabled(true);
-        // No DLQ for this topic - same reasoning as the other planner factories above
-        // (adapters.in.kafka.RefundExpiredListener's javadoc).
         factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
         return factory;
     }
-
-    // ============================================================================================
-    // Merchant webhook projection: merchants.merchant-config-changed.v1 -> webhook-notifier.merchant-view.v1
-    // - a THIRD, independent consumer identity in this service, fixing the M8 bug where the
-    // executor never knew a merchant's real webhookUrl (adapters.in.kafka.MerchantConfigChangedListener,
-    // domain.port.MerchantWebhookDirectory). auto-offset-reset is inherited from
-    // spring.kafka.consumer.auto-offset-reset=earliest (application.yml), so a fresh group id
-    // replays the whole compacted log rather than starting empty.
-    // ============================================================================================
 
     @Bean
     public ConsumerFactory<String, MerchantConfigChanged> merchantConfigChangedConsumerFactory(
@@ -264,15 +177,9 @@ public class KafkaConsumerConfig {
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         factory.getContainerProperties().setObservationRegistry(observationRegistry);
         factory.getContainerProperties().setObservationEnabled(true);
-        // No DLQ - a derived, lossy read-model projection (ADR-0006), same reasoning as the
-        // planner factories above.
         factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
         return factory;
     }
-
-    // ============================================================================================
-    // Executor: webhooks.webhook-delivery-requested.v2 (+3 retry tiers) -> webhook-notifier.executor.v1
-    // ============================================================================================
 
     @Bean
     public ConsumerFactory<String, WebhookDeliveryRequested> executorConsumerFactory(
@@ -299,32 +206,17 @@ public class KafkaConsumerConfig {
         ConcurrentKafkaListenerContainerFactory<String, WebhookDeliveryRequested> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);
-        // The listener itself calls Acknowledgment.acknowledge() only once ExecuteWebhookDeliveryUseCase's
-        // returned future completes - see WebhookDeliveryExecutorListener's javadoc.
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
-        // M15: hand-built bean, so Boot's spring.kafka.template.observation-enabled /
-        // spring.kafka.listener.observation-enabled property never reaches it - see
-        // infra/compose/README.md's M15 section.
         factory.getContainerProperties().setObservationRegistry(observationRegistry);
         factory.getContainerProperties().setObservationEnabled(true);
 
         String dlqTopic = properties.kafka().dlqTopic();
-        // dlqKafkaTemplate, NOT the Avro template - a genuine poison pill's value is raw,
-        // undeserializable bytes by definition, and KafkaAvroSerializer cannot republish those
-        // (see KafkaProducerConfig's javadoc). Using the byte-tolerant JSON template here is what
-        // keeps M8's "Poison pill proof" true unchanged.
         DeadLetterPublishingRecoverer recoverer =
                 new DeadLetterPublishingRecoverer(
                         dlqKafkaTemplate, (record, exception) -> new TopicPartition(dlqTopic, -1));
         factory.setCommonErrorHandler(new DefaultErrorHandler(recoverer, new FixedBackOff(0L, 0L)));
         return factory;
     }
-
-    // ============================================================================================
-    // DLQ replay reader (adapters.out.kafka.KafkaDlqReader) - NOT a @KafkaListener container; a
-    // plain Consumer created from this factory, on demand, per REST call. Stays JSON: the DLQ
-    // itself was never migrated to Avro (see this class's javadoc).
-    // ============================================================================================
 
     @Bean
     public ConsumerFactory<String, Object> dlqReplayConsumerFactory(
@@ -333,8 +225,6 @@ public class KafkaConsumerConfig {
         props.put(ConsumerConfig.GROUP_ID_CONFIG, properties.dlqReplay().consumerGroup());
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        // The hard ceiling on one poll(), independent of what a caller requests - see
-        // KafkaDlqReader's javadoc "The guard, mechanically".
         props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, properties.dlqReplay().maxBatchSize());
         configureJsonDeserializers(
                 props,
@@ -357,8 +247,6 @@ public class KafkaConsumerConfig {
             props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class);
         }
         props.put(AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, schemaRegistryUrl);
-        // specific.avro.reader=true: hand the listener the generated class, not a schema-less
-        // GenericRecord - same requirement as every other M9 Avro consumer in this system.
         props.put(KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, true);
     }
 

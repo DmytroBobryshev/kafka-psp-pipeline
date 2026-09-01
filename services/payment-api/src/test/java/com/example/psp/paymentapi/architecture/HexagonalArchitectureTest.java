@@ -11,11 +11,6 @@ import com.tngtech.archunit.lang.ArchRule;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-/**
- * Enforces the hexagon (ADR-0004, ADR-0007): {@code domain/} is pure Java, and dependencies
- * point inward only - {@code adapters -> application -> domain}. A build that violates this
- * fails here rather than a reviewer noticing later.
- */
 class HexagonalArchitectureTest {
 
     private static final String BASE_PACKAGE = "com.example.psp.paymentapi";
@@ -132,25 +127,16 @@ class HexagonalArchitectureTest {
 
     @Test
     void domainClassesShouldOnlyResideInDomainPackage() {
-        // Sanity check: guards against someone quietly renaming the package and silently
-        // disabling every rule above.
         ArchRule rule =
                 classes()
                         .that()
                         .haveSimpleNameEndingWith("Payment")
                         .or()
                         .haveSimpleNameEndingWith("Money")
-                        // M10: the merchant-config aggregate. Matches the domain record alone -
-                        // MerchantConfigController/UseCase/Publisher/Response all end in
-                        // something else, so this stays a domain-only assertion.
                         .or()
                         .haveSimpleNameEndingWith("MerchantConfig")
-                        // M11: the refund aggregate. RefundController/UseCase/Repository/
-                        // Publisher/Response/Entity/Mapper/Command all end in something else.
                         .or()
                         .haveSimpleNameEndingWith("Refund")
-                        // M12: request-reply. ProviderStatusController/UseCase/Port/Gateway/
-                        // Response/WebMapper/AvroEventFactory all end in something else.
                         .or()
                         .haveSimpleNameEndingWith("ProviderStatusResult")
                         .should()

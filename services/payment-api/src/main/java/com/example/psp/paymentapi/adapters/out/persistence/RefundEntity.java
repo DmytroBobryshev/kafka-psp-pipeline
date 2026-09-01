@@ -11,11 +11,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/**
- * JPA entity for the {@code refunds} table (M11; schema owned by
- * {@code db/migration/V4__create_refunds_table.sql}, Flyway-managed - ADR-0005). Deliberately NOT
- * {@code @Data} - same rule as {@link PaymentEntity}.
- */
 @Entity
 @Table(name = "refunds")
 @Getter

@@ -16,67 +16,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-/**
- * The single use case: authorize a payment against the (simulated) provider, record the attempt,
- * and - unless the provider timed out or the attempt is a duplicate - publish the resulting
- * status change.
- *
- * <p>{@code application/} orchestrates ports and MAY use Spring annotations, but never imports an
- * adapter type directly (ADR-0007). Micrometer/SLF4J are cross-cutting observability concerns,
- * not adapter types, so injecting them here (M5) does not violate that rule.
- *
- * <h2>M5: two distinct levels of idempotency</h2>
- *
- * <p><b>The first M5 implementation was fake.</b> It deduped on {@code (paymentId,
- * providerEventId)} alone, checked <em>after</em> calling {@link PaymentProviderPort#authorize}.
- * That catches a duplicate <em>provider callback</em> - but {@code providerEventId} is minted
- * fresh by the provider on every call (see {@link ProviderResult}'s javadoc), so replaying the
- * same inbound {@code payments.payment-requested.v1} record (crash-restart, rebalance, or an
- * operator resetting the consumer group's offsets to earliest and replaying the whole topic)
- * produced a brand-new {@code providerEventId} every time - the dedup check never matched, and
- * the provider was re-authorized/charged on every single replayed record. Measured: 50 events on
- * a single-partition topic, replayed once -> 50 processed twice, 0 caught as duplicates, 100
- * {@code payment_attempts} rows / 100 distinct {@code provider_event_id} / 100 status events
- * published for 50 distinct payments. See README.md's M5 section for the full story.
- *
- * <p>The fix requires <b>two</b> distinct checks, for two distinct failure modes, kept separate
- * below on purpose - collapsing them back into one key is exactly how the original defect
- * happened.
- *
- * <h3>Level 1 - replay/consumer idempotency (the fix)</h3>
- *
- * <p>Keyed on the <b>inbound</b> {@code EventEnvelope.eventId} (carried through as {@link
- * ProcessPaymentRequestCommand#causationEventId()} - see that record's javadoc), because that id
- * is stable across replays, rebalances and offset resets: it is part of the message itself, not
- * minted per-call by anything downstream. Checked via {@link
- * AttemptLogRepository#existsByInboundEventId} <b>before</b> {@link PaymentProviderPort#authorize}
- * is ever called. That ordering is the entire point of this fix: it prevents the side effect
- * (authorizing/charging a card again on every topic replay), not just a second bookkeeping row.
- * Persisted in the {@code inbound_event_id} column (V2 migration, unique constraint).
- *
- * <h3>Level 2 - duplicate provider callback (unchanged, kept as-is)</h3>
- *
- * <p>Keyed {@code (paymentId, providerEventId)}, checked after {@code authorize()} returns
- * (that's the earliest point {@code providerEventId} exists - see {@link ProviderResult}'s
- * javadoc). This catches a <em>genuinely different</em> failure that level 1 cannot see: the
- * provider itself delivering the same callback twice for an attempt we ourselves only made once
- * (see {@code adapters.out.http.SimulatedPaymentProviderAdapter}'s {@code duplicate-rate}
- * simulation). A legitimate retry after a timeout is new work with a new {@code providerEventId}
- * and must still be processed - so this check cannot be replaced by, or collapsed into, level 1.
- *
- * <p>Both checks have the same two-path shape, for the same reason: each is a check-then-act and
- * is itself racy under concurrent consumers/threads.
- *
- * <ul>
- *   <li><b>Check-first</b> - the common case, and cheap: no wasted insert attempt.
- *   <li><b>Race path</b> ({@link AttemptLogRepository#tryRecord} returning {@code false}) - the
- *       {@code payment_attempts} unique constraints (V1 for level 2, V2 for level 1) are the
- *       actual authority. Losing this race must never surface an exception to the caller - it is
- *       a normal outcome of at-least-once delivery under concurrency, not an error. Which
- *       constraint was actually lost is re-derived with one cheap follow-up read (see {@link
- *       #resolveRaceReason}) purely so the counters below stay honest even on this rare path.
- * </ul>
- */
 @Service
 public class ProcessPaymentRequestUseCase {
 
@@ -124,12 +63,6 @@ public class ProcessPaymentRequestUseCase {
     public void execute(ProcessPaymentRequestCommand command) {
         UUID inboundEventId = command.causationEventId();
 
-        // LEVEL 1 (the fix): check BEFORE the side effect. If this exact inbound event has
-        // already been recorded, paymentProvider.authorize() must never run again for it - that
-        // ordering is the entire point, see class javadoc. The status event, however, is
-        // REPUBLISHED, not skipped: the row was written before the original publish was
-        // broker-acknowledged, so its existence proves the provider was called, never that the
-        // event exists (M19 drill 9 lost 3 payments to exactly that gap).
         Optional<PaymentAttempt> replayed = attemptLogRepository.findByInboundEventId(inboundEventId);
         if (replayed.isPresent()) {
             recordDuplicate(DedupReason.REPLAY, command, inboundEventId, null);
@@ -137,8 +70,6 @@ public class ProcessPaymentRequestUseCase {
             return;
         }
 
-        // Non-terminal PENDING before the provider call - the panel's CREATED->PENDING hop.
-        // Fresh eventId per emission; ledger skips non-SUCCEEDED, webhooks skip PENDING.
         statusPublisher.publishPending(
                 command.paymentId(),
                 command.merchantId(),
@@ -150,10 +81,6 @@ public class ProcessPaymentRequestUseCase {
         ProviderResult result =
                 paymentProvider.authorize(command.paymentId(), command.merchantId(), command.amount());
 
-        // Stage 3 of the panel's trail (IPN received) - the provider actually responded, so this
-        // mirrors that immediately, before the level-2 dedup check even runs. TIMEOUT means no
-        // callback ever arrived at all (ADR-0006 category A) - nothing new is emitted for it, same
-        // as the terminal publish below.
         if (result.outcome() != ProviderOutcome.TIMEOUT) {
             statusPublisher.publishIpnReceived(
                     command.paymentId(),
@@ -165,9 +92,6 @@ public class ProcessPaymentRequestUseCase {
                     command.correlationId());
         }
 
-        // LEVEL 2 (unchanged): a genuinely different failure - the provider redelivering the same
-        // callback for an attempt we ourselves only made once. Level 1 above cannot see this: it
-        // only knows about our own inbound message id, not what the provider chose to do with it.
         Optional<PaymentAttempt> callbackDuplicate =
                 attemptLogRepository.findByPaymentIdAndProviderEventId(
                         command.paymentId(), result.providerEventId());
@@ -191,11 +115,6 @@ public class ProcessPaymentRequestUseCase {
 
         boolean inserted = attemptLogRepository.tryRecord(attempt);
         if (!inserted) {
-            // Race path: lost to a concurrent insert between one of the two check-first reads
-            // above and this insert - see class javadoc. tryRecord's boolean is deliberately
-            // identical for both constraints, so re-reading by inbound event id is what tells the
-            // two apart: whichever key just landed a row is the one this attempt collided with.
-            // The winner's row is republished for the same reason as the check-first paths above.
             Optional<PaymentAttempt> replayWinner = attemptLogRepository.findByInboundEventId(inboundEventId);
             DedupReason reason = replayWinner.isPresent() ? DedupReason.REPLAY : DedupReason.PROVIDER_CALLBACK;
             recordDuplicate(reason, command, inboundEventId, result.providerEventId());
@@ -210,11 +129,6 @@ public class ProcessPaymentRequestUseCase {
 
         processedCounter.increment();
 
-        // Stage 4 (verified) - both M5 dedup levels are now cleared and the attempt is durably
-        // recorded as genuinely new work. Never reached by any republish() path above (level 1's
-        // replayed branch returns before authorize() is even called, and the level-2/race branches
-        // both return before tryRecord ever succeeds) - so a redelivery can never re-emit this.
-        // Same TIMEOUT guard as stage 3 above: nothing new for a TIMEOUT attempt either.
         if (attempt.getOutcome() != ProviderOutcome.TIMEOUT) {
             statusPublisher.publishVerified(
                     command.paymentId(),
@@ -227,29 +141,12 @@ public class ProcessPaymentRequestUseCase {
         }
 
         if (attempt.getOutcome() == ProviderOutcome.TIMEOUT) {
-            // ADR-0006 category A (retryable). Deliberately NOT published, and this throw
-            // propagates straight out of adapters.in.kafka.PaymentRequestedListener uncaught, so
-            // Acknowledgment.acknowledge() is never reached for this record - see
-            // config.KafkaConsumerConfig for what the container's error handler does next.
             throw new ProviderTimeoutException(command.paymentId());
         }
 
-        // ADR-0006 category B: APPROVED and DECLINED are both business outcomes, not errors.
-        // Both publish a status event and both let the listener ack normally afterwards - a
-        // decline is the answer, not a failure, and must never be retried or DLQ'd.
         statusPublisher.publishStatusChanged(attempt);
     }
 
-    /**
-     * The M19 drill 9 rule: every dedup hit republishes the stored attempt's status event instead
-     * of skipping it. The attempt row is written before the publish is broker-acknowledged, so a
-     * crash (or a KEDA scale-in - the drill's actual killer) between the two leaves a row with no
-     * event; skipping on redelivery made that loss permanent. Publishing again is safe because
-     * the publisher reuses the row's stored {@code statusEventId} - downstream sees a
-     * byte-identical idempotency key and drops the copy. TIMEOUT rows stay unpublished
-     * (ADR-0006 category A never produces a status event; M12's provider-status query is the
-     * exit for those).
-     */
     private void republish(PaymentAttempt attempt) {
         if (attempt.getOutcome() == ProviderOutcome.TIMEOUT) {
             return;
@@ -277,10 +174,6 @@ public class ProcessPaymentRequestUseCase {
                 command.merchantId());
     }
 
-    /**
-     * M5's two dedup reasons (see class javadoc). Kept private and Micrometer-tag-only - not a
-     * concept the rest of the domain needs to know about.
-     */
     private enum DedupReason {
         REPLAY,
         PROVIDER_CALLBACK

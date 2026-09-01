@@ -7,15 +7,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the analytics web boundary (ADR-0007): domain {@code ->} response DTO. Same
- * conventions as every other service's web mapper ({@code componentModel = "spring"},
- * {@code unmappedTargetPolicy = ERROR}).
- *
- * <p>Read-only, so there is no request-side mapping: this service accepts no commands over REST
- * (ADR-0004 - commands enter through payment-api). {@code /api/analytics/**} is a query surface
- * over state this service already holds.
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface AnalyticsWebMapper {
 

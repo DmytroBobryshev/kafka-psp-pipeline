@@ -21,19 +21,6 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
-/**
- * M23. Plain JUnit against {@code application/} + {@code domain/} - no Spring, no Kafka, same
- * pattern as {@code ProcessPaymentRequestUseCaseTest}. Exercises the refund trail
- * {@code ExecuteRefundUseCase} now emits: PENDING (before the provider call) -&gt; IPN_RECEIVED
- * (right after it returns) -&gt; VERIFIED (once the M5-level-1 dedup check clears) -&gt; the terminal
- * COMPLETED/DECLINED publish, and that a dedup hit (replay or a lost {@code tryRecord} race)
- * re-emits ONLY the terminal event, never the trail again.
- *
- * <p>Unlike the payment path, {@link RefundOutcome} has no TIMEOUT (see
- * {@code adapters.out.http.SimulatedPaymentProviderAdapter}'s M11 javadoc: a refund timeout is
- * deliberately not modelled), so there is no TIMEOUT-guards-IPN_RECEIVED/VERIFIED test here - both
- * stages are unconditional once the provider call returns.
- */
 class ExecuteRefundUseCaseTest {
 
     private static final UUID REFUND_ID = UUID.randomUUID();
@@ -95,11 +82,6 @@ class ExecuteRefundUseCaseTest {
 
     @Test
     void raceOnInboundEventInsertEmitsOnlyTheWinnersTerminalEvent() {
-        // Same check-first-then-tryRecord race shape as ProcessPaymentRequestUseCaseTest's
-        // equivalent: the pre-check reports "not seen yet", but tryRecord (standing in for
-        // uq_refund_attempts_inbound_event_id, V3) reports it lost the race to a concurrent
-        // delivery of the same inbound event. Must republish the WINNER's terminal event only -
-        // no second PENDING/IPN_RECEIVED/VERIFIED for the losing attempt.
         UUID inboundEventId = UUID.randomUUID();
         RefundAttempt winner = completedAttempt(inboundEventId);
         FakeProvider provider = new FakeProvider(RefundOutcome.COMPLETED);
@@ -111,9 +93,6 @@ class ExecuteRefundUseCaseTest {
         assertThatCode(() -> useCase.execute(command(inboundEventId))).doesNotThrowAnyException();
 
         assertThat(attemptLog.tryRecordCalls.get()).isEqualTo(1);
-        // The provider WAS called (level 1's pre-check missed it), and PENDING/IPN_RECEIVED were
-        // already emitted before the race was discovered at tryRecord - only VERIFIED is skipped,
-        // and the terminal event republishes the winner's row, not a fresh one.
         assertThat(publisher.emissionOrder).containsExactly("PENDING", "IPN_RECEIVED", "TERMINAL");
         assertThat(publisher.terminalPublished).hasSize(1);
         assertThat(publisher.terminalPublished.get(0).getStatusEventId())
@@ -178,7 +157,6 @@ class ExecuteRefundUseCaseTest {
         }
     }
 
-    /** In-memory stand-in for {@code refund_attempts}, level-1-only (see {@link RefundAttempt}'s javadoc). */
     private static final class RecordingAttemptLog implements RefundAttemptLogRepository {
         private final List<RefundAttempt> recorded = new ArrayList<>();
 
@@ -202,12 +180,6 @@ class ExecuteRefundUseCaseTest {
         }
     }
 
-    /**
-     * Simulates the check-then-act race: {@code existsByInboundEventId}/
-     * {@code findByInboundEventId} report "not seen" on the pre-check, but {@code tryRecord}
-     * always reports it lost the race - as if a concurrent redelivery of the same inbound event
-     * won the insert in between.
-     */
     private static final class RaceAttemptLog implements RefundAttemptLogRepository {
         private final RefundAttempt winner;
         private final AtomicInteger findByInboundEventIdCalls = new AtomicInteger();

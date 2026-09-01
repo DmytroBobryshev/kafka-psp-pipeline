@@ -9,14 +9,8 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
-/** Spring Data JPA repository behind {@link PostgresMerchantViewRepository}. */
 public interface MerchantConfigJpaRepository extends JpaRepository<MerchantConfigEntity, String> {
 
-    /**
-     * Native SQL - JPQL has no {@code ON CONFLICT}. Whole-row replace, matching the source
-     * topic's own compacted-snapshot semantics: redelivery converges on the same row rather than
-     * erroring or duplicating.
-     */
     @Modifying
     @Query(
             value =
@@ -50,11 +44,6 @@ public interface MerchantConfigJpaRepository extends JpaRepository<MerchantConfi
             @Param("refundExpirationSeconds") int refundExpirationSeconds,
             @Param("updatedAt") Instant updatedAt);
 
-    /**
-     * Bulk JPQL delete, not derived {@code deleteById}: a tombstone for a merchant this
-     * projection never saw a value for must be a no-op, not an
-     * {@code EmptyResultDataAccessException}.
-     */
     @Modifying
     @Query("DELETE FROM MerchantConfigEntity m WHERE m.merchantId = :merchantId")
     void deleteByMerchantId(@Param("merchantId") String merchantId);

@@ -1,27 +1,10 @@
-# M19 "Plus" - the `integration-test` profile, activated by @ActiveProfiles on OutboxAtomicityIT.
-#
-# WHY THIS FILE EXISTS
-#
-# src/test/resources/application.yml sits earlier on the classpath than
-# src/main/resources/application.yml and REPLACES it (it does not merge). Everything payment-api's
-# outbox path needs is either already there or injected by @DynamicPropertySource from the Postgres
-# container - the two things missing are below.
-#
-# Note what is NOT here: no spring.kafka.producer Avro wiring. payment-api never publishes to Kafka
-# itself; adapters.out.outbox.OutboxPaymentEventPublisher serializes the Avro payload with a
-# STANDALONE KafkaAvroSerializer bean (config.SchemaRegistryConfig) and writes the bytes to a
-# database row. Debezium relays that row to Kafka in production - see OutboxAtomicityIT's javadoc
-# for why that relay is out of scope for this test.
 spring:
   jpa:
     hibernate:
-      # Flyway owns the schema in this profile - V1-V5 are what create outbox_event and give
-      # payload its BYTEA type, which is precisely what the IT reads back.
       ddl-auto: none
   flyway:
     enabled: true
 
-# Off for the same reason src/main/resources/application.yml turns it off (M16/ADR-0009).
 eureka:
   client:
     enabled: false

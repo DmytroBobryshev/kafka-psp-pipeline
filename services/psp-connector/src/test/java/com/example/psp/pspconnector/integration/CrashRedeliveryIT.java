@@ -33,57 +33,6 @@ import org.springframework.kafka.test.utils.ContainerTestUtils;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
-/**
- * M19 drill 9's regression test, against a real broker and a real Postgres: <b>an attempt row that
- * exists without its status event gets that event on redelivery, under the SAME eventId.</b>
- *
- * <h2>The defect this locks down</h2>
- *
- * <p>{@code ProcessPaymentRequestUseCase} writes the {@code payment_attempts} row and only then
- * publishes {@code payments.payment-status-changed.v1}. Those two writes go to two different
- * systems and cannot be one transaction, so there is a window in which the row exists and the event
- * does not. Drill 9 hit exactly that window - a KEDA scale-in killed a pod inside it - and the
- * original M5 code made the loss permanent: on redelivery the level-1 dedup check found the row and
- * <em>skipped</em>, so the event was never produced at all. Three payments vanished silently.
- *
- * <p>The fix (see {@code ProcessPaymentRequestUseCase#republish}) is that a dedup hit REPUBLISHES
- * from the stored row instead of skipping, reusing the row's {@code status_event_id} (V4 column) as
- * the envelope {@code eventId} so downstream idempotency still recognises it as one event.
- *
- * <h2>How the window is opened, and how it is closed</h2>
- *
- * <ol>
- *   <li><b>Open it.</b> {@link FailFirstPublishConfiguration} installs a {@code @Primary} decorator
- *       around the real {@link KafkaPaymentStatusPublisher} that throws while {@link
- *       #PUBLISH_FAILING} is set. The test drives that flag explicitly rather than counting
- *       failures, so the outcome does not depend on how the container's {@code DefaultErrorHandler}
- *       happens to classify the exception or on how many times it retries: every publish fails
- *       until the test says otherwise. Result: the attempt row is committed, nothing is on the
- *       topic, and the inbound offset is never committed (the listener never reaches
- *       {@code ack.acknowledge()}).
- *   <li><b>Verify the window is really open</b> - a row in Postgres, zero records on the topic.
- *       This is the state drill 9 left three real payments in.
- *   <li><b>Close it.</b> Clear the flag and stop/start the listener container. That is the closest
- *       a single JVM gets to "the pod came back": a new consumer joins the group, finds no
- *       committed offset for the partition, and redelivers the record. The redelivery hits M5 level
- *       1 and takes the republish path.
- * </ol>
- *
- * <p><b>Honest limitation:</b> the JVM, the Spring context, and the Postgres connection pool all
- * survive step 3 - only the Kafka consumer is recycled. The <em>state</em> under test (committed
- * row, uncommitted offset, absent event) and the code path taken (dedup hit -&gt; republish) are the
- * same as after a real pod restart; the process lifecycle is not.
- *
- * <h2>What each assertion would catch</h2>
- *
- * <ul>
- *   <li>Zero events after step 3 -&gt; the pre-drill-9 "skip on dedup" behaviour: permanent loss.
- *   <li>Two events -&gt; the republish is not idempotent from the consumer's point of view.
- *   <li>An event whose envelope {@code eventId} differs from the row's {@code status_event_id}
- *       -&gt; a freshly minted id, which every downstream dedup key would treat as new work
- *       (the ledger would double-count the payment).
- * </ul>
- */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class CrashRedeliveryIT extends PspConnectorIntegrationSupport {
 
@@ -95,10 +44,6 @@ class CrashRedeliveryIT extends PspConnectorIntegrationSupport {
 
     private static final String MERCHANT_ID = "merchant-crash-it";
 
-    /**
-     * Static so the test method can flip it: the decorator bean lives in the Spring context, the
-     * test drives the scenario. See the class javadoc for why this is a flag and not a counter.
-     */
     private static final AtomicBoolean PUBLISH_FAILING = new AtomicBoolean(true);
 
     @Autowired private JdbcTemplate jdbcTemplate;
@@ -138,10 +83,6 @@ class CrashRedeliveryIT extends PspConnectorIntegrationSupport {
 
             List<ConsumerRecord<String, PaymentStatusChanged>> beforeRecovery =
                     drainUntil(verifier, STATUS_TOPIC, Duration.ofSeconds(5), records -> false);
-            // M21: PENDING/IPN_RECEIVED/VERIFIED are unaffected by PUBLISH_FAILING (only the
-            // terminal publishStatusChanged is decorated below) and are expected here by this
-            // point - the drill-9 window is specifically "the terminal event is missing", not
-            // "nothing at all is on the topic yet".
             assertThat(terminalOnly(beforeRecovery))
                     .as(
                             "the attempt row is committed but the terminal publish keeps failing - this is "
@@ -159,8 +100,6 @@ class CrashRedeliveryIT extends PspConnectorIntegrationSupport {
             List<ConsumerRecord<String, PaymentStatusChanged>> recovered =
                     drainUntil(
                             verifier, STATUS_TOPIC, Duration.ofSeconds(60), records -> !records.isEmpty());
-            // Keep polling: the assertion is EXACTLY one event, so a spurious second one has to be
-            // given a fair chance to arrive rather than be excluded by stopping at the first hit.
             List<ConsumerRecord<String, PaymentStatusChanged>> settle =
                     drainUntil(verifier, STATUS_TOPIC, Duration.ofSeconds(5), records -> false);
             List<ConsumerRecord<String, PaymentStatusChanged>> statusEvents =
@@ -189,9 +128,6 @@ class CrashRedeliveryIT extends PspConnectorIntegrationSupport {
 
             assertThat(statusEvents.get(0).value().getPaymentId()).isEqualTo(paymentId.toString());
 
-            // The generalised form of the same rule, and the reason TIMEOUT is excluded: ADR-0006
-            // category A never produces a status event at all (M12's provider-status query is the
-            // exit for those), so only non-TIMEOUT rows are owed one.
             List<String> rowsOwedAnEvent =
                     jdbcTemplate.queryForList(
                             "SELECT status_event_id FROM payment_attempts "
@@ -209,7 +145,6 @@ class CrashRedeliveryIT extends PspConnectorIntegrationSupport {
         }
     }
 
-    /** Waits for the {@code payment_attempts} insert, i.e. for the loss window to be open. */
     private void awaitAttemptRow(UUID paymentId) throws InterruptedException {
         Instant deadline = Instant.now().plusSeconds(60);
         while (Instant.now().isBefore(deadline)) {
@@ -227,12 +162,6 @@ class CrashRedeliveryIT extends PspConnectorIntegrationSupport {
                 "the payment_attempts row for paymentId=" + paymentId + " was never written");
     }
 
-    /**
-     * Opens the drill-9 window: {@code publishStatusChanged} throws for as long as the test holds
-     * {@link #PUBLISH_FAILING}, then delegates to the real Kafka publisher. Test scope only - the
-     * production wiring has no such decorator, and the real publisher still performs the send that
-     * the assertions read back off the broker.
-     */
     @TestConfiguration
     static class FailFirstPublishConfiguration {
 
@@ -252,10 +181,6 @@ class CrashRedeliveryIT extends PspConnectorIntegrationSupport {
                             paymentId, merchantId, amount, causationEventId, traceId, correlationId);
                 }
 
-                // M21: PENDING's sibling non-terminal stages - same "always delegate, never
-                // decorated" treatment. PUBLISH_FAILING only ever gates the terminal publish below,
-                // matching the drill-9 window this test opens (the row exists, the TERMINAL event
-                // does not - trail events are unaffected).
                 @Override
                 public void publishIpnReceived(
                         java.util.UUID paymentId,
@@ -287,9 +212,6 @@ class CrashRedeliveryIT extends PspConnectorIntegrationSupport {
                 @Override
                 public void publishStatusChanged(PaymentAttempt attempt) {
                     if (PUBLISH_FAILING.get()) {
-                        // KafkaException is what the real publisher throws when the broker never
-                        // acknowledges the send, so the container's error handler sees the same
-                        // type it would in production.
                         throw new KafkaException(
                                 "simulated publish failure AFTER the payment_attempts row was committed, "
                                         + "paymentId=" + attempt.getPaymentId());

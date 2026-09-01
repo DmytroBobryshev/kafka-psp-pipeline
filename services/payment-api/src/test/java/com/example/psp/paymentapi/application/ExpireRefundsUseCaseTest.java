@@ -16,29 +16,6 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/**
- * M24: pure unit test of {@link ExpireRefundsUseCase} against fakes - no Spring, no Kafka, no
- * database, same style as {@code ExpirePaymentsUseCaseTest} (which this test mirrors property for
- * property). The properties under test:
- *
- * <ul>
- *   <li>nothing is published when {@link RefundRepository#findExpirationCandidates} returns no
- *       candidates - a genuine no-op tick, not an empty-batch publish. This is the SAME observable
- *       outcome whether the repository found nothing because no refund has crossed its window yet,
- *       or because every refund that HAS crossed it already carries a terminal
- *       {@code refund_status_history} row (COMPLETED/FAILED/EXPIRED) - the {@code NOT EXISTS}
- *       guard in {@code adapters.out.persistence.RefundJpaRepository#findExpirationCandidates}'s
- *       native query is what tells those two cases apart, and it does so entirely inside the SQL;
- *       from this use case's own point of view both simply mean "the candidate list is empty", so
- *       one fake-driven test covers both;
- *   <li>the eventId handed to {@link RefundExpirationEventPublisher#publishExpired} is
- *       deterministic - derived from {@code refundId} alone, so the SAME candidate published on two
- *       separate ticks (a re-sweep because the listener has not yet caught up, or a retried tick
- *       after a transient failure) gets the byte-identical id both times;
- *   <li>the injected {@link Clock} - not {@code Instant.now()} - is what the use case queries the
- *       repository with and stamps on the published {@code occurredAt}.
- * </ul>
- */
 class ExpireRefundsUseCaseTest {
 
     private static final Instant FIXED_NOW = Instant.parse("2026-01-01T12:00:00Z");
@@ -54,10 +31,6 @@ class ExpireRefundsUseCaseTest {
 
         assertThat(published).isZero();
         assertThat(publisher.published).isEmpty();
-        // The use case still queried with the clock-derived instant - "nothing found" (whether
-        // because nothing is stale yet, or because every stale refund already has a terminal
-        // history row) is a real answer from the repository, not a short-circuit that skips the
-        // query entirely.
         assertThat(repository.queriedWith).containsExactly(FIXED_NOW);
     }
 
@@ -81,10 +54,6 @@ class ExpireRefundsUseCaseTest {
 
     @Test
     void republishingTheSameCandidateOnALaterTickReusesTheSameEventId() {
-        // Simulates the real scenario the deterministic scheme exists for: the candidate still
-        // has no terminal refund_status_history row on the NEXT tick (this service's own listener
-        // has not yet caught up), so the repository hands it back again - the id must not change
-        // between the two ticks.
         Refund candidate = refund(UUID.randomUUID(), "merchant-1");
         FakeRepository repository = new FakeRepository(List.of(candidate));
         RecordingPublisher publisher = new RecordingPublisher();
@@ -122,7 +91,6 @@ class ExpireRefundsUseCaseTest {
                 FIXED_NOW.minusSeconds(3600));
     }
 
-    /** Fake port: hands back a fixed candidate list, recording every instant it was queried with. */
     private static final class FakeRepository implements RefundRepository {
         private final List<Refund> candidates;
         private final List<Instant> queriedWith = new ArrayList<>();
@@ -158,7 +126,6 @@ class ExpireRefundsUseCaseTest {
         }
     }
 
-    /** Fake port: records every publishExpired call verbatim - no Kafka, no Avro. */
     private static final class RecordingPublisher implements RefundExpirationEventPublisher {
         private final List<Call> published = new ArrayList<>();
 

@@ -10,12 +10,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-/**
- * M23: payment-api's consumer of {@code refunds.refund-completed.v1} - group
- * {@code payment-api.refund-completed-view.v1} ({@code config.RefundHistoryKafkaConfig}). Records
- * a terminal {@code COMPLETED} row in {@code refund_status_history} - history-only, same as
- * {@link RefundStatusChangedListener}; never touches the {@code Refund} aggregate's own status.
- */
 @Component
 public class RefundCompletedListener {
 

@@ -11,22 +11,6 @@ import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 
-/**
- * Local projection of {@code merchants.merchant-config-changed.v1} into {@code merchant_configs}
- * - the read model behind {@code GET /api/merchants} and {@code CreatePaymentUseCase}'s
- * onboarding gate. Group {@code payment-api.merchant-view.v1}
- * ({@code config.MerchantViewKafkaConfig}); independent of the write-side producer
- * ({@code KafkaMerchantConfigPublisher}) and of analytics' own {@code GlobalKTable} of this same
- * topic.
- *
- * <p>{@code @Payload(required = false)} is what lets a tombstone (null value) reach this method as
- * an actual {@code null} instead of Spring rejecting the message for a missing payload - the
- * documented Spring Kafka idiom for compacted-topic delete records.
- *
- * <p>No DLQ, same reasoning as {@code PaymentStatusChangedListener}: a derived, lossy read-model
- * projection (ADR-0006), not a saga participant - a record this listener cannot process is logged
- * and skipped by the container's zero-retry error handler.
- */
 @Component
 public class MerchantConfigChangedListener {
 

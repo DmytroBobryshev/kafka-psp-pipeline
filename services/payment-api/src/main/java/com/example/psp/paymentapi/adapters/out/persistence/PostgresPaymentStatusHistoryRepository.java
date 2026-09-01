@@ -9,21 +9,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 
-/**
- * Real Postgres adapter for {@link PaymentStatusHistoryRepository} (M20). Talks to the
- * {@code payment_api} database (infra/compose, ADR-0005) via Spring Data JPA
- * ({@link PaymentStatusHistoryJpaRepository}); {@link PaymentStatusHistoryPersistenceMapper}
- * keeps the JPA entity out of {@code domain/} and {@code application/} entirely (ADR-0007).
- *
- * <p>{@link #tryRecord} is the DB-constraint-is-the-authority half of the idempotent insert - the
- * exact same convention (and, deliberately, the exact same code shape) as psp-connector's
- * {@code PostgresAttemptLogRepository#tryRecord}: {@code saveAndFlush} rather than {@code save},
- * so the unique-constraint violation (V9's {@code uq_payment_status_history_event_id}) surfaces
- * synchronously from this call, inside this method's own try/catch, instead of being deferred to
- * whatever later flush point the surrounding transaction happens to hit. Not wrapped in its own
- * {@code @Transactional} for the same reason as that class: {@code saveAndFlush} already runs as
- * its own self-contained unit under Spring Data's default propagation.
- */
 @Repository
 public class PostgresPaymentStatusHistoryRepository implements PaymentStatusHistoryRepository {
 
@@ -44,10 +29,6 @@ public class PostgresPaymentStatusHistoryRepository implements PaymentStatusHist
             jpaRepository.saveAndFlush(mapper.toEntity(entry));
             return true;
         } catch (DataIntegrityViolationException e) {
-            // Lost the race, or more likely just a plain redelivery: some earlier delivery of the
-            // SAME payments.payment-status-changed.v1 event already inserted this eventId. Normal
-            // at-least-once behaviour, not an error - reported by return value, never rethrown
-            // (PaymentStatusHistoryRepository#tryRecord's contract).
             log.debug(
                     "Unique constraint rejected duplicate status history row paymentId={} eventId={} status={}",
                     entry.getPaymentId(),

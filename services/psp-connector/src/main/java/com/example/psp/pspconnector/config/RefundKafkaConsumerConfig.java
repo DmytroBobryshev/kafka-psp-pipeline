@@ -19,18 +19,6 @@ import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 
-/**
- * M11's consumer wiring for {@code refunds.funds-reserved.v1} - a separate class from M4's
- * {@code KafkaConsumerConfig} on purpose, same reasoning as the ledger's equivalent split: that
- * class and the {@code payments.payment-requested.v1} consumer it builds are untouched by this
- * module.
- *
- * <p>Same shape as {@code KafkaConsumerConfig}: manual ack ({@code AckMode.MANUAL_IMMEDIATE}),
- * {@code isolation.level=read_committed} (this topic's producer - the ledger - IS transactional,
- * unlike {@code payments.payment-requested.v1}'s outbox/Debezium path, so this setting is not a
- * no-op here the way M4's comment notes it is for the payment path), and
- * {@code ErrorHandlingDeserializer} wrapping {@code KafkaAvroDeserializer} (ADR-0006 category C).
- */
 @Configuration
 public class RefundKafkaConsumerConfig {
 
@@ -63,11 +51,6 @@ public class RefundKafkaConsumerConfig {
         // M15: see KafkaConsumerConfig's identical comment.
         factory.getContainerProperties().setObservationRegistry(observationRegistry);
         factory.getContainerProperties().setObservationEnabled(true);
-        // No CommonErrorHandler override: this module does not introduce a new retryable exception
-        // type, so Spring Kafka's default classification (deserialization/conversion failures are
-        // non-retryable, ADR-0006 category C) applies unchanged. M8 scope: the real policy is a
-        // non-blocking retry chain ending in a DLQ, same documented gap as psp-connector's other
-        // consumer.
         return factory;
     }
 }

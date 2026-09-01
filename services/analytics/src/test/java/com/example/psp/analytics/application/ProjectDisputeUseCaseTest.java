@@ -10,14 +10,6 @@ import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-/**
- * M13. Pure unit test of {@link ProjectDisputeUseCase} - no Spring, no Kafka, no MinIO. Proves
- * the two behaviours the task's measured section rests on: (1) an inline dispute is hashed from
- * the bytes the event already carried, never touching the fetcher; (2) a claim-checked dispute
- * calls the fetcher with the event's own {@code (bucket, objectKey)} and hashes what THAT returns
- * - the dereference the whole pattern exists to prove, expressed as an assertion instead of a
- * manual AKHQ/mongosh check.
- */
 class ProjectDisputeUseCaseTest {
 
     private final RecordingFetcher fetcher = new RecordingFetcher();
@@ -70,8 +62,6 @@ class ProjectDisputeUseCaseTest {
 
     @Test
     void theProjectedSizeIsTheMeasuredSizeNotTheClaimedSizeOnMismatch() {
-        // A deliberately WRONG referenceSizeBytes (as if payment-api's claim and MinIO's actual
-        // object disagreed) - the projection must trust what it measured, not what it was told.
         byte[] fetchedBytes = new byte[100];
         fetcher.nextResponse = fetchedBytes;
         ProjectDisputeCommand command =

@@ -9,12 +9,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 
-/**
- * Real Postgres adapter for {@link RefundStatusHistoryRepository} (M23). Mirrors
- * {@link PostgresPaymentStatusHistoryRepository}: {@code saveAndFlush} so the unique-constraint
- * violation (V12's {@code uq_refund_status_history_event_id}) surfaces synchronously here, inside
- * this method's own try/catch.
- */
 @Repository
 public class PostgresRefundStatusHistoryRepository implements RefundStatusHistoryRepository {
 
@@ -35,9 +29,6 @@ public class PostgresRefundStatusHistoryRepository implements RefundStatusHistor
             jpaRepository.saveAndFlush(mapper.toEntity(entry));
             return true;
         } catch (DataIntegrityViolationException e) {
-            // Redelivery of the same upstream event - normal at-least-once behaviour, not an
-            // error, reported by return value only (RefundStatusHistoryRepository#tryRecord's
-            // contract).
             log.debug(
                     "Unique constraint rejected duplicate refund status history row refundId={} eventId={} status={}",
                     entry.getRefundId(),

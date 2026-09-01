@@ -28,14 +28,6 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/**
- * M20. Plain JUnit against {@code application/} + {@code domain/} - no Spring, no Kafka, no
- * database, same "fakes, not a live broker/container" style as every other use-case test in this
- * module. Exercises {@link PaymentQueryUseCase#history} - the assembly
- * {@code domain.model.PaymentHistoryItem}'s javadoc describes: exactly one synthetic
- * {@code CREATED} entry from the payment row, plus every recorded {@code payment_status_history}
- * row, merged and sorted {@code occurredAt} ascending.
- */
 class PaymentQueryUseCaseTest {
 
     @Test
@@ -96,8 +88,6 @@ class PaymentQueryUseCaseTest {
                 .containsExactly("CREATED", "PENDING", "SUCCEEDED");
         assertThat(result).extracting(PaymentHistoryItem::occurredAt)
                 .containsExactly(createdAt, pendingAt, succeededAt);
-        // Every non-CREATED entry carries its eventId and is attributed to psp-connector, the
-        // sole publisher of payments.payment-status-changed.v1.
         assertThat(result.get(1).eventId()).isEqualTo(pendingEventId);
         assertThat(result.get(1).source()).isEqualTo("psp-connector");
         assertThat(result.get(1).providerReference()).isNull();
@@ -108,8 +98,6 @@ class PaymentQueryUseCaseTest {
 
     @Test
     void historyIncludesNonTerminalTrailStatusesVerbatim() {
-        // M21: IPN_RECEIVED/VERIFIED have no PaymentStatus equivalent - the read side passes them
-        // through as opaque strings, exactly like every other status, providerReference included.
         Instant createdAt = Instant.parse("2026-08-01T10:00:00Z");
         Instant ipnAt = createdAt.plus(1, ChronoUnit.SECONDS);
         UUID paymentId = UUID.randomUUID();
@@ -244,9 +232,6 @@ class PaymentQueryUseCaseTest {
 
     @Test
     void aRefundBelongingToADifferentPaymentThrowsNoSuchElement() {
-        // The wrong-pairing 404: a refundId that genuinely exists, but not under THIS paymentId,
-        // must answer exactly like an unknown refundId - see RefundRepository
-        // #findByIdAndPaymentId's javadoc for why the two are deliberately indistinguishable.
         UUID actualPaymentId = UUID.randomUUID();
         UUID otherPaymentId = UUID.randomUUID();
         UUID refundId = UUID.randomUUID();
@@ -333,7 +318,6 @@ class PaymentQueryUseCaseTest {
         }
     }
 
-    /** {@code history()} never touches refunds - every method throws if that assumption breaks. */
     private static final class UnsupportedRefundRepository implements RefundRepository {
         @Override
         public Refund save(Refund refund) {
@@ -361,7 +345,6 @@ class PaymentQueryUseCaseTest {
         }
     }
 
-    /** {@code history()} never touches refund_status_history - every method throws if that breaks. */
     private static final class UnsupportedRefundStatusHistoryRepository implements RefundStatusHistoryRepository {
         @Override
         public boolean tryRecord(RefundStatusHistoryEntry entry) {
@@ -374,7 +357,6 @@ class PaymentQueryUseCaseTest {
         }
     }
 
-    /** M23: minimal fake keyed on (id, paymentId) - the exact pairing #refundHistory checks. */
     private static final class FakeRefundRepository implements RefundRepository {
         private final Map<UUID, Refund> byId = new HashMap<>();
 

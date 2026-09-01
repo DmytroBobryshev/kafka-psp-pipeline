@@ -6,17 +6,6 @@ import java.util.Base64;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
 
-/**
- * Web-boundary mapper for the dispute hexagon (M13). A plain {@code @Component}, not a MapStruct
- * {@code @Mapper}: the only real conversion here is base64 decode, which MapStruct has no builtin
- * for and would need a custom method registered anyway - the same "not worth an annotation
- * processor for one conversion" call {@code adapters.out.outbox.PaymentAvroEventFactory}'s
- * javadoc makes for its UUID&lt;-&gt;String conversion.
- *
- * <p>Base64 decoding happens HERE, at the inbound web adapter, and nowhere else - by the time a
- * value reaches {@code application.OpenDisputeCommand} it is raw bytes; the application and
- * domain layers have no idea the wire form was ever text.
- */
 @Component
 public class DisputeWebMapper {
 

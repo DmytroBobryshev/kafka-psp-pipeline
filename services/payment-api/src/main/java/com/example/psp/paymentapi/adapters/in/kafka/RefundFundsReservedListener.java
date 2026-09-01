@@ -10,15 +10,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-/**
- * M23: payment-api's consumer of {@code refunds.funds-reserved.v1} - group
- * {@code payment-api.refund-funds-reserved-view.v1} ({@code config.RefundHistoryKafkaConfig}), a
- * NEW independent projection alongside psp-connector's own (unrelated) consumer of this same topic
- * (ADR-0005). Records a {@code FUNDS_RESERVED} row in {@code refund_status_history} - this
- * service's own literal, since the event itself carries no status field (no
- * {@code providerReference} either - the ledger mints none) - history-only, same as
- * {@link RefundStatusChangedListener}.
- */
 @Component
 public class RefundFundsReservedListener {
 

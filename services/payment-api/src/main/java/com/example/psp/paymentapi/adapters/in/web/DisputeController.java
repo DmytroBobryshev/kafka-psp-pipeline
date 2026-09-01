@@ -12,18 +12,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * M13's entry point (ADR-0004: commands enter via REST; everything else is events) for the
- * claim-check demo: DTO -&gt; {@link DisputeWebMapper} -&gt; use case -&gt; DTO, same shape as
- * {@link PaymentController}/{@link RefundController}.
- *
- * <p>{@code 202 Accepted}, matching {@link RefundController}'s reasoning: the event is durably
- * published (this adapter blocks on the send - see {@code adapters.out.kafka.
- * KafkaDisputeEventPublisher}) when this method returns, but "the dispute is opened" is a fact
- * about the downstream projection (analytics), not about this HTTP response - this service keeps
- * no dispute table of its own to answer synchronously from (see {@code domain.port.
- * DisputeEventPublisher}'s javadoc).
- */
 @RestController
 @RequestMapping("/api/payments/{paymentId}/disputes")
 public class DisputeController {

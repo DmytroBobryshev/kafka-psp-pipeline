@@ -11,28 +11,6 @@ import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-/**
- * M13's entry point (ADR-0004: commands enter via REST; everything else is events): the single
- * use case behind {@code POST /api/payments/{paymentId}/disputes}. Validates the payment exists,
- * decides claim-check vs. inline ({@link ClaimCheckPolicy}), and publishes exactly one of
- * {@link DisputeEventPublisher#publishInline}/{@link DisputeEventPublisher#publishClaimChecked}.
- *
- * <h2>Where the threshold lives, and the demo killswitch</h2>
- *
- * <p>{@code claimCheckThresholdBytes} is the ONLY place {@code payment-api.disputes.claim-check-
- * threshold-bytes} is read - {@link ClaimCheckPolicy} itself takes the threshold as a parameter
- * rather than reading configuration, so it stays framework-free (ADR-0007) and independently
- * testable.
- *
- * <p>{@code claimCheckEnabled} exists for exactly one reason, spelled out in full in
- * services/payment-api/README.md's "M13: claim check, measured" section: with it forced to
- * {@code false}, EVERY document is inlined regardless of size, which is what lets the measured
- * demo reproduce a genuine {@code RecordTooLargeException} against Kafka's default {@code
- * max.request.size} (1 MiB) using a real oversized document through the real endpoint, instead of
- * a synthetic unit test standing in for it. It is not a feature a caller can reach - only an
- * operator flipping the ConfigMap/env var can, which is the point: the failure this demonstrates
- * is what claim-check exists to make structurally impossible in normal operation.
- */
 @Service
 public class OpenDisputeUseCase {
 

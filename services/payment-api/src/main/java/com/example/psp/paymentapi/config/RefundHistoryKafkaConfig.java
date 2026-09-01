@@ -23,23 +23,6 @@ import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.util.backoff.FixedBackOff;
 
-/**
- * M23's consumer wiring for the refund trail's four read-model listeners
- * ({@code adapters.in.kafka.RefundStatusChangedListener}/{@code RefundCompletedListener}/
- * {@code RefundFailedListener}/{@code RefundFundsReservedListener}) - four independent, fixed
- * work-sharing consumer groups (all named {@code payment-api.refund-*}), one per topic, same shape
- * as {@code PaymentStatusViewKafkaConfig}/{@code MerchantViewKafkaConfig}: {@code
- * ErrorHandlingDeserializer} wrapping {@link KafkaAvroDeserializer}, manual-immediate acks, no DLQ
- * (a derived, lossy read-model projection, ADR-0006 - same documented scope boundary as those two
- * classes).
- *
- * <p>{@code auto.offset.reset=earliest}, explicitly set on all four - unlike
- * {@code payment-status-view}'s inherited default, these ARE new consumer groups added onto topics
- * that already carry data from before this projection existed (refund-completed/failed/
- * funds-reserved), so a fresh group must replay from the start or silently miss every refund saga
- * that ran before this feature shipped. Same reasoning as {@code MerchantViewKafkaConfig}'s
- * identical override for the compacted merchant-config topic.
- */
 @Configuration
 public class RefundHistoryKafkaConfig {
 
@@ -107,7 +90,6 @@ public class RefundHistoryKafkaConfig {
         return containerFactory(refundFundsReservedViewConsumerFactory, observationRegistry);
     }
 
-    /** Shared Avro {@code ConsumerFactory} shape - identical props across all four topics, only group.id differs. */
     private static <T> ConsumerFactory<String, T> avroConsumerFactory(
             KafkaProperties kafkaProperties, String schemaRegistryUrl, String groupId) {
         Map<String, Object> props = kafkaProperties.buildConsumerProperties(null);
@@ -127,7 +109,6 @@ public class RefundHistoryKafkaConfig {
         return new DefaultKafkaConsumerFactory<>(props);
     }
 
-    /** Shared container shape - manual-immediate acks, zero-retry no-DLQ error handler. */
     private static <T> ConcurrentKafkaListenerContainerFactory<String, T> containerFactory(
             ConsumerFactory<String, T> consumerFactory, ObservationRegistry observationRegistry) {
         ConcurrentKafkaListenerContainerFactory<String, T> factory =

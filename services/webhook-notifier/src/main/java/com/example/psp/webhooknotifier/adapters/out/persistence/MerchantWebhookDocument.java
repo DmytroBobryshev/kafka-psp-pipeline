@@ -9,14 +9,6 @@ import lombok.Setter;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
-/**
- * MongoDB document for one merchant's projected webhookUrl, {@code webhook_notifier.merchant_webhooks}
- * (ADR-0005, second collection in the same database as {@code delivery_attempts}). Mirrors
- * {@code merchants.merchant-config-changed.v1}'s {@code webhookUrl} field only - see
- * {@code adapters.in.kafka.MerchantConfigChangedListener}. {@code merchantId} doubles as the Mongo
- * {@code _id}: one document per merchant, upserted in place - the correct behaviour for a
- * projection of a compacted topic, unlike the append-only {@code delivery_attempts} log.
- */
 @Getter
 @Setter
 @Builder

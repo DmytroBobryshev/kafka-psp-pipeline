@@ -11,30 +11,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-/**
- * M11 step 4 (COMPENSATION): consumes {@code refunds.refund-failed.v1} and, if this refund is
- * still RESERVED, releases the reservation and restores the balance - the guarded
- * {@code RESERVED -> RELEASED} transition ({@link RefundRepository#tryRelease}). This is the
- * compensating transaction and the heart of this module (ADR-0008).
- *
- * <p>This same topic has two producers (this service, on insufficient balance; psp-connector, on
- * a provider decline), and this listener consumes both without distinguishing which one wrote any
- * given record - the guarded transition decides purely from the CURRENT saga state:
- *
- * <ul>
- *   <li>RESERVED - a real compensation: release, restore, publish
- *       {@code refunds.reservation-released.v1 reason=COMPENSATION}.
- *   <li>FAILED - this service consuming its OWN insufficient-balance publish back. Nothing was
- *       ever reserved, so there is nothing to release; {@link RefundRepository#tryRelease} reports
- *       {@code NOT_APPLICABLE} and this listener no-ops. See services/ledger/README.md's M11
- *       section, "ADR-0008 rule 7", for why this single, terminating hop is not treated as the
- *       unbounded cycle that rule forbids.
- *   <li>RELEASED already - a genuine duplicate (replay, or a race against the TTL sweeper trying
- *       the same release) - idempotent no-op.
- *   <li>COMPLETED, NEEDS_MANUAL_REVIEW, or an unexpected state - rejected and logged loudly
- *       (ADR-0008 rule 3), never silently applied.
- * </ul>
- */
 @Service
 public class ReleaseRefundUseCase {
 
@@ -112,12 +88,6 @@ public class ReleaseRefundUseCase {
         }
     }
 
-    /**
-     * Publishing needs the amount/paymentId/merchantId this release applied to - re-read from the
-     * saga state rather than threaded through every layer, since {@link ReleaseRefundCommand} only
-     * carries the failure {@code reason} (the amount belongs to the reservation, not to the
-     * refund-failed event that triggered releasing it).
-     */
     private void publishReleased(ReleaseRefundCommand command) {
         Optional<RefundSagaState> state = refundRepository.findSagaState(command.refundId());
         if (state.isEmpty()) {

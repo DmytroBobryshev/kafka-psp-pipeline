@@ -6,19 +6,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the M19 refund planner's inbound Kafka boundary: event -&gt; domain command
- * (ADR-0007), for {@code refunds.refund-completed.v1}. Same shape as
- * {@code PaymentStatusChangedMapper} - {@code componentModel = "spring"},
- * {@code unmappedTargetPolicy = ERROR}, explicit {@code UUID.fromString(...)} expressions for the
- * event's string-typed UUID fields.
- *
- * <p>{@code status = "COMPLETED"}: {@code refunds.refund-completed.v1} carries no status field of
- * its own (its very existence on this topic IS the outcome - see that schema's doc), so the
- * constant echoes the event's own name, matching this record's existing "status is the source
- * event's own outcome vocabulary" convention (see {@link WebhookDeliveryCommand}'s javadoc).
- * {@code declineReason} stays {@code null}: a completed refund has nothing to explain.
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface RefundCompletedMapper {
 

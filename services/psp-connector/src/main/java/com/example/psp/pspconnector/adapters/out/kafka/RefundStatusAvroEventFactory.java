@@ -4,13 +4,6 @@ import com.example.psp.common.events.EventEnvelope;
 import com.example.psp.pspconnector.domain.model.RefundAttempt;
 import org.springframework.stereotype.Component;
 
-/**
- * Builds the Avro wire records for {@code refunds.refund-completed.v1} and
- * {@code refunds.refund-failed.v1} (M11) from a hand-written {@link EventEnvelope} and the
- * {@link RefundAttempt} that was just processed. A plain class, not a MapStruct {@code @Mapper} -
- * same established exception as {@code PaymentStatusAvroEventFactory} and every other
- * *AvroEventFactory in this codebase.
- */
 @Component
 public class RefundStatusAvroEventFactory {
 
@@ -55,12 +48,6 @@ public class RefundStatusAvroEventFactory {
                 .build();
     }
 
-    /**
-     * M23: builder for every non-terminal status this service emits before the terminal
-     * COMPLETED/DECLINED publish - PENDING ({@code providerReference ""}, no provider call yet),
-     * IPN_RECEIVED and VERIFIED (both carry the provider's own reference). Mirrors
-     * {@code PaymentStatusAvroEventFactory#toNonTerminalAvro}.
-     */
     public com.example.psp.common.events.avro.RefundStatusChanged toNonTerminalAvro(
             EventEnvelope envelope,
             java.util.UUID refundId,

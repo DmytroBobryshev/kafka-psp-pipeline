@@ -3,16 +3,6 @@ package com.example.psp.common.events;
 import java.security.SecureRandom;
 import java.util.UUID;
 
-/**
- * Minimal RFC 9562 UUIDv7 generator: a 48-bit big-endian Unix millisecond timestamp followed by
- * random bits, version/variant nibbles set per spec. Time-ordered, unlike {@link
- * UUID#randomUUID()} (v4) - this is what ADR-0002 specifies for {@link EventEnvelope#eventId()}
- * so that dedup-table indexes (M5) stay roughly insertion-ordered.
- *
- * <p>Deliberately dependency-free: {@code libs/common-events} carries no third-party libraries
- * (ADR-0007), so this is a small hand-rolled generator rather than pulling one in for a single
- * type.
- */
 public final class UuidV7 {
 
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -20,7 +10,6 @@ public final class UuidV7 {
     private UuidV7() {
     }
 
-    /** Generates a new UUIDv7 using the current wall-clock time. */
     public static UUID generate() {
         return generate(System.currentTimeMillis());
     }

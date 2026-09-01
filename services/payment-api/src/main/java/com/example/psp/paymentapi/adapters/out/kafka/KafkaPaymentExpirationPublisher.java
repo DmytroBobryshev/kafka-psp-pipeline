@@ -17,21 +17,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
-/**
- * Real Kafka adapter for {@link PaymentExpirationEventPublisher} (M22) - payment-api's first-ever
- * PRODUCER on {@code payments.payment-status-changed.v1} (it has only ever been a consumer of this
- * topic, since M19). Mirrors psp-connector's own {@code KafkaPaymentStatusPublisher} for the
- * identical topic: keyed by {@code merchantId}, not {@code paymentId} - same ADR-0003 reasoning
- * that class's javadoc gives (every status change for one merchant must land on one partition, in
- * order, for the ledger's single-writer-per-balance invariant) - and the same blocking
- * {@code send().get()} + {@link KafkaException} wrapping, rather than
- * {@code KafkaMerchantConfigPublisher}'s {@link IllegalStateException}: this producer shares this
- * topic's existing producer-side convention (psp-connector), not payment-api's own
- * merchants.merchant-config-changed.v1 producer's.
- *
- * <p>Serializer/Schema-Registry wiring mirrors {@code config.MerchantConfigKafkaConfig}'s producer
- * (the other topic this service produces to directly) - see {@code config.PaymentExpirationKafkaConfig}.
- */
 @Component
 public class KafkaPaymentExpirationPublisher implements PaymentExpirationEventPublisher {
 

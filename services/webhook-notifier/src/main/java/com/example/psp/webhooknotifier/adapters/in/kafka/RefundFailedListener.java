@@ -8,12 +8,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-/**
- * M19's third planner listener (same {@code webhook-notifier.planner.v1} consumer group, per
- * {@code config.KafkaConsumerConfig}'s {@code refundFailedKafkaListenerContainerFactory}):
- * consumes {@code refunds.refund-failed.v1} and plans exactly one webhook delivery per event. See
- * {@link RefundCompletedListener}'s javadoc - identical shape, one topic over.
- */
 @Component
 public class RefundFailedListener {
 

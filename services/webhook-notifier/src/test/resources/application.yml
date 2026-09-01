@@ -1,18 +1,10 @@
-# Test-classpath override of src/main/resources/application.yml. WebhookNotifierApplicationTests
-# only needs the Spring context to load against an @EmbeddedKafka broker - no live MongoDB (see
-# that test class's javadoc and webhook-notifier.mongo.create-ttl-index-on-startup below).
 spring:
   application:
     name: webhook-notifier
   data:
     mongodb:
-      # Never actually connected to: config.MongoIndexConfig's ApplicationRunner (the only bean
-      # that would perform a real round trip) is disabled below, and Spring Boot's own Mongo
-      # autoconfiguration does not validate connectivity eagerly.
       uri: mongodb://localhost:27017/webhook_notifier_test
   kafka:
-    # Overridden at runtime by @EmbeddedKafka's broker address - this value only matters before
-    # that override applies.
     bootstrap-servers: localhost:9092
     consumer:
       auto-offset-reset: earliest
@@ -22,23 +14,13 @@ spring:
         session.timeout.ms: 45000
         heartbeat.interval.ms: 3000
 
-# M9 Phase 2: KafkaAvroDeserializer/KafkaAvroSerializer only resolve this lazily - neither
-# WebhookNotifierApplicationTests nor any other context-load test here publishes or consumes a
-# real record, so this value only needs to be present, not reachable (same note as psp-connector's
-# and ledger's test application.yml).
 webhook-notifier:
   schema-registry:
     url: http://localhost:8081
   kafka:
     payment-status-changed-topic: payments.payment-status-changed.v1
-    # M19: only PRESENCE matters for context load, same reasoning as every other topic property
-    # in this file - the listener containers DO subscribe at context-refresh time though, so the
-    # topics are also declared on the embedded broker below.
     refund-completed-topic: refunds.refund-completed.v1
     refund-failed-topic: refunds.refund-failed.v1
-    # M24: only PRESENCE matters for context load, same reasoning as above - the listener
-    # container DOES subscribe at context-refresh time though, so the topic is also declared on
-    # the embedded broker in WebhookNotifierApplicationTests.
     refund-status-changed-topic: refunds.refund-status-changed.v1
     delivery-requested-topic: webhooks.webhook-delivery-requested.v2
     retry-5s-topic: webhooks.webhook-delivery-requested.v2.retry.5s
@@ -69,7 +51,6 @@ webhook-notifier:
 
   mongo:
     attempt-log-ttl-seconds: 2592000
-    # See this file's header comment and WebhookNotifierApplicationTests's javadoc.
     create-ttl-index-on-startup: false
 
   simulated-merchant:

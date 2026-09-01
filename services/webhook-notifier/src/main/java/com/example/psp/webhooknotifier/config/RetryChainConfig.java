@@ -6,14 +6,6 @@ import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-/**
- * Builds the single {@link RetryChain} bean from {@code webhook-notifier.kafka.*}/
- * {@code webhook-notifier.retry.*}. Kept as its own tiny configuration class so the mapping from
- * "properties" to "domain topology object" happens in exactly one place - both
- * {@code application.ExecuteWebhookDeliveryUseCase} and {@code application.ReplayDlqUseCase}
- * depend on the resulting {@link RetryChain} type only, never on {@link WebhookNotifierProperties}
- * itself (ADR-0007: application/ orchestrates ports [and plain domain values], not config).
- */
 @Configuration
 public class RetryChainConfig {
 

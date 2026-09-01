@@ -7,7 +7,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/** MapStruct mapper at the inbound Kafka hexagon boundary: event -&gt; command (ADR-0007). */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface RefundCompletedMapper {
 

@@ -12,15 +12,6 @@ import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/**
- * M23. Plain JUnit against {@code application/} + {@code domain/} - no Spring, no Kafka, no
- * database, same "fakes, not a live broker/container" style as {@code ApplyPaymentOutcomeUseCaseTest}.
- * Exercises what {@link RecordRefundHistoryUseCase} exists to demonstrate: every one of the four
- * refund-trail listeners does exactly one thing (an unconditional history-only insert, no state
- * machine anywhere), and a redelivered event (same {@code eventId}) records at most one row - the
- * table's UNIQUE({@code event_id}) constraint (V12) is the authority, {@link RecordingRepository}
- * models it.
- */
 class RecordRefundHistoryUseCaseTest {
 
     @Test
@@ -38,8 +29,6 @@ class RecordRefundHistoryUseCaseTest {
         assertThat(repository.recorded).hasSize(4);
         assertThat(repository.recorded.stream().map(RefundStatusHistoryEntry::getStatus))
                 .containsExactly("PENDING", "IPN_RECEIVED", "VERIFIED", "COMPLETED");
-        // Every row carries the same refundId/paymentId regardless of which of the four listeners
-        // produced it - the use case never branches on status beyond storing it verbatim.
         assertThat(repository.recorded).allSatisfy(e -> {
             assertThat(e.getRefundId()).isEqualTo(refundId);
             assertThat(e.getPaymentId()).isEqualTo(paymentId);
@@ -48,9 +37,6 @@ class RecordRefundHistoryUseCaseTest {
 
     @Test
     void fundsReservedAndFailedRowsCarryNoProviderReference() {
-        // Neither refunds.funds-reserved.v1 nor refunds.refund-failed.v1 carries a
-        // providerReference field - the listeners pass null through, and this use case never
-        // invents one.
         RecordingRepository repository = new RecordingRepository();
         RecordRefundHistoryUseCase useCase = new RecordRefundHistoryUseCase(repository);
         UUID refundId = UUID.randomUUID();
@@ -67,9 +53,6 @@ class RecordRefundHistoryUseCaseTest {
 
     @Test
     void duplicateEventIdInsertsHistoryRowOnlyOnce() {
-        // A redelivery of the exact same upstream event (same envelope.eventId) must not
-        // duplicate a refund_status_history row - the table's UNIQUE(event_id) constraint (V12)
-        // is the authority, RecordingRepository models it.
         RecordingRepository repository = new RecordingRepository();
         RecordRefundHistoryUseCase useCase = new RecordRefundHistoryUseCase(repository);
         UUID refundId = UUID.randomUUID();
@@ -89,7 +72,6 @@ class RecordRefundHistoryUseCaseTest {
                 refundId, paymentId, status, providerReference, UUID.randomUUID(), Instant.now());
     }
 
-    /** Fake port: models the table's UNIQUE(event_id) constraint the real adapter's tryRecord relies on. */
     private static final class RecordingRepository implements RefundStatusHistoryRepository {
         private final List<RefundStatusHistoryEntry> recorded = new ArrayList<>();
         private final Set<UUID> seenEventIds = new HashSet<>();

@@ -7,28 +7,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * M17's DLQ replay endpoint: reads a bounded batch of records off
- * {@code payments.payment-requested.v1.psp-connector.dlq} and republishes each, byte-for-byte
- * unchanged, to {@code payments.payment-requested.v1} - see {@code application.ReplayDlqUseCase}
- * for why that is safe even for a record that turns out to have already been processed.
- *
- * <p>Reachable through api-gateway at {@code POST /api/psp-connector/dlq/replay}: the gateway's
- * {@code psp-connector} route (services/api-gateway/src/main/resources/application-*.yml) matches
- * {@code Path=/api/psp-connector/**} with {@code StripPrefix=2}, which removes exactly the two
- * leading segments ({@code /api/psp-connector}) before forwarding - so the path this service
- * receives, and therefore the path mapped below, is {@code /dlq/replay}.
- *
- * <h2>The guard</h2>
- *
- * <p>{@code maxRecords} is a REQUEST from the caller, not a promise - it is clamped by
- * {@code adapters.out.kafka.KafkaDlqReader} to {@code psp-connector.dlq-replay.max-batch-size}
- * (default 50) no matter what is passed here, so one call can never accidentally attempt to replay
- * an unbounded backlog. There is no "replay everything" mode by design - the same reasoning as
- * webhook-notifier's identically-shaped M8 endpoint: whatever put a record here almost certainly
- * needs a code or configuration fix first, and a bulk replay would just as efficiently fail against
- * it a second time.
- */
 @RestController
 @RequestMapping("/dlq")
 public class DlqReplayController {

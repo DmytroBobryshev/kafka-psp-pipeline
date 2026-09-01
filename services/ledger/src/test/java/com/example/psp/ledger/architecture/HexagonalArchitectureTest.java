@@ -11,14 +11,6 @@ import com.tngtech.archunit.lang.ArchRule;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-/**
- * Enforces the hexagon (ADR-0004, ADR-0007) for the ledger: {@code domain/} is pure Java, and
- * dependencies point inward only - {@code adapters -> application -> domain}. Same rule set as
- * {@code psp-connector}'s and {@code payment-api}'s, adapted to this service's package tree and
- * domain class names, plus two rules specific to M7 (see
- * {@link #domainMustNotDependOnSpringTransactions()} and
- * {@link #applicationMustNotDependOnKafkaOrTransactionApis()}).
- */
 class HexagonalArchitectureTest {
 
     private static final String BASE_PACKAGE = "com.example.psp.ledger";
@@ -63,10 +55,6 @@ class HexagonalArchitectureTest {
 
     @Test
     void domainMustNotDependOnSpringTransactions() {
-        // M7-specific. This module is *about* transactions, which makes it exactly the module where
-        // a @Transactional would most plausibly drift into a domain type. The transactional
-        // boundaries belong to adapters/ (the Postgres one) and to the listener container (the
-        // Kafka one); domain/ describes what a ledger entry IS, not how it is committed.
         ArchRule rule =
                 noClasses()
                         .that()
@@ -128,12 +116,6 @@ class HexagonalArchitectureTest {
 
     @Test
     void applicationMustNotDependOnKafkaOrTransactionApis() {
-        // M7-specific, and the rule that keeps the two mechanisms honest. RecordLedgerEntryUseCase
-        // orchestrates a Kafka transaction and a Postgres transaction without importing either:
-        // the Kafka one is opened by the listener container, the Postgres one by
-        // adapters.out.persistence.LedgerWriteTransaction. If this rule ever fails, the use case
-        // has started managing a transaction itself - which is precisely how the two mechanisms get
-        // conflated.
         ArchRule rule =
                 noClasses()
                         .that()
@@ -183,8 +165,6 @@ class HexagonalArchitectureTest {
 
     @Test
     void domainClassesShouldOnlyResideInDomainPackage() {
-        // Sanity check: guards against someone quietly renaming the package and silently disabling
-        // every rule above.
         ArchRule rule =
                 classes()
                         .that()

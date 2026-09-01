@@ -3,56 +3,23 @@ spring:
     name: psp-connector
 
   kafka:
-    # No bootstrap-servers here on purpose - environment-specific, lives in
-    # application-docker-compose.yml (same convention as payment-api / PLAN.md 0.2).
 
     consumer:
-      # group.id - see the long comment in config.KafkaConsumerConfig for what this controls.
-      # "psp-connector.v1" matches docs/diagrams/topic-map.md's consumer-groups table. Overridden
-      # per-experiment from the command line (e.g. --spring.kafka.consumer.group-id=... for the
-      # duplicates-vs-loss drill's isolated auto-commit/manual-ack groups).
       group-id: psp-connector.v1
 
-      # auto.offset.reset=earliest - mandatory per docs/diagrams/topic-map.md; see
-      # config.KafkaConsumerConfig for why. auto-offset-reset is a real Spring Boot
-      # KafkaProperties field (unlike enable.auto.commit and the poll-loop settings below, which
-      # have no dedicated field and go under `properties`).
       auto-offset-reset: earliest
 
       properties:
-        # max.poll.records - deliberately small. See config.KafkaConsumerConfig for the full
-        # reasoning: at psp-connector.provider.max-latency-ms=5000 worst case, 10 records/batch is
-        # up to 50s of processing between poll() calls - comfortably under max.poll.interval.ms
-        # below in steady state, and small enough that the M4b drill (interval forced to 5000ms)
-        # reliably blows it with a single ~10s record.
         max.poll.records: 10
 
-        # max.poll.interval.ms - steady-state default (300000ms/5min, the Kafka client default,
-        # set explicitly here rather than left implicit so the M4b drill's override is an obvious
-        # diff). Overridden to 5000 for the rebalance-storm drill:
-        #   --spring.kafka.consumer.properties.max.poll.interval.ms=5000
         max.poll.interval.ms: 300000
 
-        # session.timeout.ms / heartbeat.interval.ms - background liveness, NOT processing time.
-        # See config.KafkaConsumerConfig for the full session-timeout-vs-max-poll-interval
-        # explanation. Kafka client defaults, made explicit for the same reason as above.
         session.timeout.ms: 45000
         heartbeat.interval.ms: 3000
 
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      # M9 Phase 2: payments.payment-status-changed.v1 is now Avro + Schema Registry - unlike the
-      # inbound consumer (config.KafkaConsumerConfig, wired in Java for ErrorHandlingDeserializer
-      # + specific.avro.reader), this producer has no error-handling wrapper to configure, so the
-      # whole thing fits in YAML, the same convention this file already used for the JSON
-      # serializer it replaces. KafkaAvroSerializer#serialize registers/looks up the schema
-      # against Schema Registry (subject payments.payment-status-changed.v1-value,
-      # TopicNameStrategy - ADR-0001) and returns the Confluent wire format (magic byte + 4-byte
-      # schema id + Avro binary).
       value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
-      # Same production settings as payment-api's producer (see its application.yml for the full
-      # acks/idempotence/batching commentary) - psp-connector is a producer too, of
-      # payments.payment-status-changed.v1.
       acks: all
       retries: 2147483647
       batch-size: 32768
@@ -61,115 +28,53 @@ spring:
         enable.idempotence: true
         max.in.flight.requests.per.connection: 5
         linger.ms: 10
-        # schema.registry.url - reuses the same environment-specific value the inbound Avro
-        # consumer already reads (psp-connector.schema-registry.url, application-docker-
-        # compose.yml), via Spring's property-placeholder interpolation.
         schema.registry.url: ${psp-connector.schema-registry.url}
-        # auto.register.schemas=true - this service is this schema's only producer, so letting
-        # the first publish register version 1 is simpler than a manual registration step, and it
-        # is still governed by the subject's compatibility mode (register-schemas.sh sets that
-        # BEFORE any producer runs - same reasoning as payment-api's M9 Phase 1
-        # SchemaRegistryConfig).
         auto.register.schemas: true
 
 server:
-  # payment-api is 8085, AKHQ 8080, Schema Registry 8081, Grafana 3000, Prometheus 9090 - this
-  # service uses 8086. Overridden per-instance for the M4c partition/consumer-ratio drill
-  # (--server.port=8087, 8088, ...).
   port: 8086
 
 eureka:
   client:
-    # M16/ADR-0009: off by default (and under `mvn verify`'s test-classpath override) - see
-    # payment-api/application.yml's identical comment.
     enabled: false
 
 management:
   endpoints:
     web:
       exposure:
-        # metrics added for M5: exposes the processed/deduplicated Micrometer counters at
-        # /actuator/metrics/psp-connector.payment.attempts.processed and
-        # /actuator/metrics/psp-connector.payment.attempts.deduplicated - see
-        # application.ProcessPaymentRequestUseCase and the README's M5 section.
         include: health,info,metrics
-  # M15: see payment-api/application.yml's comment on this same key - identical reasoning.
   tracing:
     sampling:
       probability: 1.0
 
-# psp-connector custom properties
 psp-connector:
   kafka:
     payment-requested-topic: payments.payment-requested.v1
     payment-status-changed-topic: payments.payment-status-changed.v1
-    # M11: refunds.funds-reserved.v1 is consumed (config.RefundKafkaConsumerConfig);
-    # refund-completed/refund-failed are produced (adapters.out.kafka.KafkaRefundStatusPublisher).
     funds-reserved-topic: refunds.funds-reserved.v1
     refund-completed-topic: refunds.refund-completed.v1
     refund-failed-topic: refunds.refund-failed.v1
-    # M23: the refund trail's PENDING/IPN_RECEIVED/VERIFIED mirror of payment-status-changed - see
-    # adapters.out.kafka.KafkaRefundStatusPublisher's new publishPending/IpnReceived/Verified.
     refund-status-changed-topic: refunds.refund-status-changed.v1
-    # M12: request-reply responder. The reply topic (psp.provider-status-reply.v1) is
-    # deliberately NOT configured anywhere in this service - see
-    # adapters.in.kafka.ProviderStatusQueryListener's javadoc for why header-based correlation
-    # means the responder never needs to know it.
     provider-status-query-topic: psp.provider-status-query.v1
-  # schema-registry.url is environment-specific (M9 Phase 1) - see application-docker-compose.yml.
-  # Read by config.KafkaConsumerConfig to build the payments.payment-requested.v1 consumer's
-  # KafkaAvroDeserializer. Outbound payments.payment-status-changed.v1 stays JSON (unaffected).
 
-  # M17: DLQ replay - see adapters.in.web.DlqReplayController, application.ReplayDlqUseCase, and
-  # adapters.out.kafka.KafkaDlqReader/KafkaDlqRepublisher. Naming mirrors webhook-notifier's M8
-  # webhook-notifier.dlq-replay.* block.
   dlq-replay:
-    # docs/diagrams/topic-map.md: psp-connector's own DLQ, produced by its error handler.
     dlq-topic: payments.payment-requested.v1.psp-connector.dlq
-    # Dedicated group.id for adapters.out.kafka.KafkaDlqReader - separate from psp-connector.v1 so
-    # replay reads never interact with normal payment processing.
     consumer-group: psp-connector.dlq-replay.v1
-    # The hard ceiling on one POST /api/psp-connector/dlq/replay call, regardless of the caller's
-    # ?maxRecords= query param - see adapters.in.web.DlqReplayController and
-    # adapters.out.kafka.KafkaDlqReader for the guard.
     max-batch-size: 50
     poll-timeout-ms: 2000
 
   provider:
-    # Steady-state simulation: 100ms-5s latency, ~10% declines, ~5% timeouts (module brief).
     min-latency-ms: 100
     max-latency-ms: 5000
     decline-rate: 0.10
     timeout-rate: 0.05
-    # 0 = disabled (use the random min/max range above). Set to e.g. 10000 to force ~10s
-    # processing for the rebalance-storm drill.
     forced-latency-ms: 0
-    # NONE = use decline-rate/timeout-rate above. Set to APPROVED/DECLINED/TIMEOUT to force every
-    # call to that outcome for a deterministic experiment run.
     forced-outcome: NONE
-    # M5: probability (0.0-1.0) that a repeat authorize() call for a paymentId this adapter
-    # instance has already seen replays the identical previous callback (same providerEventId)
-    # instead of minting a fresh one - see SimulatedPaymentProviderAdapter's javadoc. 0 (default)
-    # disables deliberate duplicate emission entirely, matching M4 behaviour. Override for the M5
-    # replay-proof experiment, e.g. --psp-connector.provider.duplicate-rate=0.2.
     duplicate-rate: 0
 
-    # M11: refund path. Reuses the min/max/forced latency knobs above; a separate, two-way outcome
-    # vocabulary (see SimulatedPaymentProviderAdapter.RefundForcedOutcome).
     refund-decline-rate: 0.10
-    # NONE = use refund-decline-rate above. THE property the orchestrator forces to drive the two
-    # M11 saga proofs deterministically:
-    #   --psp-connector.provider.refund-forced-outcome=COMPLETED   (happy-path proof)
-    #   --psp-connector.provider.refund-forced-outcome=DECLINED    (compensation proof)
     refund-forced-outcome: NONE
 
-    # Sandbox convention (docs.stripe.com/testing): specific amount endings force a deterministic
-    # outcome, checked BEFORE forced-outcome/refund-forced-outcome above and BEFORE the dice roll -
-    # see README's "Forcing outcomes (amount endings)" section for the table. true (default) keeps
-    # this on; set to false for an experiment that needs the pre-amount-ending behaviour.
     magic-amounts:
       enabled: true
 
-# No datasource configured here on purpose - see application-docker-compose.yml. Running this
-# service without an active profile and without a database will fail to start
-# (spring-boot-starter-data-jpa requires a DataSource).

@@ -1,40 +1,12 @@
-# M16/ADR-0009: the OTHER half of the profile switch. Written in M16 against an illustrative
-# namespace, made REAL in M18 phase 2 - this file is now what api-gateway actually reads inside
-# its pod (SPRING_PROFILES_ACTIVE=k8s, set by the Helm chart), and every address below is a
-# Service that exists. See infra/k8s/README.md.
-#
-# NAMESPACE: `kafka`, not the `psp` this file guessed in M16 (its own comment said "the 'psp'
-# namespace ... is M18's decision to make"). M18 phase 2 put the application workloads in the
-# SAME namespace as the Strimzi cluster because a Kubernetes Secret is namespace-scoped: the
-# per-service SCRAM credentials are Secrets the Strimzi User Operator generates next to the
-# Kafka CR, and a pod can only `secretKeyRef` a Secret in its own namespace. Splitting the
-# namespaces would have meant copying every credential into the second one - exactly the thing
-# phase 1's credential model exists to avoid. infra/k8s/README.md argues this at length.
-#
-# eureka.client.enabled is deliberately absent (not just "false"): api-gateway's own
-# spring-cloud-starter-netflix-eureka-client dependency ships in the image unconditionally (a
-# few MB it will never use here - ADR-0009's own accepted cost), but this profile never sets
-# eureka.client.enabled: true anywhere, so Spring's default for that autoconfiguration (disabled
-# unless explicitly turned on) already matches ADR-0009's "spring.cloud.discovery.enabled=false"
-# instruction without repeating it.
 spring:
   data:
     redis:
-      # The Redis the RequestRateLimiter default-filter needs (application.yml). Deployed by
-      # the umbrella chart's `redis` subchart as a Service of this exact name.
       host: redis.kafka.svc.cluster.local
       port: 6379
   cloud:
     gateway:
       server:
         webflux:
-          # Same six routes as application-docker-compose.yml, same filters (payment-api keeps
-          # its CircuitBreaker) - only the `uri` scheme changes: a direct Kubernetes Service DNS
-          # name instead of Eureka-resolved lb://, per ADR-0009 ("Gateway routes target
-          # Kubernetes Services directly by DNS ... Load balancing is kube-proxy's job"). Ports
-          # match each service's own server.port (application.yml), not ADR-0009's illustrative
-          # :8080 - see that ADR's "Decision" section, which uses 8080 as a stand-in example, not
-          # a literal value.
           routes:
             - id: payment-api
               uri: http://payment-api.kafka.svc.cluster.local:8085
@@ -54,8 +26,6 @@ spring:
               predicates:
                 - Path=/api/ledger/**
               filters:
-                # M17: same second route as application-docker-compose.yml - see that file's
-                # comment on this route id for why it is separate from the `ledger` route above.
                 - StripPrefix=2
             - id: webhook-notifier
               uri: http://webhook-notifier.kafka.svc.cluster.local:8088
@@ -79,10 +49,4 @@ spring:
 management:
   otlp:
     tracing:
-      # Tempo is NOT deployed in M18 phase 2 (observability on k8s is out of this phase's
-      # scope), so this address does not resolve. Nothing tries to reach it: the chart's
-      # ConfigMap sets management.tracing.sampling.probability=0, so no span is ever sampled
-      # and the OTLP exporter is never invoked. The address stays as the shape M15-on-k8s
-      # would fill in, and infra/k8s/README.md says so out loud rather than leaving a reader
-      # to discover it from connection-refused warnings.
       endpoint: http://tempo.observability.svc.cluster.local:4318/v1/traces

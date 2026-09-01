@@ -3,28 +3,13 @@ spring:
     name: ledger
 
   kafka:
-    # No bootstrap-servers here on purpose - environment-specific, lives in
-    # application-docker-compose.yml (same convention as payment-api / psp-connector).
 
     consumer:
-      # group.id - docs/diagrams/topic-map.md's consumer-groups table. The ledger group also owns
-      # the refunds.* subscriptions in M11; M7 subscribes to payment-status-changed only.
       group-id: ledger.v1
 
-      # Mandatory per topic-map.md. Matters more here than anywhere else in the system: a balance
-      # service that starts fresh and skips backlog has wrong balances forever. Replaying that
-      # backlog is safe because of the unique constraint on ledger_entries.inbound_event_id, NOT
-      # because of anything Kafka does - see README's "Where Kafka EOS ends".
       auto-offset-reset: earliest
 
-      # isolation.level and enable.auto.commit are set in code (config.KafkaConsumerConfig) with
-      # the reasoning attached, because they are the two settings this module exists to teach.
-
       properties:
-        # Small batches: with a transaction manager on the container, Spring runs ONE Kafka
-        # transaction per record, so a large batch just means many sequential transactions between
-        # polls. 50 keeps a poll's worst-case wall-clock (50 x (1 DB tx + 1 Kafka tx)) far under
-        # max.poll.interval.ms while still amortising the poll itself.
         max.poll.records: 50
         max.poll.interval.ms: 300000
         session.timeout.ms: 45000
@@ -32,14 +17,7 @@ spring:
 
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      # M9 Phase 2: ledger.ledger-entry-recorded.v1 is now Avro + Schema Registry. Serializer
-      # choice is orthogonal to the transactional producer below - KafkaAvroSerializer just
-      # encodes the record; enable.idempotence/transactional.id/sendOffsetsToTransaction all keep
-      # working exactly as before (config.KafkaProducerConfig is unchanged).
       value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
-      # acks=all + idempotence are PRECONDITIONS of a transactional producer, not optional
-      # hardening: the producer refuses to start without them. max.in.flight <= 5 likewise
-      # (ADR-0003's global defaults).
       acks: all
       retries: 2147483647
       batch-size: 32768
@@ -48,107 +26,49 @@ spring:
         enable.idempotence: true
         max.in.flight.requests.per.connection: 5
         linger.ms: 10
-        # schema.registry.url - reuses the same environment-specific value the inbound Avro
-        # consumer reads (ledger.schema-registry.url, application-docker-compose.yml).
         schema.registry.url: ${ledger.schema-registry.url}
         auto.register.schemas: true
-      # transaction-id-prefix is deliberately NOT set here. Setting spring.kafka.producer.
-      # transaction-id-prefix would make Spring Boot auto-configure its own transactional producer
-      # factory and KafkaTransactionManager; this service builds both by hand in
-      # config.KafkaProducerConfig so the fencing-critical value has a documented derivation
-      # (ledger.kafka.transactional-id-prefix below).
 
 server:
-  # payment-api 8085, psp-connector 8086, AKHQ 8080, Schema Registry 8081, Grafana 3000,
-  # Prometheus 9090 - this service uses 8087.
   port: 8087
 
 eureka:
   client:
-    # M16/ADR-0009: off by default (and under `mvn verify`'s test-classpath override) - see
-    # payment-api/application.yml's identical comment.
     enabled: false
 
 management:
   endpoints:
     web:
       exposure:
-        # metrics exposes ledger.entries.applied / ledger.entries.deduplicated{path=...} /
-        # ledger.entries.ignored - the counters that make a replay experiment readable without
-        # reading the log. See README.
         include: health,info,metrics
-  # M15: see payment-api/application.yml's comment on this same key - identical reasoning.
   tracing:
     sampling:
       probability: 1.0
 
 ledger:
-  # Identity of this LOGICAL instance. Feeds transactional-id-prefix below, and MUST be stable
-  # across restarts of the same instance and distinct between instances - if it is not, zombie
-  # fencing silently stops working (config.KafkaProducerConfig, section 3). On Kubernetes (M18)
-  # this is the StatefulSet ordinal; locally, override it when starting a second copy:
-  #   --ledger.instance-id=1 --server.port=8187
   instance-id: 0
 
-  # THE abort hook for the read_committed-vs-read_uncommitted experiment. When true,
-  # application.RecordLedgerEntryUseCase throws AFTER ledger.ledger-entry-recorded.v1 has been
-  # produced inside the Kafka transaction and BEFORE that transaction commits, so the record
-  # becomes an ABORTED record in the log. Default false; enable per run:
-  #   --ledger.fail-after-produce=true
-  # The Postgres dedup check short-circuits the redelivery before it reaches the throw, so this
-  # fires at most once per inbound event and the consumer still makes progress. See README's
-  # "Abort visibility proof".
   fail-after-produce: false
 
   kafka:
     payment-status-changed-topic: payments.payment-status-changed.v1
     ledger-entry-recorded-topic: ledger.ledger-entry-recorded.v1
 
-    # M11: the refund saga's five topics (ADR-0008). refund-requested/completed/failed are
-    # consumed (config.RefundKafkaConsumerConfig); funds-reserved/refund-failed/
-    # reservation-released are produced (adapters.out.kafka.KafkaRefundEventPublisher).
-    # refund-failed-topic is BOTH - see application.ReleaseRefundUseCase's javadoc for why
-    # consuming a topic this service also publishes to is a deliberate, bounded exception to
-    # ADR-0008 rule 7.
     refund-requested-topic: refunds.refund-requested.v1
     funds-reserved-topic: refunds.funds-reserved.v1
     refund-completed-topic: refunds.refund-completed.v1
     refund-failed-topic: refunds.refund-failed.v1
     reservation-released-topic: refunds.reservation-released.v1
 
-    # The transactional.id prefix. DefaultKafkaProducerFactory appends its own suffix to build the
-    # actual transactional.id, so what must be stable is this prefix. Derived from instance-id
-    # above rather than randomised per boot, because initTransactions() fences zombies by bumping
-    # the producer EPOCH registered against this exact id - a fresh id per boot registers a new
-    # producerId at epoch 0 and fences nothing at all, silently. Full explanation in
-    # config.KafkaProducerConfig.
     transactional-id-prefix: ledger-tx-${ledger.instance-id}-
 
-  # M11: the TTL sweep (ADR-0008 rule 6). See adapters.in.scheduler.ReservationTtlSweeper's
-  # javadoc for why these live under ledger.* rather than ADR-0008's bare
-  # refund.reservation.ttl, and for the "wrong for a real cluster, right for a demo" 2-minute
-  # default.
   refund:
     reservation-ttl: PT2M
     sweep-interval: PT10S
 
-  # M17: DLQ replay - see adapters.in.web.DlqReplayController, application.ReplayDlqUseCase, and
-  # adapters.out.kafka.KafkaDlqReader/KafkaDlqRepublisher. Naming mirrors webhook-notifier's M8
-  # webhook-notifier.dlq-replay.* block. Deliberately its own plain (non-transactional) producer/
-  # consumer pair, kept off ledgerEntryProducerFactory/paymentStatusChangedConsumerFactory above -
-  # see KafkaDlqRepublisher's javadoc.
   dlq-replay:
-    # docs/diagrams/topic-map.md: ledger's own DLQ, produced by its error handler.
     dlq-topic: payments.payment-status-changed.v1.ledger.dlq
-    # Dedicated group.id for adapters.out.kafka.KafkaDlqReader - separate from ledger.v1 so replay
-    # reads never interact with normal saga consumption.
     consumer-group: ledger.dlq-replay.v1
-    # The hard ceiling on one POST /api/ledger/dlq/replay call, regardless of the caller's
-    # ?maxRecords= query param - see adapters.in.web.DlqReplayController and
-    # adapters.out.kafka.KafkaDlqReader for the guard.
     max-batch-size: 50
     poll-timeout-ms: 2000
 
-# No datasource configured here on purpose - see application-docker-compose.yml. Running this
-# service without an active profile and without a database will fail to start
-# (spring-boot-starter-data-jpa requires a DataSource).

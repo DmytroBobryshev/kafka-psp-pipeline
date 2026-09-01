@@ -9,17 +9,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * M19's deliveries-visibility web adapter: {@code GET /api/webhooks/deliveries?paymentId=&refundId=&merchantId=&limit=25}.
- * Every parameter is optional; an unparseable {@code paymentId}/{@code refundId} (not a UUID)
- * is rejected {@code 400} by Spring's own {@code MethodArgumentTypeMismatchException} handling in
- * common-web's {@code GlobalExceptionHandler} before this method ever runs.
- *
- * <p>Kept thin by construction: every real decision - which filters apply, how attempts fold into
- * one logical delivery, what the limit clamps to - lives in
- * {@link ListWebhookDeliveriesUseCase}/{@code domain.port.DeliveryAttemptLogRepository#search},
- * not here.
- */
 @RestController
 @RequestMapping("/api/webhooks/deliveries")
 public class WebhookDeliveryQueryController {

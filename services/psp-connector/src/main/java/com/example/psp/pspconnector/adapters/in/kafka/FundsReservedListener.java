@@ -8,15 +8,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-/**
- * M11 step 3: listens on {@code refunds.funds-reserved.v1} using the container factory built in
- * {@code config.RefundKafkaConsumerConfig} (manual ack, same shape as M4/M5's
- * {@link PaymentRequestedListener} - psp-connector has no transactional producer, unlike the
- * ledger; idempotency here is entirely M5-style, via {@code application.ExecuteRefundUseCase}).
- *
- * <p>Deliberately thin and exception-agnostic, same convention as {@code PaymentRequestedListener}:
- * on success it acks; on failure it simply never reaches the {@code ack.acknowledge()} line.
- */
 @Component
 public class FundsReservedListener {
 

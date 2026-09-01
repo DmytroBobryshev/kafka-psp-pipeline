@@ -5,10 +5,6 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import java.math.BigDecimal;
 
-/**
- * Wire contract for {@code POST /api/payments/{paymentId}/refunds} (M11). Records for DTOs, per
- * PLAN.md. {@code reason} is genuinely optional - the saga proceeds without one.
- */
 public record RequestRefundRequest(
         @NotNull(message = "amount must not be null")
                 @DecimalMin(value = "0.0", inclusive = false, message = "amount must be positive")

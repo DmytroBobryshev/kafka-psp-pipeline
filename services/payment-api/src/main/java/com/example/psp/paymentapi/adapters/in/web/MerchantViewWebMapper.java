@@ -5,7 +5,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/** MapStruct mapper at the merchant-query web boundary: {@link MerchantView} -> {@link MerchantResponse}. */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface MerchantViewWebMapper {
 

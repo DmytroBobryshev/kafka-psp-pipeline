@@ -4,11 +4,6 @@ import com.example.psp.paymentapi.domain.model.RefundStatusHistoryEntry;
 import org.mapstruct.Mapper;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the refund-status-history persistence hexagon boundary (M23, ADR-0007).
- * Mirrors {@link PaymentStatusHistoryPersistenceMapper}: {@code toDomain} is hand-written (no
- * bean-convention constructor on {@link RefundStatusHistoryEntry}), {@code toEntity} is generated.
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface RefundStatusHistoryPersistenceMapper {
 

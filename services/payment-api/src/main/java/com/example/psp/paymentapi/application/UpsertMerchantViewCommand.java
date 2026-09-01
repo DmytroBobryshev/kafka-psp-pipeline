@@ -4,11 +4,6 @@ import com.example.psp.paymentapi.domain.model.MerchantStatus;
 import java.time.Instant;
 import java.util.List;
 
-/**
- * Application-layer input for {@link MerchantViewProjectionUseCase#applyUpsert}, mapped from the
- * inbound Avro event by {@code adapters.in.kafka.MerchantConfigChangedMapper} - the use case never
- * sees the wire type.
- */
 public record UpsertMerchantViewCommand(
         String merchantId,
         String displayName,

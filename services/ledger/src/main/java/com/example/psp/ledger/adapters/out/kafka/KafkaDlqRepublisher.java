@@ -15,38 +15,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
-/**
- * Real Kafka adapter for {@link DlqRepublisher}. Republishes a DLQ record to
- * {@code payments.payment-status-changed.v1} through a dedicated, PLAIN (non-transactional) byte-
- * array {@link KafkaTemplate} ({@code config.KafkaProducerConfig#dlqReplayKafkaTemplate}) - never
- * the service's transactional {@code KafkaTemplate<String, Object>}
- * ({@code config.KafkaProducerConfig#ledgerEntryProducerFactory}, M7's exactly-once producer).
- *
- * <h2>Why this must NOT be the transactional producer</h2>
- *
- * <p>{@code ledgerEntryProducerFactory}'s {@code KafkaTemplate} only ever sends successfully
- * <em>inside</em> a Kafka transaction already opened by the listener container
- * ({@code config.KafkaConsumerConfig#paymentStatusChangedKafkaListenerContainerFactory}) - calling
- * {@code send()} on it from anywhere else throws {@code IllegalStateException} (see
- * {@code adapters.out.kafka.KafkaLedgerEntryPublisher}'s javadoc, "This send is inside a
- * transaction"). {@code adapters.in.web.DlqReplayController} runs on a plain HTTP request thread
- * with no listener-container transaction open around it, so reusing that template here would fail
- * every call outright. A dedicated, transaction-free producer sidesteps the question entirely -
- * exactly the task's explicit constraint: "keep ledger's transactional producer out of this path".
- *
- * <h2>Raw bytes, not the decoded Avro record</h2>
- *
- * <p>This adapter only ever holds the DLQ record's already-encoded raw bytes (see
- * {@code domain.model.DlqRecord}'s javadoc) - {@code KafkaAvroSerializer} needs an Avro-typed
- * object to encode and has no escape hatch for a byte[] it was never asked to decode in the first
- * place, so {@code dlqReplayKafkaTemplate} is built with a plain {@code ByteArraySerializer}
- * instead. Sending those bytes through unchanged, key and headers included, is what makes this
- * republish byte-for-byte identical to the original record.
- *
- * <p>Blocks on the send, same as {@code KafkaPaymentStatusPublisher} on the psp-connector side: a
- * REST-triggered, bounded batch operation should surface a failed republish to its caller rather
- * than silently losing it.
- */
 @Component
 public class KafkaDlqRepublisher implements DlqRepublisher {
 

@@ -11,15 +11,6 @@ import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-/**
- * Plain JUnit against {@code application/} + {@code domain/} - fakes for both ports, no Kafka.
- * Exercises M17's DLQ replay endpoint: every record read off the DLQ is republished byte-for-byte
- * unchanged (key, raw value bytes, and headers all preserved - see
- * {@code domain.model.DlqRecord}'s javadoc for why nothing here decodes the Avro payload), and the
- * requested batch size is passed straight through to {@link DlqReader#pollBatch} (the actual bound
- * is {@code adapters.out.kafka.KafkaDlqReader}'s job, exercised separately since it needs a real
- * consumer factory) - same shape as webhook-notifier's {@code ReplayDlqUseCaseTest}.
- */
 class ReplayDlqUseCaseTest {
 
     @Test
@@ -41,8 +32,6 @@ class ReplayDlqUseCaseTest {
         assertThat(published.key()).isEqualTo("payment-1");
         assertThat(published.value()).isEqualTo(value);
         assertThat(published.headers()).containsExactly(header);
-        // Content-based equality (not the record default's array-reference equality) - see
-        // DlqRecord's javadoc for why equals() is overridden by hand.
         assertThat(published)
                 .isEqualTo(
                         new DlqRecord(

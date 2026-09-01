@@ -19,19 +19,6 @@ import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 import org.springframework.kafka.support.Acknowledgment;
 
-/**
- * M24: same "fakes, not a live broker" style as {@code PaymentStatusChangedListenerTest} - the
- * generated {@code RefundExpiredMapperImpl} has no framework dependency at construction time, so
- * it is instantiated directly, alongside a real {@link PlanWebhookDeliveryUseCase} backed by
- * fakes.
- *
- * <p>Proves the EXPIRED-only ALLOWLIST guard {@link RefundExpiredListener}'s javadoc documents:
- * PENDING/IPN_RECEIVED/VERIFIED (psp-connector's own saga-progress trail on this topic) must never
- * reach the planner - nothing merchant-facing to tell anyone about any of them - but the record
- * must still be acknowledged so the consumer group advances past it instead of redelivering it
- * forever. EXPIRED (payment-api's own refund-expiration sweep verdict, M24) is the one value that
- * IS planned.
- */
 class RefundExpiredListenerTest {
 
     @Test

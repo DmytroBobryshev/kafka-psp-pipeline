@@ -12,13 +12,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 
-/**
- * Real Postgres adapter for {@link PaymentRepository} (M3), replacing the M1 in-memory stub
- * ({@code InMemoryPaymentRepository}, deleted). Talks to the {@code payment_api} database
- * (infra/compose, ADR-0005) via Spring Data JPA ({@link PaymentJpaRepository});
- * {@link PaymentPersistenceMapper} keeps the JPA entity out of {@code domain/} and
- * {@code application/} entirely (ADR-0007) - callers of this class see only {@link Payment}.
- */
 @Repository
 public class PostgresPaymentRepository implements PaymentRepository {
 
@@ -47,24 +40,17 @@ public class PostgresPaymentRepository implements PaymentRepository {
 
     @Override
     public void updateStatus(UUID paymentId, PaymentStatus status) {
-        // The clock is a persistence detail here: the port's contract is "record the outcome",
-        // and WHEN it was recorded is this adapter's bookkeeping, stamped alongside the UPDATE.
         jpaRepository.updateStatus(paymentId, status, java.time.Instant.now());
     }
 
     @Override
     public void applyPendingStatus(UUID paymentId) {
-        // M20: PENDING only applies FROM CREATED - see the port's javadoc for why this is a
-        // conditional UPDATE rather than updateStatus's unconditional one.
         jpaRepository.updateStatusIfCurrentStatus(
                 paymentId, PaymentStatus.PENDING, PaymentStatus.CREATED, java.time.Instant.now());
     }
 
     @Override
     public void applyExpiredStatus(UUID paymentId) {
-        // M22: EXPIRED applies FROM CREATED or PENDING - see the port's javadoc for the guard and
-        // for why a later terminal outcome is still allowed to overwrite this (updateStatus above
-        // is unconditional, so it does).
         jpaRepository.updateStatusIfCurrentStatusIn(
                 paymentId, PaymentStatus.EXPIRED, EXPIRABLE_FROM_STATUSES, java.time.Instant.now());
     }

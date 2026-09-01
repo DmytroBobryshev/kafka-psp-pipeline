@@ -5,17 +5,6 @@ import java.util.Objects;
 import java.util.UUID;
 import lombok.Getter;
 
-/**
- * One record of psp-connector executing a refund against the (simulated) provider (M11) - the
- * refund-path counterpart of {@link PaymentAttempt}. Pure Java, no framework dependency
- * (ADR-0007).
- *
- * <p>Unlike {@code PaymentAttempt}, this attempt carries only ONE idempotency concern: the inbound
- * {@code refunds.funds-reserved.v1} event's own {@code eventId} ({@code causationEventId}) -
- * M5 level 1, replay/consumer idempotency. This module deliberately does not replicate M5's level
- * 2 (duplicate provider callback, keyed on a provider-minted id) for the refund path - see
- * services/psp-connector/README.md's M11 section for why that simplification was accepted.
- */
 @Getter
 public final class RefundAttempt {
 
@@ -28,9 +17,6 @@ public final class RefundAttempt {
     private final RefundOutcome outcome;
     private final long providerLatencyMs;
     private final UUID causationEventId;
-    // Same contract as PaymentAttempt#statusEventId: the outbound event's envelope eventId,
-    // minted once and persisted so a redelivery republishes the SAME logical event (M19 drill 9).
-    // Nullable only for rows persisted before db/migration/V4 added the column.
     private final UUID statusEventId;
     private final String traceId;
     private final String correlationId;
@@ -66,7 +52,6 @@ public final class RefundAttempt {
         this.processedAt = Objects.requireNonNull(processedAt, "processedAt must not be null");
     }
 
-    /** See {@link PaymentAttempt#from} for why {@code statusEventId} is minted by the caller. */
     public static RefundAttempt from(
             UUID refundId,
             UUID paymentId,
@@ -95,11 +80,6 @@ public final class RefundAttempt {
                 Instant.now());
     }
 
-    /**
-     * Reconstitutes an attempt from persisted state - needed since the M19 drill 9 fix gave this
-     * table its first read path ({@code RefundAttemptLogRepository#findByInboundEventId}, the
-     * republish-on-redelivery lookup). Counterpart of {@link PaymentAttempt#reconstitute}.
-     */
     public static RefundAttempt reconstitute(
             UUID id,
             UUID refundId,

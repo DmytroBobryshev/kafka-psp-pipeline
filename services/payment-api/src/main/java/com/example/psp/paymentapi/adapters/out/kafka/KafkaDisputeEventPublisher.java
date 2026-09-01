@@ -20,21 +20,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
-/**
- * Direct-to-Kafka adapter for {@link DisputeEventPublisher} (M13) - like {@code
- * KafkaMerchantConfigPublisher}, this is a write path that does NOT go through the M6 outbox (see
- * the port's javadoc for why). Key = {@code disputeId} (see the Avro schema's {@code disputeId}
- * field doc - ADR-0003's "ordering is vacuous on a one-event-per-aggregate topic" exception,
- * chosen for even spread the same way {@code payments.payment-requested.v1} is).
- *
- * <p>Synchronous send, on purpose - same reasoning as {@code KafkaMerchantConfigPublisher}: a
- * dispute the caller believes was opened but which never reached the topic is worse than an
- * honest 5xx, and there is no outbox row standing behind this call to make it eventually true.
- * This blocking send is also what makes the measured demo's {@code RecordTooLargeException}
- * surface synchronously as a failed {@code POST}, with the real exception in payment-api's logs,
- * rather than being swallowed by a fire-and-forget send - see services/payment-api/README.md's
- * "M13: claim check, measured" section.
- */
 @Component
 public class KafkaDisputeEventPublisher implements DisputeEventPublisher {
 
@@ -128,11 +113,6 @@ public class KafkaDisputeEventPublisher implements DisputeEventPublisher {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while publishing to " + topic, e);
         } catch (ExecutionException | TimeoutException e) {
-            // ExecutionException's cause is org.apache.kafka.common.errors.RecordTooLargeException
-            // when the serialized record exceeds max.request.size - the measured demo's whole
-            // point (services/payment-api/README.md's "M13: claim check, measured" section).
-            // Surfaces as a 500 via common-web's GlobalExceptionHandler; safe to retry blindly
-            // once the underlying cause is fixed (same reasoning as KafkaMerchantConfigPublisher).
             throw new IllegalStateException("Failed to publish to " + topic + " within " + SEND_TIMEOUT, e);
         }
     }

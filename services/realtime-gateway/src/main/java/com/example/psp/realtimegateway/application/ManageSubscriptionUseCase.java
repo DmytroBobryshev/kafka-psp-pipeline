@@ -5,13 +5,6 @@ import com.example.psp.realtimegateway.domain.port.SseConnectionRegistry;
 import com.example.psp.realtimegateway.domain.model.SubscriptionFilter;
 import org.springframework.stereotype.Service;
 
-/**
- * Connection-lifecycle use case: register/deregister a browser's subscription.
- * {@code application/} orchestrates the {@link SseConnectionRegistry} port only (ADR-0007) - it
- * never imports {@code SseEmitter}, which is why {@code adapters.in.web.PaymentTimelineController}
- * builds the emitter and its lifecycle callbacks itself and only hands this class the resulting
- * {@link EventSink}.
- */
 @Service
 public class ManageSubscriptionUseCase {
 

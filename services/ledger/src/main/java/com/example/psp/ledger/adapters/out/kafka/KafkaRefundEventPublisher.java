@@ -14,26 +14,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
-/**
- * Real Kafka adapter for {@link RefundEventPublisher} (M11). Uses the SAME transactional
- * {@link KafkaTemplate} M7's {@code KafkaLedgerEntryPublisher} uses ({@code config.KafkaProducerConfig}'s
- * {@code kafkaTemplate} bean, backed by a producer factory with a {@code transactionIdPrefix}) - a
- * send here only ever happens from inside one of the three refund-saga listeners
- * ({@code RefundRequestedListener}, {@code RefundFailedListener}), each running inside the Kafka
- * transaction the listener container already opened, exactly like every other M7-era publisher in
- * this service. There is deliberately no {@code executeInTransaction(...)} here, for the same
- * reason {@code KafkaLedgerEntryPublisher} has none: that helper starts a producer-only
- * transaction, excluding the consumed offsets.
- *
- * <p>The TTL sweeper ({@code adapters.in.scheduler.ReservationTtlSweeper}) also calls
- * {@link #publishReservationReleased} - from OUTSIDE any listener container, so outside any
- * container-driven transaction. {@code KafkaTemplate#send} on a transactional template with no
- * transaction already open on the calling thread automatically wraps that single send in its own
- * local producer transaction (Spring Kafka's documented behaviour for a transactional template
- * used outside {@code @Transactional}), so this still produces a well-formed, fully committed
- * (or, on failure, cleanly aborted) transaction - just not one that also carries a consumed offset,
- * because the sweeper never consumed anything.
- */
 @Component
 public class KafkaRefundEventPublisher implements RefundEventPublisher {
 

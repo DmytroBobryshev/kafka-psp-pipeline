@@ -7,10 +7,6 @@ import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-/**
- * Plain JUnit over {@link RetryChain} - no Spring, no Kafka, nothing but the topology logic
- * itself. Proves the chain's routing is correct independent of anything that publishes to it.
- */
 class RetryChainTest {
 
     private static final RetryChain CHAIN =

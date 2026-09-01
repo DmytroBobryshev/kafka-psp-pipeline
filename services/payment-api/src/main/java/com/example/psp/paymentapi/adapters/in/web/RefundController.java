@@ -12,17 +12,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * M11's entry point (ADR-0004: commands enter via REST; everything else is events). The web
- * adapter for the refund hexagon: DTO -&gt; MapStruct ({@link RefundWebMapper}) -&gt; use case
- * -&gt; domain -&gt; MapStruct -&gt; DTO, same shape as {@link PaymentController}.
- *
- * <p>{@code 202 Accepted}, not {@code 201 Created}: the refund row and its outbox event are
- * durably committed when this method returns, but the thing the caller actually asked for -
- * money being reserved and eventually refunded - has not happened yet and may not (insufficient
- * balance, a provider decline). 202 states that honestly, matching
- * docs/diagrams/sequence-refund-saga.md's "202 Accepted {refundId, status: REQUESTED}".
- */
 @RestController
 @RequestMapping("/api/payments/{paymentId}/refunds")
 public class RefundController {

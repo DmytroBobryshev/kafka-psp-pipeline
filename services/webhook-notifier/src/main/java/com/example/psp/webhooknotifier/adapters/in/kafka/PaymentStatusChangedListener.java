@@ -9,39 +9,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-/**
- * The planner listener (topic-map's {@code webhook-notifier.planner.v1} group): consumes
- * {@code payments.payment-status-changed.v1} using the container factory built in
- * {@code config.KafkaConsumerConfig#plannerKafkaListenerContainerFactory}.
- *
- * <p>No DLQ for THIS topic (see docs/diagrams/topic-map.md's "Dead-letter topics for other
- * consumers" section - webhook-notifier's only provisioned DLQ is
- * {@code webhooks.webhook-delivery-requested.v1.dlq}, downstream of the planner, not this
- * listener). {@code ErrorHandlingDeserializer} is still configured on this consumer factory
- * (ADR-0006 mandates it on every consumer factory, and it is the fix M8's poison-pill "prove it"
- * experiment demonstrates) - a bad record here is logged and the offset is skipped rather than
- * blocking the partition forever, but it is not parked anywhere for replay. A documented scope
- * boundary, not a silent one: this is a pure translation step with nothing of its own to protect
- * against loss (the source of truth, {@code payments.payment-status-changed.v1}, is retained for
- * 7 days and already has its own consumers/DLQs elsewhere in the system).
- *
- * <p><b>Only a terminal status is planned.</b> M20 added {@code "PENDING"} (psp-connector's
- * non-terminal, pre-provider-call event); M21 added {@code "IPN_RECEIVED"}/{@code "VERIFIED"}
- * (stage 3/4 trail events, emitted before the terminal outcome). None of the three has anything to
- * tell a merchant yet, so this filters by a terminal ALLOWLIST rather than growing an ever-longer
- * skip-list of non-terminal statuses one at a time - {@code SUCCEEDED}/{@code DECLINED}/(M22)
- * {@code EXPIRED} become a planned delivery; anything else is acknowledged and dropped before
- * {@link PlanWebhookDeliveryUseCase} - which stays reused unchanged across all three planner
- * sources (see its own javadoc) - ever sees it.
- *
- * <p>{@code EXPIRED} (M22, published by payment-api's own
- * {@code adapters.in.scheduler.PaymentExpirationScheduler}) is terminal from a merchant-visibility
- * standpoint even though it is produced by a different service than the other two: a merchant
- * whose payment timed out still needs the same notification a decline would trigger - {@code
- * eventType} stays the same {@code PAYMENT_STATUS_CHANGED} constant
- * ({@code adapters.in.kafka.PaymentStatusChangedMapper}), so this widened allowlist is the only
- * change EXPIRED needed on this side of the pipeline.
- */
 @Component
 public class PaymentStatusChangedListener {
 

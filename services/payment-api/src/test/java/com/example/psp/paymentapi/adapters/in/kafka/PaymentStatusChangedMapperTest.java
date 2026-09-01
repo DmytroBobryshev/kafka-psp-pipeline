@@ -12,15 +12,6 @@ import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/**
- * M21: {@code PaymentStatusChangedMapperImpl} has no framework dependency at construction time -
- * same precedent as webhook-notifier's own {@code PaymentStatusChangedListenerTest} - so it is
- * instantiated directly rather than through Spring. Exercises what {@code toCommand}'s
- * hand-written branching exists to demonstrate: PENDING/SUCCEEDED/DECLINED keep their M20
- * domainStatus translation while IPN_RECEIVED/VERIFIED map to a {@code null} one (history-only),
- * and a blank wire {@code providerReference} (PENDING's) becomes {@code null}, never an empty
- * string.
- */
 class PaymentStatusChangedMapperTest {
 
     private final PaymentStatusChangedMapper mapper = new PaymentStatusChangedMapperImpl();

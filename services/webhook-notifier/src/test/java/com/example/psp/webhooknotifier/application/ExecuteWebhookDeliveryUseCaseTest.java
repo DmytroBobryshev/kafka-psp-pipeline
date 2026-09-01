@@ -22,23 +22,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 
-/**
- * Plain JUnit against {@code application/} + {@code domain/} - no Spring, no Kafka, no HTTP, no
- * MongoDB, same "fakes, not a live broker" style as psp-connector's
- * {@code ProcessPaymentRequestUseCaseTest}. Exercises the ADR-0006 branches this module exists to
- * demonstrate:
- *
- * <ul>
- *   <li>every outcome - success included - is logged to the attempt log exactly once per call
- *       (M8 requirement #6);
- *   <li>a non-retryable (4xx) failure goes straight to the DLQ, never through a retry topic (M8
- *       requirement #4);
- *   <li>a retryable failure hops to the next tier with the delay {@link RetryChain} prescribes,
- *       via {@link WebhookDeliveryPublisher#publishDelayed} - never {@code publishNow} - and the
- *       attempt count is incremented for the next hop;
- *   <li>a retryable failure on the LAST tier is exhausted and also goes to the DLQ.
- * </ul>
- */
 class ExecuteWebhookDeliveryUseCaseTest {
 
     private static final RetryChain CHAIN =
@@ -189,12 +172,6 @@ class ExecuteWebhookDeliveryUseCaseTest {
             recorded.add(attempt);
         }
 
-        /**
-         * The M19 read side ({@code GET /api/webhooks/deliveries}) is not part of the delivery use
-         * case under test - ExecuteWebhookDeliveryUseCase only ever writes attempts. Throwing rather
-         * than returning an empty list keeps that honest: an empty list would let a future test
-         * assert against this fake and silently pass.
-         */
         @Override
         public List<WebhookDelivery> search(UUID paymentId, UUID refundId, String merchantId, int limit) {
             throw new UnsupportedOperationException(

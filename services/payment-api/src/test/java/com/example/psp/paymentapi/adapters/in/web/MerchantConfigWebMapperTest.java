@@ -8,14 +8,6 @@ import com.example.psp.paymentapi.domain.model.MerchantStatus;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-/**
- * M22: {@code MerchantConfigWebMapperImpl} has no framework dependency at construction time - same
- * "instantiate the generated impl directly, no Spring" precedent as
- * {@code adapters.in.kafka.PaymentStatusChangedMapperTest}. Exercises the one piece of hand-written
- * logic {@link MerchantConfigWebMapper} carries: resolving an absent (null)
- * {@code paymentExpirationSeconds} on the request to {@link MerchantConfig
- * #DEFAULT_PAYMENT_EXPIRATION_SECONDS}, and passing an explicit value through unchanged.
- */
 class MerchantConfigWebMapperTest {
 
     private final MerchantConfigWebMapper mapper = new MerchantConfigWebMapperImpl();

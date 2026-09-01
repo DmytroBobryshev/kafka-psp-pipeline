@@ -7,22 +7,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the persistence boundary (ADR-0007, "MapStruct at every boundary"): domain
- * {@code <->} MongoDB document.
- *
- * <p>Most of the interest is in the <b>flattening</b>: the domain nests
- * {@link MerchantWindowMetrics} inside {@link MerchantMetricsWindow}, while the document is flat
- * so a {@code mongosh} query or a dashboard aggregation does not have to reach through a
- * sub-object. The derived fields ({@code declineRate}, {@code declineRateBps},
- * {@code avgPipelineLatencyMillis}, {@code declineRateAlert}) come from the domain's own accessor
- * methods, so the definition of "decline rate" exists in exactly one place - the domain record -
- * and cannot drift between the REST response and the stored document.
- *
- * <p>{@code unmappedTargetPolicy = ERROR}: a field added to the document without a mapping fails
- * the build. {@code updatedAt} is supplied by the caller rather than mapped, hence the explicit
- * source parameter.
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface MetricsProjectionMapper {
 
@@ -52,10 +36,6 @@ public interface MetricsProjectionMapper {
     @Mapping(target = "metrics", expression = "java(toMetrics(document))")
     MerchantMetricsWindow toDomain(MerchantWindowMetricsDocument document);
 
-    /**
-     * Rebuilds the aggregate from the stored counters - never from the stored derived values,
-     * which are a denormalised convenience for readers, not the source of truth.
-     */
     default MerchantWindowMetrics toMetrics(MerchantWindowMetricsDocument document) {
         return new MerchantWindowMetrics(
                 document.getTotalCount(),

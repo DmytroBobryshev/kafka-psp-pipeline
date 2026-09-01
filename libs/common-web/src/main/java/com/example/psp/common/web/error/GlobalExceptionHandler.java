@@ -21,18 +21,6 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-/**
- * RFC 7807 ("Problem Details for HTTP APIs") error handling, shared across every service.
- *
- * <p>Every response body is a {@link ProblemDetail}: {@code type}, {@code title}, {@code status},
- * {@code detail}, {@code instance}, plus a {@code correlationId} extension property so a client
- * can hand support the same id that appears in the server logs (see {@link
- * com.example.psp.common.web.correlation.CorrelationIdFilter}).
- *
- * <p>Services extend this in M3+ with domain-specific {@code @ExceptionHandler} methods (e.g. a
- * retryable-vs-non-retryable taxonomy per ADR-0006); this base class only covers the generic
- * cases every service needs on day one.
- */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -62,11 +50,6 @@ public class GlobalExceptionHandler {
         return withCommonProperties(problem, request);
     }
 
-    /**
-     * Bean-validation failure on an {@code @Valid @RequestBody}. Without this, the catch-all below
-     * reports a malformed request as a 500, which tells the caller the server broke when in fact
-     * their payload did - and buries the field that was actually wrong.
-     */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ProblemDetail handleBeanValidation(
             MethodArgumentNotValidException ex, HttpServletRequest request) {
@@ -91,15 +74,6 @@ public class GlobalExceptionHandler {
         return withCommonProperties(problem, request);
     }
 
-    /**
-     * A body that is not parseable at all - truncated JSON, wrong content type, a string where a
-     * number belongs. Unlike most Spring MVC exceptions this one does NOT implement {@link
-     * ErrorResponse}, so it reaches the catch-all and would otherwise be reported as a 500. The
-     * caller sent something the parser could not read; that is a 400.
-     *
-     * <p>The parser's own message is deliberately not echoed back - it carries type names and
-     * offsets that are noise to a caller and detail to an attacker.
-     */
     @ExceptionHandler({HttpMessageNotReadableException.class, TypeMismatchException.class})
     public ProblemDetail handleUnreadableRequest(Exception ex, HttpServletRequest request) {
         log.debug(
@@ -115,14 +89,6 @@ public class GlobalExceptionHandler {
         return withCommonProperties(problem, request);
     }
 
-    /**
-     * Spring MVC's own exceptions - unmatched route, unsupported method, missing parameter -
-     * already carry the correct status. The catch-all below cannot see that, so without this
-     * handler a 404 or a 405 is reported as a 500.
-     *
-     * <p>These are client errors, so they are logged at DEBUG. Logging them at ERROR (as the
-     * catch-all does) means a scan for a missing favicon looks identical to a broken service.
-     */
     @ExceptionHandler(ErrorResponseException.class)
     public ProblemDetail handleErrorResponse(
             ErrorResponseException ex, HttpServletRequest request) {
@@ -131,9 +97,6 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ProblemDetail handleUnexpected(Exception ex, HttpServletRequest request) {
-        // Some Spring exceptions implement ErrorResponse without extending ErrorResponseException
-        // (NoResourceFoundException extends ServletException, for one), so they land here. Honour
-        // the status they carry rather than flattening everything to 500.
         if (ex instanceof ErrorResponse errorResponse) {
             return fromStatus(errorResponse.getStatusCode(), ex, request);
         }

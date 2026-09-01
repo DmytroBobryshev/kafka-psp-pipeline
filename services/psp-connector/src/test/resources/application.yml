@@ -1,7 +1,3 @@
-# Test-classpath override of src/main/resources/application.yml. PspConnectorApplicationTests
-# only needs the Spring context to load against an @EmbeddedKafka broker and an in-memory H2
-# database - the real integration is exercised for real against the live infra/compose stack,
-# captured in README.md, not reproduced here.
 spring:
   application:
     name: psp-connector
@@ -16,8 +12,6 @@ spring:
   flyway:
     enabled: false
   kafka:
-    # Overridden at runtime by @EmbeddedKafka's broker address (spring.kafka.bootstrap-servers
-    # system property it sets) - this value only matters before that override applies.
     bootstrap-servers: localhost:9092
     consumer:
       group-id: psp-connector.test.v1
@@ -32,20 +26,13 @@ psp-connector:
   kafka:
     payment-requested-topic: payments.payment-requested.v1
     payment-status-changed-topic: payments.payment-status-changed.v1
-    # M11: only PRESENCE matters for a context-load test, not reachability.
     funds-reserved-topic: refunds.funds-reserved.v1
     refund-completed-topic: refunds.refund-completed.v1
     refund-failed-topic: refunds.refund-failed.v1
     refund-status-changed-topic: refunds.refund-status-changed.v1
-    # M12: only PRESENCE matters for a context-load test, not reachability.
     provider-status-query-topic: psp.provider-status-query.v1
-  # M9 Phase 1: KafkaAvroDeserializer only resolves this lazily (on first poll() that actually
-  # needs to fetch/cache a schema) - PspConnectorApplicationTests never publishes to the topic, so
-  # this value only needs to be present, not reachable.
   schema-registry:
     url: http://localhost:8081
-  # M17: only PRESENCE matters for a context-load test, not reachability - see
-  # src/main/resources/application.yml for what these mean.
   dlq-replay:
     dlq-topic: payments.payment-requested.v1.psp-connector.dlq
     consumer-group: psp-connector.dlq-replay.v1

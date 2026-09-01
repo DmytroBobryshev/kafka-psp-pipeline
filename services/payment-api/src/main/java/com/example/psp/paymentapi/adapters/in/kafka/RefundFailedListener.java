@@ -10,13 +10,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-/**
- * M23: payment-api's consumer of {@code refunds.refund-failed.v1} - group
- * {@code payment-api.refund-failed-view.v1} ({@code config.RefundHistoryKafkaConfig}). Records a
- * terminal {@code FAILED} row in {@code refund_status_history} (no {@code providerReference} - the
- * event carries none, see {@code 10-refund-failed.avsc}) - history-only, same as
- * {@link RefundStatusChangedListener}.
- */
 @Component
 public class RefundFailedListener {
 

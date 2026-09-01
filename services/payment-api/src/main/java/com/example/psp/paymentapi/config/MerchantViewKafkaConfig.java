@@ -20,21 +20,6 @@ import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.util.backoff.FixedBackOff;
 
-/**
- * Consumer wiring for {@code adapters.in.kafka.MerchantConfigChangedListener} - group
- * {@code payment-api.merchant-view.v1}. Same Avro {@code ConsumerFactory} shape as
- * {@code PaymentStatusViewKafkaConfig} ({@code ErrorHandlingDeserializer} wrapping
- * {@link KafkaAvroDeserializer}, {@code specific.avro.reader=true}), manual-immediate acks, and a
- * zero-retry {@link DefaultErrorHandler} with no recoverer - this listener carries no DLQ for the
- * same reason {@code PaymentStatusChangedListener} does not (a derived, lossy read-model
- * projection, ADR-0006).
- *
- * <p>{@code auto.offset.reset=earliest}, explicitly overridden here rather than inherited: this
- * topic is compacted and IS the merchant aggregate's only durable state, so a fresh consumer
- * group must replay it from the start to reconstruct every merchant that existed before this
- * listener was ever deployed - starting from this service's otherwise-default {@code latest}
- * would silently miss all of them.
- */
 @Configuration
 public class MerchantViewKafkaConfig {
 
@@ -72,8 +57,6 @@ public class MerchantViewKafkaConfig {
         factory.getContainerProperties().setObservationRegistry(observationRegistry);
         factory.getContainerProperties().setObservationEnabled(true);
 
-        // No DLQ for this topic (see MerchantConfigChangedListener's javadoc) - zero retries, log
-        // and skip via the default (no-recoverer) DefaultErrorHandler.
         factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
         return factory;
     }

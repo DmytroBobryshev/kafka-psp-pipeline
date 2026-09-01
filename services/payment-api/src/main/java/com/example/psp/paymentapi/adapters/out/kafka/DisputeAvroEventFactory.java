@@ -5,16 +5,6 @@ import com.example.psp.paymentapi.domain.model.DocumentReference;
 import java.nio.ByteBuffer;
 import org.springframework.stereotype.Component;
 
-/**
- * Builds the Avro wire record for {@code disputes.dispute-opened.v1} (M13) from the hand-written
- * {@link EventEnvelope} and the dispute fields. A plain method pair, not a MapStruct
- * {@code @Mapper} - same established exception as {@link MerchantConfigAvroEventFactory}.
- *
- * <p>Two build methods, {@link #toInlineAvro} and {@link #toClaimCheckAvro}, mirroring
- * {@code domain.port.DisputeEventPublisher}'s two publish methods one level down: each builds the
- * {@code DisputeOpened} envelope once and sets exactly one branch of the {@code document} union
- * (generated as {@code Object} - see either method body), never both.
- */
 @Component
 public class DisputeAvroEventFactory {
 

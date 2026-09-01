@@ -9,10 +9,6 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Repository;
 
-/**
- * Real Postgres adapter for {@link RefundRepository} (M11). Talks to the {@code payment_api}
- * database (infra/compose, ADR-0005) via Spring Data JPA.
- */
 @Repository
 public class PostgresRefundRepository implements RefundRepository {
 

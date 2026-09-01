@@ -20,22 +20,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 
-/**
- * M19: the new planning path - {@code refunds.refund-completed.v1}/{@code refunds.refund-failed.v1}
- * -&gt; {@code adapters.in.kafka.RefundCompletedMapper}/{@code RefundFailedMapper} -&gt;
- * {@link PlanWebhookDeliveryUseCase} -&gt; a planned delivery on the base topic. Same "fakes, not a
- * live broker" style as {@code ExecuteWebhookDeliveryUseCaseTest}: no Spring context, no Kafka -
- * the MapStruct mappers' generated {@code *Impl} classes are plain POJOs with no framework
- * dependency at construction time, so they are instantiated directly here exactly like any other
- * fake.
- *
- * <p>{@link PlanWebhookDeliveryUseCase} itself is reused completely unchanged for both new event
- * types (see its javadoc) - the property genuinely worth proving here is that each mapper produces
- * a correctly-shaped {@link WebhookDeliveryCommand} (right {@code eventType}, right {@code status}
- * vocabulary, {@code refundId} populated, {@code declineReason} reused for the refund failure
- * reason) and that the use case publishes it to the SAME base topic a payment-status delivery
- * would use, attempt 1, no different from any other planned delivery.
- */
 class RefundWebhookPlanningTest {
 
     private static final RetryChain CHAIN =
@@ -91,8 +75,6 @@ class RefundWebhookPlanningTest {
         assertThat(published0.refundId()).isEqualTo(refundId);
         assertThat(published0.paymentId()).isEqualTo(paymentId);
         assertThat(published0.status()).isEqualTo("FAILED");
-        // The refund failure reason travels in the same slot a payment decline reason would -
-        // see WebhookDeliveryCommand#declineReason()'s widened javadoc.
         assertThat(published0.declineReason()).isEqualTo("INSUFFICIENT_BALANCE");
     }
 

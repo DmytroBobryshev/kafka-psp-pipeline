@@ -11,25 +11,6 @@ import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 
-/**
- * The merchant-webhook projection listener (group {@code webhook-notifier.merchant-view.v1},
- * {@code config.KafkaConsumerConfig#merchantViewKafkaListenerContainerFactory}): mirrors
- * {@code merchants.merchant-config-changed.v1} into {@code merchant_webhooks} so
- * {@code adapters.out.http.RestClientMerchantWebhookClient} can resolve a merchant's REAL
- * webhookUrl at delivery time instead of always falling back to the simulated endpoint - the M8
- * bug this listener fixes. A fresh consumer group replays the whole compacted log from
- * {@code auto-offset-reset=earliest} (the service default, {@code application.yml}), so this
- * projection is complete on first startup, not just from the next config change onward.
- *
- * <p>Same {@code @Payload(required = false)}-for-tombstone idiom as payment-api's own
- * {@code MerchantConfigChangedListener}, which independently projects this same compacted topic
- * into its own read model (ADR-0005: a separate consumer group and a separate database, never
- * shared state between services).
- *
- * <p>No DLQ - a derived, lossy read-model projection (ADR-0006), same reasoning as
- * {@link PaymentStatusChangedListener}: a record this listener cannot process is logged and
- * skipped by the container's zero-retry error handler.
- */
 @Component
 public class MerchantConfigChangedListener {
 

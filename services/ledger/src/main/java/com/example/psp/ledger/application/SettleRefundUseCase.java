@@ -11,25 +11,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-/**
- * M11 step 4 (happy path): consumes {@code refunds.refund-completed.v1}. Converts an active
- * reservation into a permanent DEBIT {@code ledger_entries} row - the guarded
- * {@code RESERVED -> COMPLETED} transition ({@link RefundRepository#trySettle}) - and publishes
- * {@code ledger.ledger-entry-recorded.v1} via the SAME {@link LedgerEntryPublisher} M7 already
- * uses (this listener runs inside the transactional-producer/read_committed machinery M7 built;
- * see {@code adapters.in.kafka.RefundCompletedListener}).
- *
- * <p>No balance delta is applied here - the amount was already subtracted from the balance at
- * reservation time ({@code ReserveRefundUseCase}); settlement only makes that movement permanent
- * and auditable (see {@link LedgerEntry#debit}).
- *
- * <p>The documented late-completion edge case lives entirely inside
- * {@link RefundRepository#trySettle}: when the saga is no longer RESERVED (typically RELEASED, by
- * compensation or the TTL sweeper), the repository escalates to
- * {@code RefundSagaStatus#NEEDS_MANUAL_REVIEW} instead of applying the debit - this use case only
- * needs to log that loudly, since the escalation itself is already durable by the time this
- * method sees {@link RefundTransitionResult#ESCALATED_MANUAL_REVIEW}.
- */
 @Service
 public class SettleRefundUseCase {
 

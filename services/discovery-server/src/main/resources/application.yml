@@ -3,33 +3,16 @@ spring:
     name: discovery-server
 
 server:
-  # Task brief's port map: 8000 (api-gateway), 8761 (discovery-server) - deliberately outside the
-  # 8085-8090 range the six pipeline services use, and off 8080 (AKHQ) / 8081 (Schema Registry).
   port: 8761
 
 eureka:
   client:
-    # A Eureka SERVER does not need to be a client of itself - registering with and fetching from
-    # its own not-yet-started instance is a startup-ordering trap this avoids entirely. Single-node
-    # registry: no peer-awareness config needed (that's a multi-node Eureka concern, out of scope
-    # for a laptop dev stack).
     register-with-eureka: false
     fetch-registry: false
   instance:
-    # Resolvable both from other containers in kafka-psp-net (by the `discovery-server` hostname,
-    # which this setting does NOT affect) and from the six services running on the HOST, which
-    # reach this container via its published port on localhost - see application note in the
-    # README and infra/compose/docker-compose.yml.
     hostname: localhost
-    # ADR-0009: tuned for a dev laptop, not production defaults - fast failure detection is the
-    # whole point of exercising Eureka's own mechanics here, not the 90s eviction window a
-    # production self-preserving cluster would use.
     lease-renewal-interval-in-seconds: 5
   server:
-    # ADR-0009: self-preservation exists to stop a registry from mass-evicting every instance
-    # during a network partition between it and its clients - the right call in production, and
-    # actively unhelpful in a single-node dev registry where a "partition" is just a service you
-    # stopped on purpose and want reflected immediately.
     enable-self-preservation: false
 
 management:
@@ -38,10 +21,6 @@ management:
       exposure:
         include: health,info
 
-# See config.ComposeProfileGuard's javadoc: real (not aspirational) enforcement of ADR-0009's
-# "this service only ever runs under the docker-compose profile" rule. Flipped to false by
-# src/test/resources/application.yml so DiscoveryServerApplicationTests needs no active profile,
-# the same convention every other service's context-load test already uses.
 discovery-server:
   startup:
     require-compose-profile: true

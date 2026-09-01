@@ -7,12 +7,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * Write side of the local merchant-config projection, driven by
- * {@code adapters.in.kafka.MerchantConfigChangedListener}. Two operations mirroring the topic's
- * two record shapes: a value (upsert) and a tombstone (delete). Both are idempotent by
- * construction - see {@link com.example.psp.paymentapi.domain.port.MerchantViewRepository}.
- */
 @Service
 public class MerchantViewProjectionUseCase {
 

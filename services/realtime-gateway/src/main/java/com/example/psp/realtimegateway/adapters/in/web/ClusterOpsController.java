@@ -20,25 +20,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * M17's cluster-ops API: page 5's "Cluster ops" (topics/groups/lag) and page 3's generic DLQ
- * browse, all under {@code /api/realtime/cluster/**} so api-gateway's existing
- * {@code /api/realtime/**} route needs no changes at all.
- *
- * <p>Deliberately thin, same shape as every other controller in this codebase - the interesting
- * work (AdminClient calls, offset arithmetic, UTF-8-vs-Base64 detection) lives in
- * {@code application/} and {@code adapters.out.kafka}; this class only maps ports to paths and
- * domain records to response DTOs.
- *
- * <table border="1">
- *   <caption>Endpoints</caption>
- *   <tr><th>Path</th><th>Backed by</th></tr>
- *   <tr><td>{@code GET /topics}</td><td>{@code Admin#listTopics}+{@code #describeTopics}</td></tr>
- *   <tr><td>{@code GET /groups}</td><td>{@code Admin#listConsumerGroups}+{@code #describeConsumerGroups}</td></tr>
- *   <tr><td>{@code GET /groups/{groupId}/lag}</td><td>{@code Admin#listConsumerGroupOffsets}+{@code #listOffsets}</td></tr>
- *   <tr><td>{@code GET /dlq/{topic}/records?max=20}</td><td>a short-lived, group-less {@code KafkaConsumer} (non-destructive)</td></tr>
- * </table>
- */
 @RestController
 @RequestMapping("/api/realtime/cluster")
 public class ClusterOpsController {
@@ -73,13 +54,6 @@ public class ClusterOpsController {
         return new ConsumerGroupLagResponse(groupId, totalLag, partitions);
     }
 
-    /**
-     * {@code max} defaults to 20 (the M17 spec's own example) and is clamped by
-     * {@code application.BrowseDlqUseCase} regardless of what is requested here - see that class
-     * for the ceiling. A {@code topic} not ending in {@code .dlq} is rejected there too, as an
-     * {@link IllegalArgumentException} that {@code common-web.GlobalExceptionHandler} turns into a
-     * plain {@code 400}.
-     */
     @GetMapping("/dlq/{topic}/records")
     public DlqRecordsResponse dlqRecords(
             @PathVariable("topic") String topic, @RequestParam(name = "max", defaultValue = "20") int max) {
@@ -88,13 +62,6 @@ public class ClusterOpsController {
         return new DlqRecordsResponse(topic, responses.size(), responses);
     }
 
-    /**
-     * {@link ClusterOperationException} maps to {@code 502 Bad Gateway}, not {@code 500}: this
-     * service did nothing wrong, the Kafka cluster (or the bounded wait for it,
-     * {@code config.ClusterAdminConfig}'s 10s AdminClient timeout) did not answer as expected -
-     * same distinction payment-api's {@code ProviderStatusController#handleTimeout} draws for its
-     * own downstream-timeout exception, applied to this service's one downstream dependency.
-     */
     @ExceptionHandler(ClusterOperationException.class)
     public ProblemDetail handleClusterOperationFailure(ClusterOperationException ex, HttpServletRequest request) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY, ex.getMessage());

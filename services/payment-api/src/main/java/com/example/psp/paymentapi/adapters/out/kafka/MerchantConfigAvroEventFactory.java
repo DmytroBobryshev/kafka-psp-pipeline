@@ -4,21 +4,6 @@ import com.example.psp.common.events.EventEnvelope;
 import com.example.psp.paymentapi.domain.model.MerchantConfig;
 import org.springframework.stereotype.Component;
 
-/**
- * Builds the Avro wire record for {@code merchants.merchant-config-changed.v1} (M10) from the
- * hand-written {@link EventEnvelope} and the {@link MerchantConfig} aggregate.
- *
- * <p>A plain method, not a MapStruct {@code @Mapper}, for exactly the reasons
- * {@code adapters.out.outbox.PaymentAvroEventFactory}'s javadoc lays out for the M9 Phase 1
- * equivalent - a flat record reached through the generated Avro builder with one real conversion
- * (UUID {@code ->} String) is not worth an annotation-processed interface.
- *
- * <p>There is no {@code toAvro} overload for the delete case, and that absence is the point: a
- * tombstone has <b>no Avro record at all</b>. Its value is {@code null} on the wire - no magic
- * byte, no schema id, zero bytes - so it never touches this class, never touches Schema Registry,
- * and is not validated against any schema. See
- * {@link com.example.psp.paymentapi.domain.port.MerchantConfigPublisher#publishConfigDeleted}.
- */
 @Component
 public class MerchantConfigAvroEventFactory {
 

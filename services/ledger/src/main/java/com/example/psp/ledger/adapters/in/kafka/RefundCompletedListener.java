@@ -8,11 +8,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * M11 step 4 (happy path): listens on {@code refunds.refund-completed.v1}, same transactional
- * shape as {@link RefundRequestedListener} - see that class's javadoc and
- * {@code PaymentStatusChangedListener}'s (M7) for the full mechanics.
- */
 @Component
 public class RefundCompletedListener {
 

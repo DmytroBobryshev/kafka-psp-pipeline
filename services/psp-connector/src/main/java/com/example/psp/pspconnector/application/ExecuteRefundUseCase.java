@@ -13,20 +13,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-/**
- * M11 step 3: consumes {@code refunds.funds-reserved.v1}, executes the refund against the
- * (simulated) provider, records the attempt, and publishes the outcome - either
- * {@code refunds.refund-completed.v1} or {@code refunds.refund-failed.v1}
- * ({@link RefundStatusPublisher}). A provider decline is ADR-0006 category B - a business
- * outcome, not an error: it publishes and returns normally, exactly like a payment decline in
- * {@link ProcessPaymentRequestUseCase}.
- *
- * <p>Idempotent the M5 level-1 way, and ONLY level 1 - see {@code domain.model.RefundAttempt}'s
- * javadoc for why this module does not also replicate M5's level 2 (duplicate provider callback).
- * {@link RefundAttemptLogRepository#existsByInboundEventId} is the check-first path; a lost race
- * inside {@link RefundAttemptLogRepository#tryRecord} is the constraint-race path, reported by a
- * {@code false} return, never by throwing.
- */
 @Service
 public class ExecuteRefundUseCase {
 
@@ -62,10 +48,6 @@ public class ExecuteRefundUseCase {
     public void execute(ExecuteRefundCommand command) {
         UUID inboundEventId = command.causationEventId();
 
-        // Same M19 drill 9 rule as ProcessPaymentRequestUseCase#republish: a dedup hit skips the
-        // provider call (that is what the row proves happened) but REPUBLISHES the outcome event
-        // (which the row never proved was broker-acknowledged). Safe because the publisher reuses
-        // the row's stored statusEventId.
         var replayed = attemptLogRepository.findByInboundEventId(inboundEventId);
         if (replayed.isPresent()) {
             deduplicatedCounter.increment();
@@ -78,10 +60,6 @@ public class ExecuteRefundUseCase {
             return;
         }
 
-        // M23 stage 2 (PENDING) - before the provider call, mirroring
-        // ProcessPaymentRequestUseCase's identical pre-call publish. RefundOutcome has no TIMEOUT
-        // (SimulatedPaymentProviderAdapter's M11 javadoc: a refund timeout is not modelled), so -
-        // unlike the payment path - stages 3/4 below are never guarded by an outcome check.
         statusPublisher.publishPending(
                 command.refundId(),
                 command.paymentId(),
@@ -143,9 +121,6 @@ public class ExecuteRefundUseCase {
                 attempt.getOutcome(),
                 attempt.getProviderReference());
 
-        // M23 stage 4 (VERIFIED) - the attempt is now durably recorded (M5 level 1 cleared). Never
-        // reached by the check-first or race-path dedup branches above, so a redelivery never
-        // re-emits this.
         statusPublisher.publishVerified(
                 command.refundId(),
                 command.paymentId(),
@@ -156,8 +131,6 @@ public class ExecuteRefundUseCase {
                 command.traceId(),
                 command.correlationId());
 
-        // ADR-0006 category B: COMPLETED and DECLINED are both business outcomes, not errors. Both
-        // publish and both let the listener commit normally afterwards.
         statusPublisher.publishOutcome(attempt);
     }
 }

@@ -60,8 +60,6 @@ class GlobalExceptionHandlerTest {
         BeanPropertyBindingResult binding = new BeanPropertyBindingResult(new Object(), "body");
         binding.addError(
                 new FieldError("body", "currency", "currency must be an ISO-4217 3-letter code"));
-        // MethodArgumentNotValidException needs a MethodParameter purely to describe where the
-        // failure happened. Point it at a real method rather than inventing a stub for it.
         MethodParameter parameter =
                 new MethodParameter(
                         GlobalExceptionHandler.class.getDeclaredMethod(
@@ -86,8 +84,6 @@ class GlobalExceptionHandlerTest {
     void honoursTheStatusCarriedBySpringMvcExceptions() {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/does-not-exist");
 
-        // An unmatched route reaches the catch-all, because NoResourceFoundException extends
-        // ServletException rather than ErrorResponseException. It must still surface as 404.
         ProblemDetail problem =
                 handler.handleUnexpected(
                         new NoResourceFoundException(HttpMethod.GET, "/api/does-not-exist"),

@@ -3,12 +3,6 @@ package com.example.psp.paymentapi.adapters.out.kafka;
 import com.example.psp.common.events.EventEnvelope;
 import org.springframework.stereotype.Component;
 
-/**
- * Builds the {@code psp.provider-status-query.v1} Avro wire record (M12) from a fresh
- * {@link EventEnvelope}. A plain method, not a MapStruct {@code @Mapper} - the same established
- * exception every other {@code *AvroEventFactory} in this codebase uses (see
- * {@code adapters.out.outbox.PaymentAvroEventFactory}'s javadoc for the reasoning).
- */
 @Component
 public class ProviderStatusQueryAvroEventFactory {
 

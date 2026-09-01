@@ -13,26 +13,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * M19's read-only web adapter for the payment hexagon: the transactions panel's backend. Kept
- * separate from {@link PaymentController} (which owns the single write verb, {@code POST}) rather
- * than folded into it - a small, deliberate CQRS-shaped split at the controller level only; both
- * still front the exact same {@link Payment} aggregate and the exact same
- * {@link PaymentWebMapper}/{@link PaymentResponse} DTOs.
- *
- * <p>Every endpoint here is a read against this service's own local projection (ADR-0005) - built
- * up over time by {@code adapters.in.kafka.PaymentStatusChangedListener} for the status column and
- * by {@link PaymentController#create} for everything else - never a call to another service, which
- * would violate ADR-0004.
- */
 @RestController
 @RequestMapping("/api/payments")
 public class PaymentQueryController {
 
-    /** {@code size} clamp floor - a caller asking for zero or fewer rows gets one instead. */
     private static final int MIN_SIZE = 1;
 
-    /** {@code size} clamp ceiling - keeps one request from forcing an unbounded table scan. */
     private static final int MAX_SIZE = 100;
 
     private final PaymentQueryUseCase useCase;
@@ -54,15 +40,6 @@ public class PaymentQueryController {
         this.refundHistoryMapper = refundHistoryMapper;
     }
 
-    /**
-     * {@code GET /api/payments?merchantId=&status=&page=0&size=25}. {@code merchantId}/
-     * {@code status} are optional filters; an unparseable {@code status} (anything that is not a
-     * {@link PaymentStatus} constant) throws {@link IllegalArgumentException}, which common-web's
-     * {@code GlobalExceptionHandler} turns into {@code 400 Bad Request} - the same convention
-     * every other free-text-enum query parameter in this codebase relies on. {@code page}/
-     * {@code size} are clamped rather than rejected: a caller passing {@code size=1000} gets 100
-     * rows back, not an error, and a negative {@code page} is treated as {@code 0}.
-     */
     @GetMapping
     public ResponseEntity<PaymentPageResponse> search(
             @RequestParam(name = "merchantId", required = false) String merchantId,
@@ -80,19 +57,12 @@ public class PaymentQueryController {
         return ResponseEntity.ok(new PaymentPageResponse(items, result.page(), result.size(), result.total()));
     }
 
-    /** {@code GET /api/payments/{id}} - {@code 200} with the payment, or {@code 404}. */
     @GetMapping("/{id}")
     public ResponseEntity<PaymentResponse> getById(@PathVariable("id") UUID id) {
         Payment payment = useCase.getById(id);
         return ResponseEntity.ok(mapper.toResponse(payment));
     }
 
-    /**
-     * {@code GET /api/payments/{id}/refunds} - every refund requested against this payment, via
-     * the existing {@code domain.port.RefundRepository#findByPaymentId} and {@link RefundWebMapper}
-     * (M11), reused unchanged here. An unknown {@code id} answers {@code 200} with an empty list -
-     * see {@code PaymentQueryUseCase#listRefunds}'s javadoc for why.
-     */
     @GetMapping("/{id}/refunds")
     public ResponseEntity<List<RefundResponse>> refunds(@PathVariable("id") UUID id) {
         List<RefundResponse> refunds =
@@ -100,14 +70,6 @@ public class PaymentQueryController {
         return ResponseEntity.ok(refunds);
     }
 
-    /**
-     * {@code GET /api/payments/{id}/history} (M20) - the transactions panel's PSP state-machine
-     * drill-down: {@code CREATED -> PENDING -> SUCCEEDED/FAILED}, ordered {@code occurredAt}
-     * ascending. {@code 200} with {@code {"items": [...]}} (never empty - every payment has at
-     * least its synthesized {@code CREATED} entry), or {@code 404} for an unknown {@code id} -
-     * same {@link java.util.NoSuchElementException} convention {@link #getById} already uses,
-     * propagated straight through from {@link PaymentQueryUseCase#history}.
-     */
     @GetMapping("/{id}/history")
     public ResponseEntity<PaymentHistoryResponse> history(@PathVariable("id") UUID id) {
         List<PaymentHistoryItemResponse> items =
@@ -115,17 +77,6 @@ public class PaymentQueryController {
         return ResponseEntity.ok(new PaymentHistoryResponse(items));
     }
 
-    /**
-     * {@code GET /api/payments/{paymentId}/refunds/{refundId}/history} (M23) - the refund-path
-     * mirror of {@link #history}: {@code REQUESTED -> PENDING -> IPN_RECEIVED -> VERIFIED ->
-     * COMPLETED/FAILED}, plus the ledger's {@code FUNDS_RESERVED} step, ordered
-     * {@code occurredAt} ascending. Nested under {@code /api/payments/{paymentId}} so gateway
-     * routing needs no change. {@code 200} with {@code {"items": [...]}} (never empty - every
-     * refund has at least its synthesized {@code REQUESTED} entry), or {@code 404} if
-     * {@code refundId} does not exist or does not belong to {@code paymentId} - same
-     * {@link java.util.NoSuchElementException} convention {@link #getById}/{@link #history}
-     * already use, propagated straight through from {@link PaymentQueryUseCase#refundHistory}.
-     */
     @GetMapping("/{paymentId}/refunds/{refundId}/history")
     public ResponseEntity<RefundHistoryResponse> refundHistory(
             @PathVariable("paymentId") UUID paymentId, @PathVariable("refundId") UUID refundId) {

@@ -10,19 +10,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-/**
- * M23: payment-api's consumer of {@code refunds.refund-status-changed.v1} (PENDING/IPN_RECEIVED/
- * VERIFIED, and since M24, this service's OWN {@code EXPIRED} publish -
- * {@code application.ExpireRefundsUseCase}/{@code adapters.out.kafka.KafkaRefundExpirationPublisher})
- * - group {@code payment-api.refund-status-view.v1} ({@code config.RefundHistoryKafkaConfig}),
- * mirroring {@code adapters.in.kafka.PaymentStatusChangedListener}'s shape for the payment trail.
- * History-only: {@link RecordRefundHistoryUseCase} never touches the {@code Refund} aggregate's
- * own status - which is exactly why EXPIRED needed no change here at all: this listener already
- * records whatever status string the event carries, unconditionally.
- *
- * <p>No DLQ - same documented scope boundary as {@code PaymentStatusChangedListener} (a derived,
- * lossy read-model listener, ADR-0006).
- */
 @Component
 public class RefundStatusChangedListener {
 
@@ -55,7 +42,6 @@ public class RefundStatusChangedListener {
         ack.acknowledge();
     }
 
-    /** PENDING's providerReference is always {@code ""} on the wire (no provider call yet). */
     private static String blankToNull(String value) {
         return (value == null || value.isBlank()) ? null : value;
     }

@@ -20,35 +20,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 
-/**
- * M12's responder-side consumer wiring for {@code psp.provider-status-query.v1} - the "server"
- * half of the request-reply pair described in {@code adapters.in.kafka.ProviderStatusQueryListener}'s
- * javadoc and services/psp-connector/README.md's M12 section.
- *
- * <p>Same shape as {@code KafkaConsumerConfig}/{@code RefundKafkaConsumerConfig}: manual ack,
- * {@code ErrorHandlingDeserializer} wrapping {@code KafkaAvroDeserializer} (ADR-0006 category C),
- * {@code specific.avro.reader=true}. This topic's consumer group ({@code psp-connector.v1} -
- * unchanged, it shares the group id every other listener in this class uses, per
- * docs/diagrams/topic-map.md's consumer-groups table: "psp-connector.v1 | psp-connector |
- * payments.payment-requested.v1, refunds.funds-reserved.v1, psp.provider-status-query.v1") is a
- * completely different situation from realtime-gateway's unique-per-instance group (M12's OTHER
- * half): a status query genuinely should be load-split across psp-connector instances - any
- * instance can answer it from the shared psp_connector database, so ordinary consumer-group
- * load-balancing is exactly the right tool here, unlike the fan-out case.
- *
- * <p>{@link #providerStatusQueryKafkaListenerContainerFactory}'s {@code setReplyTemplate} is what
- * turns a plain {@code @KafkaListener} method into a request-reply responder: Spring Kafka reads
- * the inbound record's {@code KafkaHeaders.REPLY_TOPIC} header (set by the requester's {@code
- * ReplyingKafkaTemplate} - see payment-api's {@code config.ReplyingKafkaConfig}), sends the
- * listener method's return value to that topic via this template, and copies {@code
- * KafkaHeaders.CORRELATION_ID} (and {@code REPLY_PARTITION}, if present) from request to reply
- * automatically - none of that correlation plumbing is hand-written here. The template reused is
- * the SAME {@code KafkaTemplate<String, Object>} bean {@code KafkaProducerConfig} already builds
- * for {@code payments.payment-status-changed.v1} - its producer factory already Avro-encodes via
- * {@code KafkaAvroSerializer} with {@code auto.register.schemas=true} (application.yml), which is
- * exactly what a NEW subject ({@code psp.provider-status-reply.v1-value}) needs on its first ever
- * publish.
- */
 @Configuration
 public class ProviderStatusKafkaConfig {
 
@@ -79,9 +50,6 @@ public class ProviderStatusKafkaConfig {
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(providerStatusQueryConsumerFactory);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
-        // M15: see KafkaConsumerConfig's identical comment. The reply itself (sent via
-        // kafkaTemplate, injected above) is traced too - that template's own observation is
-        // enabled in KafkaProducerConfig.
         factory.getContainerProperties().setObservationRegistry(observationRegistry);
         factory.getContainerProperties().setObservationEnabled(true);
         // THE bean that makes @SendTo work - see class javadoc.

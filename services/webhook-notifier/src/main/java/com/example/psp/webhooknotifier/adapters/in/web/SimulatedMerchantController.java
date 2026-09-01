@@ -13,28 +13,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * M8's simulated merchant endpoint: a REAL HTTP endpoint {@code adapters.out.http.RestClientMerchantWebhookClient}
- * calls over the loopback interface, so a forced failure is a genuine HTTP failure (connection,
- * status code, timeout) rather than a mocked method return - exactly what the M8 brief asks for
- * ("An in-process controller the service calls over real HTTP is fine and preferable to mocking").
- *
- * <p>By default {@code webhook-notifier.merchant-client.base-url} points right back at this same
- * service ({@code http://localhost:8088}); pointing it at a real merchant's registered webhook URL
- * instead is a one-property change with zero code change on either side of the port
- * (ADR-0004's usual outbound-HTTP carve-out).
- *
- * <p>Outcome resolution order (first match wins):
- *
- * <ol>
- *   <li>{@code webhook-notifier.simulated-merchant.forced-outcome} if not {@code NONE} - forces
- *       every request regardless of merchant.
- *   <li>A {@code merchantId} containing {@code force-success}/{@code force-4xx}/{@code force-5xx}/
- *       {@code force-timeout} - forces that merchant's requests only, letting one run mix outcomes.
- *   <li>Otherwise, a weighted die roll against {@code server-error-rate}/{@code client-error-rate}/
- *       {@code timeout-rate}.
- * </ol>
- */
 @RestController
 @RequestMapping("/simulated-merchant")
 public class SimulatedMerchantController {
@@ -65,11 +43,6 @@ public class SimulatedMerchantController {
             case CLIENT_ERROR -> ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
             case SERVER_ERROR -> ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
             case TIMEOUT -> {
-                // Sleeps PAST the caller's own read-timeout (webhook-notifier.merchant-client.read-
-                // timeout-ms) on purpose, so the caller has already given up with a genuine
-                // client-side timeout by the time this response would arrive. What is returned here
-                // is irrelevant - nobody is listening for it - but a request handler must return
-                // something.
                 sleep(properties.timeoutDelayMs());
                 yield ResponseEntity.ok().build();
             }

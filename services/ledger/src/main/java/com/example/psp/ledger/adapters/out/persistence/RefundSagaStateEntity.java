@@ -11,18 +11,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/**
- * JPA entity for {@code refund_saga_state} (M11; schema owned by
- * {@code db/migration/V2__create_refund_saga_tables.sql}, Flyway-managed - ADR-0005). The
- * mutable state-machine row this service's whole refund saga participation revolves around - one
- * row per {@code refundId}, transitioned in place by the guarded compare-and-swap queries on
- * {@link RefundSagaStateJpaRepository}, never by a naive load-modify-save (that would race against
- * a concurrent transition attempting the same or a different move).
- *
- * <p>{@code status} is stored as {@code VARCHAR}, not a native enum type, mapped to/from
- * {@code domain.model.RefundSagaStatus} by name in {@link RefundPersistenceMapper} - same
- * convention as {@code LedgerEntryEntity.direction}.
- */
 @Entity
 @Table(name = "refund_saga_state")
 @Getter

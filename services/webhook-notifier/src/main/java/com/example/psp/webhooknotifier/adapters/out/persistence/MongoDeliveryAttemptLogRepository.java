@@ -17,19 +17,6 @@ import org.springframework.data.mongodb.core.aggregation.AggregationResults;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.stereotype.Repository;
 
-/**
- * Real MongoDB adapter for {@link DeliveryAttemptLogRepository}. Talks to the
- * {@code webhook_notifier} database (infra/compose, ADR-0005) via Spring Data MongoDB.
- *
- * <p>M19's {@link #search} bypasses the {@link DeliveryAttemptMongoRepository} derived-query
- * interface entirely and uses {@link MongoTemplate} directly, the same "reach for the template
- * when a derived query can't express it" precedent {@code config.MongoIndexConfig} already sets
- * for the TTL index: an optional three-filter match followed by a group-by-{@code causationEventId}
- * aggregation is not expressible as a Spring Data method name or a single static {@code @Query}
- * without hand-rolling the same conditional-match logic {@code payment-api}'s
- * {@code PaymentJpaRepository#search} expresses in JPQL - MongoDB's aggregation pipeline is the
- * native equivalent for a document store.
- */
 @Repository
 public class MongoDeliveryAttemptLogRepository implements DeliveryAttemptLogRepository {
 
@@ -78,8 +65,6 @@ public class MongoDeliveryAttemptLogRepository implements DeliveryAttemptLogRepo
         if (!filters.isEmpty()) {
             stages.add(Aggregation.match(new Criteria().andOperator(filters.toArray(new Criteria[0]))));
         }
-        // Sort newest-attempt-first BEFORE grouping so $first below picks up the most recent
-        // attempt's fields (current status) and $min separately recovers the earliest (createdAt).
         stages.add(Aggregation.sort(Sort.Direction.DESC, "attemptedAt"));
         stages.add(
                 Aggregation.group("causationEventId")
@@ -125,11 +110,6 @@ public class MongoDeliveryAttemptLogRepository implements DeliveryAttemptLogRepo
                 group.createdAt());
     }
 
-    /**
-     * Projection shape of the aggregation pipeline's {@code $group} stage output in
-     * {@link #search} - deliberately a package-private record local to this adapter, never a
-     * hexagon type: {@link WebhookDelivery} is what crosses the port boundary.
-     */
     private record DeliveryGroup(
             String id,
             String eventType,

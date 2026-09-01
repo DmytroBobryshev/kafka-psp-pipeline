@@ -8,12 +8,6 @@ import org.mapstruct.Mapping;
 import org.mapstruct.Named;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the persistence boundary: {@link MerchantConfigEntity} -> {@link
- * MerchantView}. {@code allowedCurrencies} is CSV in the column (see V8) but a {@code List<String>}
- * in the domain - {@code ""} (legacy row) maps to an empty list, same "empty means fall back to
- * payoutCurrency" convention the Avro field and {@link MerchantView} itself carry.
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface MerchantConfigPersistenceMapper {
 

@@ -10,18 +10,6 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
 
-/**
- * S3-compatible client wiring for the M13 claim-check dereference ({@code adapters.out.s3.
- * S3DisputeDocumentFetcher}), against MinIO. Mirrors payment-api's {@code config.
- * S3StorageConfig} exactly - same path-style-access requirement, same placeholder region - see
- * that class's javadoc for the full reasoning. This side only ever calls GetObject, never
- * PutObject/CreateBucket, so unlike payment-api's it has nothing analogous to "ensure the bucket
- * exists" to do.
- *
- * <p>Constructing an {@link S3Client} makes no network call - {@code AnalyticsApplicationTests}'
- * context-load test runs with no MinIO available, the same "construct lazily, connect on first
- * real call" convention every Kafka/Schema-Registry client in this service already follows.
- */
 @Configuration
 public class S3StorageConfig {
 

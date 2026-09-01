@@ -8,15 +8,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the persistence hexagon boundary (ADR-0007). {@code componentModel =
- * "spring"}, {@code unmappedTargetPolicy = ERROR} - same rule as every other boundary mapper here.
- *
- * <p>Both directions are needed in this service, unlike {@code psp-connector}'s write-only
- * equivalent: {@link #toEntity} for the ledger entry insert, and {@link #toDomain} to turn the
- * balance row that the atomic upsert just produced back into the {@link MerchantBalance} the
- * outbound event carries.
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface LedgerPersistenceMapper {
 

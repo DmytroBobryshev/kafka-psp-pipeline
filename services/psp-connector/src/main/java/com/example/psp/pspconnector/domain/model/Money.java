@@ -3,18 +3,6 @@ package com.example.psp.pspconnector.domain.model;
 import java.math.BigDecimal;
 import java.util.Objects;
 
-/**
- * Value object: an amount in a currency. Pure Java, no framework dependency - part of the
- * hexagon's {@code domain/} package (ADR-0007).
- *
- * <p>Deliberately duplicated from {@code payment-api}'s {@code Money} rather than shared: ADR-0005
- * forbids shared domain/entity classes across services (only event contracts live in
- * {@code libs/common-events}), so every service owns its own value objects even when they look
- * identical today. They are free to diverge later without touching another service.
- *
- * @param amount   non-negative amount.
- * @param currency ISO-4217 three-letter currency code, e.g. {@code "EUR"}.
- */
 public record Money(BigDecimal amount, String currency) {
 
     public Money {

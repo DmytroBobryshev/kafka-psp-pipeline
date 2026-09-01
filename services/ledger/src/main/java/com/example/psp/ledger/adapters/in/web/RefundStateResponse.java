@@ -4,11 +4,6 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
-/**
- * Wire contract for {@code GET /api/refunds/{refundId}} (M11 step 5). This is the ledger's own
- * local saga-state view (ADR-0008 rule 1) - not an aggregation across services. Records for DTOs,
- * per PLAN.md.
- */
 public record RefundStateResponse(
         UUID refundId,
         UUID paymentId,

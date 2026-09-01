@@ -8,21 +8,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-/**
- * Persists one windowed aggregate result to the MongoDB projection (M10).
- *
- * <p>Called from the topology's terminal {@code foreach}, once per emitted update of a (merchant,
- * window) pair. How <i>often</i> that is depends on two Streams settings, not on this class:
- * {@code statestore.cache.max.bytes} and {@code commit.interval.ms}. The record cache collapses
- * repeated updates to the same key and flushes on commit, so a merchant taking 500 payments a
- * minute produces on the order of one Mongo write per commit interval, not 500. Turning the cache
- * off (a common "why don't I see every update?" reflex) turns this into a write per record - see
- * the README's "Every configurable knob".
- *
- * <p>{@code application/} depends on the port, never on Mongo (ADR-0007), and is deliberately
- * free of Kafka types too: it receives the window bounds as plain {@link Instant}s, so the same
- * use case would serve a REST backfill or a test harness unchanged.
- */
 @Service
 public class ProjectWindowMetricsUseCase {
 

@@ -2,126 +2,35 @@ spring:
   application:
     name: payment-api
 
-  # Kafka producer (M3). No bootstrap-servers here on purpose - that's environment-specific and
-  # lives in application-docker-compose.yml (activate with SPRING_PROFILES_ACTIVE=docker-compose,
-  # matching the profile-naming convention PLAN.md 0.2 sets for this repo). Everything below is
-  # environment-independent producer *behavior* and applies in every profile.
   kafka:
     producer:
-      # --- Serializers -------------------------------------------------------------------------
-      # Key: paymentId as plain UTF-8 text (ADR-0003). Value: the ADR-0002 envelope + event
-      # fields, JSON-encoded (Jackson serializes Java records natively; Avro replaces this in M9
-      # without changing the shape).
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
 
-      # --- acks: how many replicas must persist a record before the produce call succeeds -------
-      #   acks=0   fire-and-forget - the leader doesn't even confirm receipt. Fastest, but a
-      #            broker restart or dropped connection loses records with zero signal to the
-      #            producer. Used ONLY in the M3 throughput experiment, never here.
-      #   acks=1   the partition LEADER writes to its own log and acks immediately, before
-      #            followers replicate. Faster than acks=all, but if the leader dies before
-      #            replication reaches the ISR, an already-acknowledged record is gone - this is
-      #            exactly what the M3 leader-kill drill reproduces and counts.
-      #   acks=all every in-sync replica (ISR - currently >= min.insync.replicas=2 on this topic,
-      #            see infra/compose) must persist the record before the leader acks. This is the
-      #            production setting and the one this application actually runs with.
       acks: all
 
-      # --- retries: how many times to retry a send that failed with a retriable broker error ----
-      # (e.g. NOT_LEADER_OR_FOLLOWER during a leader election right after a broker dies).
-      # Effectively unbounded - the real ceiling is delivery.timeout.ms (default 120s), not a
-      # retry count, so this just makes sure "retries" itself is never the limiting factor.
       retries: 2147483647
 
-      # --- batch.size / linger.ms: batching, in bytes and milliseconds --------------------------
-      # batch.size: max bytes per partition the producer accumulates before sending even if
-      # linger.ms hasn't elapsed. 32 KiB (double the client default of 16 KiB) so linger.ms=10 has
-      # room to actually build fuller batches under the M3 throughput experiment's load; see
-      # linger.ms below (spring.kafka.producer.properties, since Spring Boot's KafkaProperties has
-      # no dedicated linger-ms field).
       batch-size: 32768
 
-      # --- compression.type -----------------------------------------------------------------------
-      # The cluster's broker-level default (infra/compose) is compression.type=zstd, which means a
-      # broker will RECOMPRESS any batch it receives in a different codec (or uncompressed) to
-      # zstd before writing to disk - extra broker CPU on every write. Compressing with zstd
-      # client-side avoids that: the broker can store the batch exactly as received.
       compression-type: zstd
 
       properties:
-        # --- enable.idempotence -----------------------------------------------------------------
-        # Gives every ProducerRecord a producer-id + per-partition sequence number, so the broker
-        # can detect and silently drop a duplicate caused by a CLIENT-SIDE retry (e.g. the ack for
-        # a successful write was lost on the network, so the client retried a write that had
-        # already landed). This is retry-level dedup only - it does NOT dedupe two genuinely
-        # separate publishPaymentCreated() calls; that's the M5 consumer-side idempotency table.
-        #
-        # Idempotence CONSTRAINS two other settings, and the broker enforces this at producer
-        # startup (refuses to initialize otherwise):
-        #   - acks MUST be "all". The idempotent producer's sequence-number bookkeeping is only
-        #     trustworthy if every write it believes succeeded is actually durable on every ISR
-        #     member; acks=0/1 could let the producer believe a write succeeded when a future
-        #     leader election drops it, which breaks the exactly-once-per-partition guarantee
-        #     idempotence is supposed to provide.
-        #   - max.in.flight.requests.per.connection MUST be <= 5 (Kafka enforces this ceiling
-        #     automatically since 2.1 for idempotent producers). The broker tracks a window of the
-        #     last 5 sequence numbers per partition to detect/reorder out-of-order retries without
-        #     leaving a gap it can't reconcile; more than 5 in flight and it can no longer
-        #     guarantee that reordering-detection window.
         enable.idempotence: true
         max.in.flight.requests.per.connection: 5
 
-        # linger.ms: how long the producer waits after the first record in a new batch arrives,
-        # hoping more records for the same partition show up to fill it, before sending anyway.
-        # 10ms is a deliberate small delay - trades a few ms of added latency per record for
-        # meaningfully higher throughput under load (measured in the M3 throughput experiment).
         linger.ms: 10
 
-        # Don't let Spring's JsonSerializer stamp __TypeId__/__ContentTypeId__ headers with this
-        # JVM's Java class name. ADR-0002's header contract is traceparent/event-id/event-type/
-        # aggregate-id only; a Java FQCN in a header means nothing to a non-Java consumer and
-        # nothing to Avro (M9).
         spring.json.add.type.headers: false
 
-    # M12: request-reply (ADR-0004's synchronous-need carve-out). This is payment-api's FIRST
-    # ever real Kafka consumer since M6 replaced the M3 direct producer with the transactional
-    # outbox above - see config.ReplyingKafkaConfig's javadoc for why request-reply cannot go
-    # through the outbox.
-    #
-    # Note what is DELIBERATELY absent here: a second spring.kafka.producer block. YAML has only
-    # ONE spring.kafka.producer.value-serializer slot, already claimed above by the M3 producer's
-    # JsonSerializer (still built unconditionally by config.KafkaProducerConfig, even though
-    # nothing calls it post-M6 - see that class's javadoc) - a second `producer:` key here would
-    # be a YAML duplicate-key error (fails to even parse), not an override. Instead,
-    # config.ReplyingKafkaConfig builds its own producer property Map in Java, starting from this
-    # same block's acks/retries/batching settings via KafkaProperties.buildProducerProperties(null)
-    # and then explicitly overriding value-serializer to KafkaAvroSerializer plus the
-    # schema-registry properties it needs - the same "override specific keys in Java on top of a
-    # shared YAML base" pattern psp-connector's KafkaConsumerConfig already uses for its
-    # deserializer classes.
     consumer:
-      # group-id is NOT set here - config.ReplyingKafkaConfig computes a unique one per instance
-      # in Java (see that class's javadoc, "The reply topic's partitions and this service's OWN
-      # broadcast-adjacent problem") rather than reading a static value from this file.
-      #
-      # latest, not earliest (the "every group sets auto.offset.reset=earliest" rule in
-      # docs/diagrams/topic-map.md is a deliberate, documented exception here): a brand-new
-      # group.id - minted fresh on every restart - has no committed offset regardless, and any
-      # reply already on the topic when this process starts belongs to a request some OTHER,
-      # possibly long-gone process sent; replaying it is pure waste, never a correctness need.
       auto-offset-reset: latest
 
 server:
-  # 8081 is Schema Registry and 8080 is AKHQ in infra/compose - keep services off both.
   port: 8085
 
 eureka:
   client:
-    # M16/ADR-0009: off by default (and under `mvn verify`'s test-classpath override) - the
-    # docker-compose profile is the only place this service registers with Eureka so api-gateway
-    # can resolve lb://payment-api; a k8s profile (M18) would also leave this disabled and rely on
-    # native Service/DNS discovery instead (ADR-0009).
     enabled: false
 
 management:
@@ -129,48 +38,20 @@ management:
     web:
       exposure:
         include: health,info
-  # M15: sample every trace. A learning-cluster setting, not a production one - real deployments
-  # sample far below 1.0 (root-span-based, e.g. 0.1) because 100% tracing is real overhead per
-  # request and real storage cost in the backend. 1.0 here is deliberate: the acceptance bar is
-  # "one real payment produces one connected trace", and a probabilistic sampler would make that
-  # non-deterministic - the wrong trade for proving the wiring works, the right trade to abandon
-  # before this ever ran at real traffic.
   tracing:
     sampling:
       probability: 1.0
 
-# payment-api custom properties (M3)
 payment-api:
   kafka:
     payment-requested-topic: payments.payment-requested.v1
-    # M10: the merchant-config command surface (PUT/DELETE /api/merchants/{id}/config). This is
-    # the ONE topic payment-api produces to directly - cleanup.policy=compact, key=merchantId,
-    # 3 partitions (docs/diagrams/topic-map.md). DELETE publishes a null value (a tombstone); see
-    # domain.port.MerchantConfigPublisher for why that is not routed through the M6 outbox.
     merchant-config-changed-topic: merchants.merchant-config-changed.v1
-    # M12: request-reply. Both topics come straight from docs/diagrams/topic-map.md's "Request-
-    # reply (M12)" table - key=paymentId, 6 partitions, 1h retention (an unconsumed reply is
-    # worthless after the caller's timeout).
     provider-status-query-topic: psp.provider-status-query.v1
     provider-status-reply-topic: psp.provider-status-reply.v1
-    # M19: the transactions panel's status-view listener (adapters.in.kafka.PaymentStatusChangedListener,
-    # config.PaymentStatusViewKafkaConfig) - the same event ledger/webhook-notifier already
-    # consume, kept as a third independent local projection (ADR-0005). A fixed, shared group id
-    # (unlike M12's per-instance replies group above) - this is an ordinary work-sharing consumer,
-    # not a "every instance must see every record" one, so normal partition-splitting semantics
-    # are exactly what's wanted.
     payment-status-changed-topic: payments.payment-status-changed.v1
     payment-status-view-group-id: payment-api.status-view.v1
-    # Merchant read-model listener (adapters.in.kafka.MerchantConfigChangedListener,
-    # config.MerchantViewKafkaConfig) - a second, independent consumer group on the same
-    # merchant-config-changed-topic the write side above produces to.
     merchant-view-group-id: payment-api.merchant-view.v1
-    # M13: the claim-check demo's topic - produced directly, same as merchant-config-changed-topic
-    # above (see domain.port.DisputeEventPublisher's javadoc for why it skips the outbox).
     dispute-opened-topic: disputes.dispute-opened.v1
-    # M23: the refund trail's read-side projection (refund_status_history) -
-    # config.RefundHistoryKafkaConfig, four independent consumer groups, one per topic. payment-api
-    # only ever CONSUMES these four - refund-requested is already produced above.
     refund-status-changed-topic: refunds.refund-status-changed.v1
     refund-completed-topic: refunds.refund-completed.v1
     refund-failed-topic: refunds.refund-failed.v1
@@ -179,45 +60,12 @@ payment-api:
     refund-completed-view-group-id: payment-api.refund-completed-view.v1
     refund-failed-view-group-id: payment-api.refund-failed-view.v1
     refund-funds-reserved-view-group-id: payment-api.refund-funds-reserved-view.v1
-  # M22: the expiration engine (adapters.in.scheduler.PaymentExpirationScheduler,
-  # application.ExpirePaymentsUseCase). Reuses payment-api.kafka.payment-status-changed-topic
-  # above as its PRODUCE target too - config.PaymentExpirationKafkaConfig - this service was only
-  # ever a consumer of that topic before M22.
-  #
-  # M24: adapters.in.scheduler.RefundExpirationScheduler / application.ExpireRefundsUseCase share
-  # this SAME sweep-interval - two independent sweeps (payments, refunds), one cadence property.
-  # The refund sweep's PRODUCE target is payment-api.kafka.refund-status-changed-topic above
-  # (config.RefundExpirationKafkaConfig) - this service was only ever a consumer of THAT topic
-  # before M24.
   expiration:
-    # How often the sweep runs. Short by production standards, deliberate - see
-    # adapters.in.scheduler.PaymentExpirationScheduler's javadoc.
     sweep-interval: PT5S
-  # schema-registry.url is environment-specific (M9 Phase 1) - see application-docker-compose.yml.
-  # Read by config.SchemaRegistryConfig to build the KafkaAvroSerializer that Avro-encodes
-  # payments.payment-requested.v1's outbox payload; payment-api runs no other Schema Registry
-  # client, since it never talks to Kafka directly (M6).
 
-  # M13: the claim-check demo (PLAN.md's M13 brief: "dispute documents > 1MB -> MinIO, event
-  # carries a reference; touch max.request.size, fetch.max.bytes"). See
-  # application.OpenDisputeUseCase and services/payment-api/README.md's "M13: claim check,
-  # measured" section.
   disputes:
-    # The largest document still sent INLINE, in the Kafka record's value. 512 KiB - comfortably
-    # below Kafka's default max.request.size (1 MiB, config.DisputeKafkaConfig does not override
-    # it) even after the Avro envelope's own overhead, and small enough that a legitimate small
-    # attachment (a text confirmation, a low-res photo) never pays the extra MinIO round trip the
-    # claim check needs.
     claim-check-threshold-bytes: 524288
-    # THE DEMO KILLSWITCH - see application.OpenDisputeUseCase's javadoc. Not environment-specific
-    # (stays true here); only the measured demo flips it to false, temporarily, via an env var
-    # override - never through application code a caller could reach.
     claim-check-enabled: true
     minio:
       bucket: disputes
-      # endpoint/access-key/secret-key are environment-specific - see
-      # application-docker-compose.yml and the k8s payment-api chart's values.yaml.
 
-# No datasource configured here on purpose - see application-docker-compose.yml. Running this
-# service without an active profile and without a database will fail to start (spring-boot-
-# starter-data-jpa requires a DataSource); that's intentional now that M3 wires real persistence.

@@ -1,8 +1,3 @@
-# Test-classpath override of src/main/resources/application.yml. LedgerApplicationTests only needs
-# the Spring context to load against an @EmbeddedKafka broker and an in-memory H2 database - the
-# real integration (transactional producer against three brokers, Flyway against the real `ledger`
-# database) is exercised for real against the live infra/compose stack and captured in README.md,
-# not reproduced here.
 spring:
   application:
     name: ledger
@@ -17,8 +12,6 @@ spring:
   flyway:
     enabled: false
   kafka:
-    # Overridden at runtime by @EmbeddedKafka's broker address (the spring.kafka.bootstrap-servers
-    # system property it sets) - this value only matters before that override applies.
     bootstrap-servers: localhost:9092
     consumer:
       group-id: ledger.test.v1
@@ -40,30 +33,20 @@ spring:
 ledger:
   instance-id: test
   fail-after-produce: false
-  # M9 Phase 2: KafkaAvroDeserializer/KafkaAvroSerializer only resolve this lazily (on first use
-  # that actually needs to fetch/register a schema) - LedgerApplicationTests never publishes or
-  # consumes a real record, so this value only needs to be present, not reachable (same note as
-  # psp-connector's test application.yml, M9 Phase 1).
   schema-registry:
     url: http://localhost:8081
   kafka:
     payment-status-changed-topic: payments.payment-status-changed.v1
     ledger-entry-recorded-topic: ledger.ledger-entry-recorded.v1
-    # M11: same five refunds.* topics as the main application.yml - only their PRESENCE matters
-    # for a context-load test, not their reachability (see the schema-registry.url note above).
     refund-requested-topic: refunds.refund-requested.v1
     funds-reserved-topic: refunds.funds-reserved.v1
     refund-completed-topic: refunds.refund-completed.v1
     refund-failed-topic: refunds.refund-failed.v1
     reservation-released-topic: refunds.reservation-released.v1
-    # Still a STABLE prefix, not a random one - the context-load test would pass either way, but a
-    # random value here would quietly model the exact anti-pattern the module argues against.
     transactional-id-prefix: ledger-tx-test-
   refund:
     reservation-ttl: PT2M
     sweep-interval: PT10S
-  # M17: only PRESENCE matters for a context-load test, not reachability - see
-  # src/main/resources/application.yml for what these mean.
   dlq-replay:
     dlq-topic: payments.payment-status-changed.v1.ledger.dlq
     consumer-group: ledger.dlq-replay.v1

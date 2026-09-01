@@ -8,15 +8,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * M11 step 4 (COMPENSATION): listens on {@code refunds.refund-failed.v1}, same transactional
- * shape as {@link RefundRequestedListener}. This topic has two producers - this service itself
- * (insufficient balance) and psp-connector (provider decline) - and this listener does not need
- * to tell them apart; {@link ReleaseRefundUseCase} decides purely from this ledger's own current
- * saga state. See {@code application.ReleaseRefundUseCase}'s javadoc and
- * services/ledger/README.md's M11 section for why consuming a topic this service also publishes
- * to is a deliberate, bounded exception to ADR-0008 rule 7.
- */
 @Component
 public class RefundFailedListener {
 

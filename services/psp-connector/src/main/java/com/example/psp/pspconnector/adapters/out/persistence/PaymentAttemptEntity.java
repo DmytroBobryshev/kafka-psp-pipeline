@@ -11,15 +11,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/**
- * JPA entity for the {@code payment_attempts} table (schema owned by
- * {@code db/migration/V1__create_payment_attempts_table.sql}, Flyway-managed - ADR-0005).
- *
- * <p>Deliberately NOT {@code @Data} - same rule as {@code payment-api}'s {@code PaymentEntity}:
- * identity-based equality only, and no generated {@code toString()} risking lazy-loading
- * surprises. {@code @Getter}/{@code @Setter}/{@code @NoArgsConstructor} only, which is what
- * {@link PaymentAttemptPersistenceMapper#toEntity} needs for MapStruct's default bean strategy.
- */
 @Entity
 @Table(name = "payment_attempts")
 @Getter
@@ -54,14 +45,6 @@ public class PaymentAttemptEntity {
     @Column(name = "causation_event_id", nullable = false)
     private UUID causationEventId;
 
-    // M5 LEVEL 1's idempotency key (V2 migration) - deliberately a SEPARATE, uniquely-constrained
-    // column from causationEventId above, even though both are populated from the exact same
-    // inbound EventEnvelope.eventId: causationEventId's job is the (unconstrained) causal-chain
-    // audit trail, this column's job is dedup. Nullable because V1 rows predate it - see the V2
-    // migration's comment. Not annotated unique=true here on purpose: Hibernate's ddl-auto=validate
-    // (docker-compose profile) only checks column existence/type against Flyway's schema, not
-    // constraints, so the real UNIQUE constraint lives solely in the V2 migration SQL, matching
-    // how the V1 (payment_id, provider_event_id) constraint is handled for this same entity.
     @Column(name = "inbound_event_id")
     private UUID inboundEventId;
 

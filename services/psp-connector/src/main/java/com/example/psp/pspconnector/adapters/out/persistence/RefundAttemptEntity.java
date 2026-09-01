@@ -11,12 +11,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/**
- * JPA entity for the {@code refund_attempts} table (M11; schema owned by
- * {@code db/migration/V3__create_refund_attempts_table.sql}, Flyway-managed - ADR-0005). The
- * refund-path counterpart of {@code PaymentAttemptEntity}, with one fewer idempotency column - see
- * {@code domain.model.RefundAttempt}'s javadoc for why level 2 is not replicated here.
- */
 @Entity
 @Table(name = "refund_attempts")
 @Getter
@@ -50,11 +44,6 @@ public class RefundAttemptEntity {
     @Column(name = "provider_latency_ms", nullable = false)
     private long providerLatencyMs;
 
-    // THE idempotency key (M5 level 1) - unique-constrained by the V3 migration. Also the audit
-    // trail's causal link, same dual role causation_event_id/inbound_event_id split psp-connector's
-    // PaymentAttemptEntity documents (there, deliberately kept as two columns for a reason that
-    // does not apply here - this table has no level-2 constraint to keep separate from, so ONE
-    // column serves both jobs).
     @Column(name = "causation_event_id", nullable = false)
     private UUID causationEventId;
 

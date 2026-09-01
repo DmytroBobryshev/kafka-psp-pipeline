@@ -17,14 +17,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 
-/**
- * Plain JUnit against {@code application/} + {@code domain/} - fakes for both ports, no Kafka.
- * Exercises M8 requirement #7: the replay endpoint republishes DLQ records to the base delivery
- * topic and stamps ADR-0006's replay provenance headers ({@code x-replayed-from}/
- * {@code x-replay-count}), and honours the requested batch size as a pass-through to
- * {@link DlqReader#pollBatch} (the actual bound is {@code adapters.out.kafka.KafkaDlqReader}'s
- * job, exercised separately since it needs a real consumer factory).
- */
 class ReplayDlqUseCaseTest {
 
     private static final RetryChain CHAIN =

@@ -4,14 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-/**
- * Pure unit test of the windowed aggregate (M10) - no Kafka, no Spring.
- *
- * <p>The properties asserted here are the ones a Kafka Streams aggregator actually needs:
- * {@code plus} must be associative (windows are folded in arrival order, which is not a
- * deterministic order), an empty window must not produce {@code NaN}, and the enrichment fields
- * must not flap to null when a record arrives without config.
- */
 class MerchantWindowMetricsTest {
 
     private static PaymentOutcome outcome(boolean declined, long latency, String name, Integer threshold) {
@@ -53,8 +45,6 @@ class MerchantWindowMetricsTest {
         MerchantWindowMetrics oneOrder = MerchantWindowMetrics.empty().plus(a).plus(b).plus(c);
         MerchantWindowMetrics otherOrder = MerchantWindowMetrics.empty().plus(c).plus(a).plus(b);
 
-        // Not a formality: Streams folds records in the order a task happens to poll them, which
-        // for a multi-partition merge is not deterministic.
         assertThat(oneOrder).isEqualTo(otherOrder);
     }
 
@@ -63,8 +53,6 @@ class MerchantWindowMetricsTest {
         MerchantWindowMetrics metrics =
                 MerchantWindowMetrics.empty()
                         .plus(outcome(false, 10L, "ACME Corp", 1500))
-                        // Same window, but this payment's GlobalKTable lookup missed (the config
-                        // was tombstoned mid-window, say).
                         .plus(outcome(true, 10L, null, null));
 
         assertThat(metrics.merchantDisplayName()).isEqualTo("ACME Corp");
@@ -82,8 +70,6 @@ class MerchantWindowMetricsTest {
                                 .declineRateAlert())
                 .isTrue();
 
-        // Same declines, no config joined (unknown merchant / tombstoned) -> cannot breach a
-        // threshold it does not have.
         assertThat(
                         MerchantWindowMetrics.empty()
                                 .plus(outcome(true, 0L, null, null))

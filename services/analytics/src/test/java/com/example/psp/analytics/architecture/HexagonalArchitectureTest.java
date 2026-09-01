@@ -11,18 +11,6 @@ import com.tngtech.archunit.lang.ArchRule;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-/**
- * Enforces the hexagon (ADR-0004, ADR-0007) for analytics: {@code domain/} is pure Java and
- * dependencies point inward only - {@code adapters -> application -> domain}. Same rule set as
- * ledger's and payment-api's, plus three rules specific to a Kafka Streams service (see
- * {@link #domainAndApplicationMustNotDependOnKafkaStreams()},
- * {@link #domainMustNotDependOnMongo()} and {@link #onlyTheTopologyMayDependOnGeneratedAvro()}).
- *
- * <p>A Streams service is unusually easy to get wrong here, because the DSL is so pleasant that
- * business logic drifts into the topology and the topology drifts into {@code config/}. The rules
- * below are what keep the aggregation itself ({@code domain.model.MerchantWindowMetrics#plus}) a
- * plain method that a unit test can call without a {@code TopologyTestDriver}.
- */
 class HexagonalArchitectureTest {
 
     private static final String BASE_PACKAGE = "com.example.psp.analytics";
@@ -67,12 +55,6 @@ class HexagonalArchitectureTest {
 
     @Test
     void domainAndApplicationMustNotDependOnKafkaStreams() {
-        // M10-specific, and the rule that keeps the module honest. The Kafka Streams DSL is
-        // pleasant enough that the aggregation logic, the window bounds and the join would happily
-        // live inside a topology class and never be unit-testable again. Keeping
-        // org.apache.kafka.streams out of both inner layers forces the aggregate to stay a plain
-        // record with a plain plus() method (MerchantWindowMetricsTest calls it directly, with no
-        // TopologyTestDriver), and forces the interactive-query read to be expressed as a port.
         ArchRule rule =
                 noClasses()
                         .that()
@@ -105,10 +87,6 @@ class HexagonalArchitectureTest {
 
     @Test
     void onlyTheTopologyMayDependOnGeneratedAvro() {
-        // The generated Avro classes are the WIRE contract, not the domain model. Confining them
-        // to adapters/ means a schema change (M9's whole subject) is an adapter-level edit, and it
-        // is what makes the ValueJoiner in AnalyticsTopology the single, findable place where wire
-        // shape becomes domain shape.
         ArchRule rule =
                 noClasses()
                         .that()
@@ -153,11 +131,6 @@ class HexagonalArchitectureTest {
 
     @Test
     void inboundAdaptersMustNotDependOnOutboundAdapters() {
-        // Concretely here: the topology (adapters.in.kafka) must reach MongoDB through
-        // application.ProjectWindowMetricsUseCase and its port, never through
-        // adapters.out.mongo directly - and the REST controller must reach the state store the
-        // same way, which is why WindowMetricsQueryPort carries clientState() rather than the
-        // controller calling the state-store adapter for it.
         ArchRule rule =
                 noClasses()
                         .that()
@@ -186,8 +159,6 @@ class HexagonalArchitectureTest {
 
     @Test
     void domainClassesShouldOnlyResideInDomainPackage() {
-        // Sanity check: guards against someone quietly renaming the package and silently disabling
-        // every rule above.
         ArchRule rule =
                 classes()
                         .that()

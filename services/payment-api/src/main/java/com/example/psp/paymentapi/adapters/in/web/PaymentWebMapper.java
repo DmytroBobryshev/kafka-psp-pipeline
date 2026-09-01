@@ -7,15 +7,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the web hexagon boundary: request/response DTO &lt;-&gt; domain
- * (ADR-0007). {@code componentModel = "spring"} so it's injected like any bean;
- * {@code unmappedTargetPolicy = ERROR} so a forgotten field fails the build, not a code review.
- *
- * <p>Domain types ({@link Payment}, {@link Money}) never leak past this boundary as a wire
- * contract - {@link CreatePaymentRequest} and {@link PaymentResponse} are the only shapes a
- * client ever sees.
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface PaymentWebMapper {
 

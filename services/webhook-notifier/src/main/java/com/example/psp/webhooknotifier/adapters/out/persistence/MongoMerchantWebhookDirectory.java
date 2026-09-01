@@ -5,11 +5,6 @@ import java.time.Instant;
 import java.util.Optional;
 import org.springframework.stereotype.Repository;
 
-/**
- * Real MongoDB adapter for {@link MerchantWebhookDirectory}. Talks to the same
- * {@code webhook_notifier} database as {@code MongoDeliveryAttemptLogRepository} (ADR-0005), a
- * second collection in it.
- */
 @Repository
 public class MongoMerchantWebhookDirectory implements MerchantWebhookDirectory {
 

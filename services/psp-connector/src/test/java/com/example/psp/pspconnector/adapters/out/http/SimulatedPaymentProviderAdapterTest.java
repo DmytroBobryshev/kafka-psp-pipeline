@@ -16,12 +16,6 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/**
- * Plain JUnit against the adapter directly - no Spring context. Exercises M5's "deliberate
- * duplicate emission" knob ({@code psp-connector.provider.duplicate-rate}) and the amount-ending
- * ("magic amounts") overrides on both {@code authorize()} and {@code refund()} - see the class
- * javadoc's "Magic amounts" section and README's "Forcing outcomes (amount endings)".
- */
 class SimulatedPaymentProviderAdapterTest {
 
     private static final UUID PAYMENT_ID = UUID.randomUUID();
@@ -118,8 +112,6 @@ class SimulatedPaymentProviderAdapterTest {
         SimulatedPaymentProviderAdapter adapter =
                 new SimulatedPaymentProviderAdapter(properties(ForcedOutcome.NONE, RefundForcedOutcome.COMPLETED, true));
 
-        // docs.stripe.com/testing's refund-decline endings - see README's "Forcing outcomes
-        // (amount endings)" section.
         for (String ending : List.of("10.01", "10.05", "10.55", "10.65", "10.75")) {
             RefundProviderResult result = adapter.refund(REFUND_ID, PAYMENT_ID, MERCHANT_ID, amount(ending));
             assertThat(result.outcome()).as("amount %s", ending).isEqualTo(RefundOutcome.DECLINED);

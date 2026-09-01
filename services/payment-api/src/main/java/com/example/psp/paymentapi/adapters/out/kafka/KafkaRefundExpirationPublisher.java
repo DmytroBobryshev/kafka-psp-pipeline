@@ -17,18 +17,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
-/**
- * Real Kafka adapter for {@link RefundExpirationEventPublisher} (M24) - payment-api's first-ever
- * PRODUCER on {@code refunds.refund-status-changed.v1} (it has only ever been a consumer of this
- * topic, since M23). Mirrors {@code KafkaPaymentExpirationPublisher} for the identical shape on the
- * payment side: keyed by {@code merchantId} (ADR-0003 - every refund-saga event for one merchant
- * must land on one partition, in order), blocking {@code send().get()} + {@link KafkaException}
- * wrapping, same producer-side convention this topic's other producer (psp-connector) already
- * follows.
- *
- * <p>Serializer/Schema-Registry wiring mirrors {@code config.PaymentExpirationKafkaConfig}'s
- * producer - see {@code config.RefundExpirationKafkaConfig}.
- */
 @Component
 public class KafkaRefundExpirationPublisher implements RefundExpirationEventPublisher {
 

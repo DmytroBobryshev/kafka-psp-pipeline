@@ -19,17 +19,6 @@ import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 import org.springframework.kafka.support.Acknowledgment;
 
-/**
- * Same "fakes, not a live broker" style as {@code RefundWebhookPlanningTest}: the generated
- * {@code PaymentStatusChangedMapperImpl} has no framework dependency at construction time, so it
- * is instantiated directly, alongside a real {@link PlanWebhookDeliveryUseCase} backed by fakes.
- *
- * <p>Proves the terminal ALLOWLIST guard (M21): every non-terminal {@code
- * payments.payment-status-changed.v1} status - PENDING (M20's pre-provider-call event),
- * IPN_RECEIVED, VERIFIED (M21's stage 3/4 trail events) - must never reach the planner, nothing to
- * tell a merchant about any of them yet - but the record must still be acknowledged so the consumer
- * group advances past it instead of redelivering it forever.
- */
 class PaymentStatusChangedListenerTest {
 
     @Test
@@ -49,9 +38,6 @@ class PaymentStatusChangedListenerTest {
 
     @Test
     void expiredStatusIsPlannedAndAcknowledgedJustLikeSucceededOrDeclined() {
-        // M22: EXPIRED joined the terminal allowlist - a merchant whose payment timed out still
-        // gets notified, same as a decline. eventType stays PAYMENT_STATUS_CHANGED (the mapper's
-        // constant mapping is unchanged by status value).
         RecordingPublisher publisher = new RecordingPublisher();
         RetryChain chain =
                 new RetryChain("base", List.of(new RetryChain.Tier("retry5s", Duration.ofSeconds(5))), "dlq");

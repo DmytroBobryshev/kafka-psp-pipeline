@@ -6,12 +6,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
-/**
- * MapStruct mapper at the inbound Kafka hexagon boundary: event -&gt; command (ADR-0007).
- * Deliberately does NOT map {@code amount}/{@code merchantId}/{@code paymentId} - the compensation
- * use case releases against the reservation this ledger itself already recorded, not against
- * whatever the failed event happens to carry (see {@code application.ReleaseRefundUseCase}).
- */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface RefundFailedMapper {
 

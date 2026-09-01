@@ -9,19 +9,6 @@ import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
-/**
- * The M8 bug fix, isolated to a plain JUnit test: no Spring, no Kafka, no HTTP, no MongoDB - same
- * "fakes, not a live broker" style as {@code ExecuteWebhookDeliveryUseCaseTest}. Covers the three
- * cases the resolution rule must get right:
- *
- * <ul>
- *   <li>a merchant's configured webhookUrl wins over the fallback;
- *   <li>no projection at all (never configured) falls back;
- *   <li>a tombstoned merchant (configured, then deleted) falls back too - proven through
- *       {@link InMemoryMerchantWebhookDirectory}, not just by handing {@link #resolve} an empty
- *       {@link Optional} directly, so the delete path itself is exercised.
- * </ul>
- */
 class WebhookUrlResolverTest {
 
     private static final String FALLBACK = "/simulated-merchant/webhooks/{merchantId}";
@@ -54,8 +41,6 @@ class WebhookUrlResolverTest {
                 .isEqualTo(FALLBACK);
     }
 
-    /** In-memory fake of {@link MerchantWebhookDirectory} - the same "fake port, not a mock"
-     * convention {@code ExecuteWebhookDeliveryUseCaseTest}'s fakes already establish. */
     private static final class InMemoryMerchantWebhookDirectory implements MerchantWebhookDirectory {
         private final Map<String, String> byMerchantId = new HashMap<>();
 
