@@ -40,7 +40,9 @@ function RefreshButton() {
       onClick={() => queryClient.invalidateQueries()}
       className="rounded-md border border-slate-600 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 hover:text-white"
     >
-      {fetching ? "Refreshing…" : "↻ Refresh"}
+      {/* label never changes width - a swapping "Refreshing…" text made the whole nav jump */}
+      <span className={`mr-1 inline-block ${fetching ? "animate-spin" : ""}`}>↻</span>
+      Refresh
     </button>
   );
 }
