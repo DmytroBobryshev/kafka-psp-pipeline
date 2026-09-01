@@ -53,7 +53,7 @@ export function DlqConsolePage() {
           <button
             onClick={() => replay.mutate()}
             disabled={replay.isPending || (records.data?.length ?? 0) === 0}
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+            className="min-w-36 rounded-md bg-slate-900 px-4 py-2 text-center text-sm font-medium text-white disabled:opacity-40"
           >
             {replay.isPending ? "Replaying…" : "Replay up to 10"}
           </button>

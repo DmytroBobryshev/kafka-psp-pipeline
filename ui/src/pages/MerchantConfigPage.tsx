@@ -122,7 +122,7 @@ export function MerchantConfigPage() {
             setExpandedId(null);
             setCreating(!creating);
           }}
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+          className="w-40 rounded-md bg-slate-900 px-4 py-2 text-center text-sm font-medium text-white hover:bg-slate-700"
         >
           {creating ? "close form" : "+ new merchant"}
         </button>

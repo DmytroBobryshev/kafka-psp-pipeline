@@ -40,9 +40,11 @@ function RefreshButton() {
       onClick={() => queryClient.invalidateQueries()}
       className="rounded-md border border-slate-600 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 hover:text-white"
     >
-      {/* label never changes width - a swapping "Refreshing…" text made the whole nav jump */}
-      <span className={`mr-1 inline-block ${fetching ? "animate-spin" : ""}`}>↻</span>
-      Refresh
+      {/* content is static; fetching only dims it - any animation toggle or label swap
+          visibly twitches when multi-query pages flip the fetching flag several times */}
+      <span className={`transition-opacity duration-200 ${fetching ? "opacity-50" : "opacity-100"}`}>
+        ↻ Refresh
+      </span>
     </button>
   );
 }
