@@ -146,33 +146,6 @@ There is also a docker-compose variant of the whole stack (pre-k8s modules) unde
 
 ---
 
-## Module index (the learning path)
-
-Each module builds on the last. Full detail and "prove it" experiments: [`docs/PLAN.md`](docs/PLAN.md).
-
-| Module | Path(s) | Teaches |
-|---|---|---|
-| M1 - Repo scaffold | `libs/*`, `services/payment-api` | Maven multi-module, Lombok/MapStruct, hexagonal layout, ArchUnit |
-| M2 - Infra baseline | `infra/compose/` | KRaft, `advertised.listeners`, config precedence |
-| M3 - First producer | `services/payment-api` | acks, idempotence, batching, key choice |
-| M4 - First consumer | `services/psp-connector` | consumer groups, poll loop, manual ack, rebalancing |
-| M5 - Idempotency & dedup | `services/psp-connector` | at-least-once + idempotent consumer |
-| M6 - Transactional outbox | `services/payment-api` | dual-write problem, outbox, Debezium |
-| M7 - Exactly-once ledger | `services/ledger` | Kafka transactions, EOS, zombie fencing |
-| M8 - Retries & DLQ | `services/webhook-notifier` | non-blocking retry topics, DLQ, replay |
-| M9 - Schemas & evolution | `libs/common-events` | Avro, Schema Registry, compatibility |
-| M10 - Compaction & Streams | `services/analytics` | KTable/GlobalKTable, RocksDB, windows |
-| M11 - Refund saga | `ledger`, `psp-connector` | choreography, compensating transactions |
-| M12 - Request-reply + SSE | `services/realtime-gateway` | ReplyingKafkaTemplate, the broadcast problem |
-| M13 - Feature grab-bag | multiple | Streams joins, claim check (MinIO), quotas, Connect sink |
-| M14 - Security | everywhere | SASL/SCRAM, deny-by-default ACLs |
-| M15 - Observability | everywhere | metrics, lag dashboards, trace headers |
-| M16 - Discovery + gateway | `api-gateway`, `discovery-server` | Eureka, Spring Cloud Gateway |
-| M17 - React UI | `ui/` | SSE, OpenAPI types, the showcase pages |
-| M18 - Kubernetes | `infra/k8s/` | Strimzi, Helm, KEDA lag autoscaling |
-| M19 - Failure drills | `docs/M19-*.md` | measured failure semantics + a real found-and-fixed loss window |
-| M20+ - Lifecycle & expiration | `docs/M20-*.md` | five/six-stage trails, merchant-tunable expiration, honest analytics |
-
 ## Stack & persistence decisions
 
 | Service | DB | Why |
