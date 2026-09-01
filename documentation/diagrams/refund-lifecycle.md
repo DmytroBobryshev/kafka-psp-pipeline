@@ -1,35 +1,38 @@
-# Refund saga (six stages)
+# Refund lifecycle — the six stages
+
+A refund moves money back, so the ledger must reserve it first. Every step is an event; if the
+provider says no, the reservation is released — nothing is lost, nothing double-refunded.
 
 ```mermaid
 sequenceDiagram
-    autonumber
-    participant M as Merchant/UI
-    participant PA as payment-api
-    participant K as Kafka
+    participant M as Merchant
+    participant API as payment-api
     participant L as ledger
-    participant PC as psp-connector
-    participant PR as Provider (simulated)
-    participant W as webhook-notifier
+    participant PSP as psp-connector
+    participant P as Provider
 
-    M->>PA: POST /api/payments/{id}/refunds
-    PA->>K: refund-requested
-    Note over PA: REQUESTED
-    K->>L: reserve funds (balance check)
-    L->>K: funds-reserved
-    Note over L: FUNDS_RESERVED
-    K->>PC: consume reservation
-    PC->>K: refund status: PENDING
-    PC->>PR: refund()
-    PR-->>PC: outcome + provider ref
-    PC->>K: refund status: IPN_RECEIVED, VERIFIED
-    alt approved
-        PC->>K: refund-completed
-        K->>L: commit reservation
-    else declined
-        PC->>K: refund-failed
-        K->>L: RELEASE reservation (compensation)
+    M->>API: request refund
+    Note over API: 1. REQUESTED
+    API->>L: refund requested (via Kafka)
+    L->>L: check balance, set money aside
+    Note over L: 2. FUNDS_RESERVED
+    L->>PSP: funds reserved (via Kafka)
+    Note over PSP: 3. PENDING - sent to provider
+    PSP->>P: refund
+    P-->>PSP: answer + reference id
+    Note over PSP: 4. IPN_RECEIVED, then 5. VERIFIED
+    alt provider approved
+        PSP->>L: refund completed - money goes out
+        Note over API: 6. COMPLETED
+    else provider declined
+        PSP->>L: refund failed - reservation released
+        Note over API: 6. FAILED
     end
-    K->>W: plan webhook (COMPLETED / FAILED)
-    W->>M: POST webhook
-    Note over PA: no terminal within refundExpirationSeconds -><br/>EXPIRED + REFUND_EXPIRED webhook;<br/>ledger TTL (PT2M) frees stuck reservations independently
+    API-->>M: webhook notification
 ```
+
+Safety nets for a refund that never finishes:
+
+- **ledger** releases any reservation older than 2 minutes — the money is always safe.
+- **payment-api** marks the refund `EXPIRED` after the merchant's `refundExpirationSeconds`
+  and sends a `REFUND_EXPIRED` webhook — the merchant is never left guessing.

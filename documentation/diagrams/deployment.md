@@ -1,31 +1,24 @@
-# Deployment (kind)
+# What actually runs on your machine
 
 ```mermaid
 flowchart TB
-    subgraph host [Your machine - Docker Desktop]
-        subgraph kind [kind cluster kafka-psp - 3 nodes]
-            subgraph nsK [namespace kafka]
-                STR[Strimzi operator] --> KAFKA[Kafka 4.3 KRaft\n3 combined nodes\nSASL/SCRAM + ACLs]
-                KC[KafkaConnect\nDebezium outbox + Mongo audit sink]
-                APPS[payment-api psp-connector ledger\nwebhook-notifier analytics realtime-gateway\napi-gateway discovery-server ui]
-                PG[(PostgreSQL)]
-                MG[(MongoDB)]
-                MINIO[(MinIO - claim check)]
-                SR[Schema Registry]
-                KEDA[KEDA - lag autoscaling]
-            end
-            subgraph nsM [namespace monitoring]
-                PROM[Prometheus] --> GRAF[Grafana]
-                EXP[kafka-exporter - consumer lag]
-            end
-            ING[ingress-nginx - hostPort 80]
-        end
+    B["Browser - http://localhost"] --> I[ingress]
+    subgraph D["One kind cluster inside Docker Desktop"]
+        I --> UI["React UI + REST APIs"]
+        UI --> S["9 Spring Boot services"]
+        S --> K(["Kafka - 3 brokers, Strimzi"])
+        S --> DB[("Postgres, MongoDB, MinIO")]
+        MON["Prometheus + Grafana"] -.-> K
     end
-    BROWSER[Browser http://localhost] --> ING --> APPS
-    APPS --> KAFKA & PG & MG & SR
-    KEDA -. scales on lag .-> APPS
-    PROM --> EXP & KAFKA
 ```
 
-Brought up by three scripts: `up.sh` (Kafka platform) → `deploy-apps.sh` (build + deploy apps)
-→ `install-monitoring.sh` (Prometheus/Grafana). See the root README for the from-zero guide.
+Everything lives in one local Kubernetes (kind) cluster, brought up by three scripts:
+
+| Script | Brings up |
+|---|---|
+| `infra/k8s/scripts/up.sh` | the cluster + Kafka with all topics, users and ACLs |
+| `infra/k8s/scripts/deploy-apps.sh` | all services, databases, UI, ingress |
+| `infra/k8s/scripts/install-monitoring.sh` | Prometheus + Grafana |
+
+Also inside: KEDA (scales psp-connector when Kafka lag grows), Debezium (streams the outbox
+table into Kafka), Schema Registry (Avro contracts).

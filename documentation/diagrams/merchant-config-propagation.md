@@ -1,15 +1,14 @@
-# Merchant config propagation (compacted topic)
+# Merchant settings — one save, three consumers
 
 ```mermaid
-flowchart TD
-    PUT[PUT /api/merchants/id/config] --> PA[payment-api]
-    DEL[DELETE config] --> PA
-    PA -- "full config / tombstone (key = merchantId)" --> T([merchants.merchant-config-changed.v1\nCOMPACTED])
-    T --> P1[payment-api projection\nPostgres merchant_configs\ncurrency gate + expiration windows]
-    T --> P2[analytics GlobalKTable\nRocksDB, fully replicated\nwindow enrichment join]
-    T --> P3[webhook-notifier projection\nMongo merchant_webhooks\ndelivery URL at send time]
-    style T fill:#f5f0ff,stroke:#7c5cd6
+flowchart LR
+    UI["Save merchant settings<br/>in the UI"] --> API[payment-api]
+    API -- "one event per save" --> T(["Kafka topic<br/>keeps latest value per merchant"])
+    T --> C1["payment-api<br/>allowed currencies,<br/>expiration windows"]
+    T --> C2["analytics<br/>merchant names and<br/>alerts on the dashboard"]
+    T --> C3["webhook-notifier<br/>where to deliver webhooks"]
 ```
 
-Compaction keeps the latest value per key; a tombstone deletes the merchant from every
-projection with zero cleanup code.
+The topic is *compacted*: Kafka keeps only the newest event per merchant, so it behaves like a
+table. Deleting a merchant publishes an empty event (a *tombstone*) — the merchant disappears
+from all three consumers with no cleanup code anywhere.
