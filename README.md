@@ -1,86 +1,177 @@
 # Kafka PSP Pipeline
 
-A mini PSP (payment service provider) event pipeline, built module by module to reach an
-intermediate Kafka level: Java/Spring Boot microservices, hexagonal (ports & adapters)
-architecture, MapStruct + Lombok, a React + TypeScript UI, fully deployable to Kubernetes.
+A miniature **payment service provider** built as an event-driven system on Apache Kafka:
+Java 21 / Spring Boot microservices (hexagonal architecture, ArchUnit-enforced), Avro + Schema
+Registry, a React + TypeScript UI, deployed to a local Kubernetes (kind) cluster with Strimzi,
+KEDA, Debezium and full Prometheus/Grafana monitoring.
 
-Full plan: [`docs/PLAN.md`](docs/PLAN.md). Decisions and their rationale:
-[`docs/adr/`](docs/adr/). Diagrams: [`docs/diagrams/`](docs/diagrams/).
-Measured failure drills against the live cluster:
-[`docs/M19-failure-drills.md`](docs/M19-failure-drills.md) (part 1),
-[`docs/M19-failure-drills-part2.md`](docs/M19-failure-drills-part2.md) (part 2).
+Merchants take payments and refunds; the platform authorizes them against a simulated provider,
+keeps exactly-once balances, delivers merchant webhooks with retries/DLQ, expires stuck
+operations per-merchant, and shows every lifecycle stage live in the UI.
 
-## Overview
+**Documentation:**
 
-**Services:** `payment-api`, `psp-connector`, `ledger`, `webhook-notifier`, `analytics`,
-`realtime-gateway`, `api-gateway`, `discovery-server`, plus a React UI.
+- [`documentation/`](documentation/) — **how, what and why it works** + Mermaid diagrams
+  (system overview, payment/refund sequences, config propagation, deployment).
+- [`docs/PLAN.md`](docs/PLAN.md) — the module-by-module learning plan (M1..M19).
+- [`docs/adr/`](docs/adr/) — architecture decision records.
+- [`docs/M19-failure-drills.md`](docs/M19-failure-drills.md) /
+  [`part 2`](docs/M19-failure-drills-part2.md) /
+  [`docs/M20-lifecycle-trails-and-expiration.md`](docs/M20-lifecycle-trails-and-expiration.md)
+  — failure drills and feature verification, measured against the live cluster.
 
-**Flow:** `POST /payments` → `payment-api` (Postgres + outbox) → `payments.requested` →
-`psp-connector` (simulated provider) → `payments.status-changed` → `ledger` (EOS balances) +
-`webhook-notifier` (retries/DLQ) + `analytics` (Streams windows) + `realtime-gateway` (SSE to UI).
+---
 
-Every inter-service communication is a Kafka event; commands enter once, via REST, through the
-gateway (ADR-0004). Database per service, no shared schemas (ADR-0005).
+## Running from zero
 
-## Quickstart
+Target platform: **macOS** (Apple Silicon or Intel). Linux works the same minus Docker Desktop
+specifics. Everything runs locally — no cloud accounts needed.
 
-Prerequisites: **Java 21** (SDKMAN) and **Maven**.
+### 1. Install the tooling
+
+Install [Homebrew](https://brew.sh) if you don't have it, then:
 
 ```bash
-java --version
+# Container runtime (the whole cluster lives inside it)
+brew install --cask docker          # Docker Desktop; start it once after install
+
+# Kubernetes tooling
+brew install kind kubectl helm
+
+# Java toolchain (service jars are built on the host)
+brew install openjdk@21 maven       # or: sdkman with java 21-tem
+sudo ln -sfn "$(brew --prefix)/opt/openjdk@21/libexec/openjdk.jdk" \
+  /Library/Java/JavaVirtualMachines/openjdk-21.jdk
+
+git --version                       # ships with Xcode CLT; install if missing
+```
+
+Optional (only for UI development / e2e scripts — the deployable UI builds inside Docker):
+
+```bash
+brew install node pnpm              # Node 22+
+```
+
+**Docker Desktop settings** (Settings → Resources): give it at least **8 GB RAM** (12 GB is
+comfortable) and make sure you have **~25 GB free disk**. The stack runs a 3-node Kafka
+cluster, 9 services, Postgres, Mongo, MinIO, Schema Registry, Kafka Connect and a monitoring
+stack — it is a real workload.
+
+Verify:
+
+```bash
+docker info          # daemon running
+kind version && kubectl version --client && helm version
+java --version       # 21.x
 mvn --version
 ```
 
-Build everything (parent POM, both libs, `payment-api`), running the ArchUnit hexagon check:
+### 2. Bring the platform up
 
 ```bash
+git clone <this-repo> kafka && cd kafka
+
+# 1) Kafka platform: kind cluster (3 nodes), pinned Strimzi operator, Kafka 4.3 (KRaft),
+#    all topics, all SASL/SCRAM users with deny-by-default ACLs. Idempotent. ~3 min.
+./infra/k8s/scripts/up.sh
+
+# 2) Applications: builds every service jar (maven) + docker image, loads them into kind,
+#    deploys the umbrella Helm chart (services, Postgres, Mongo, MinIO, Schema Registry,
+#    Kafka Connect + Debezium, KEDA, ingress-nginx, UI). ~5-8 min first run.
+./infra/k8s/scripts/deploy-apps.sh
+
+# 3) Monitoring: Prometheus + Grafana + kafka-exporter in the `monitoring` namespace.
+./infra/k8s/scripts/install-monitoring.sh
+```
+
+Open **http://localhost** — the UI is served through ingress on port 80.
+
+### 3. Known first-run quirks (both have one-line fixes)
+
+| Symptom | Fix |
+|---|---|
+| `deploy-apps.sh` times out on `payment-outbox-connector`, task shows `FAILED` | The Debezium task can start before Flyway creates the Postgres publication. Once payment-api is Running: `kubectl -n kafka annotate kafkaconnector payment-outbox-connector strimzi.io/restart-task=0` |
+| `http://localhost` refuses connections after a Docker/host restart | ingress-nginx loses its hostPort binding: `kubectl -n ingress-nginx delete pod -l app.kubernetes.io/component=controller` |
+
+### 4. First steps in the UI
+
+1. **Merchants** → `+ new merchant`: pick an id, 1–3 allowed currencies, payment/refund
+   expiration windows, and a webhook URL — grab a free inbox at
+   [webhook.site](https://webhook.site) to see real deliveries arrive.
+2. **Simulator** → create payments (outcome chips use magic amount endings: `.13` = declined,
+   `.66` = provider timeout) or switch to refund mode; auto-run generates steady traffic.
+3. **Transactions** → expand any row: the full lifecycle trail (created → pending → IPN
+   received → verified → paid, and the six-stage refund trail), provider references, webhook
+   deliveries, refund form.
+4. **Dashboard** → totals, latest operations, live 1-minute Kafka Streams windows per merchant.
+5. **DLQ / Cluster** → poison-message console with replay; topics, consumer groups and lag.
+
+### 5. Everyday commands
+
+```bash
+# All tests (unit + ArchUnit + Testcontainers ITs; Docker must be running)
 mvn clean verify
+
+# Rebuild & redeploy ONE service after a change (tag = current deployed tag)
+TAG=$(kubectl -n kafka get deploy payment-api -o jsonpath='{.spec.template.spec.containers[0].image}' | cut -d: -f2)
+mvn -q -pl services/payment-api -am package -DskipTests
+docker build -q -t psp/payment-api:$TAG services/payment-api
+kind load docker-image --name kafka-psp psp/payment-api:$TAG
+kubectl -n kafka rollout restart deploy/payment-api
+
+# UI dev loop (hot reload against the cluster's APIs)
+cd ui && pnpm install && pnpm dev
+
+# Regenerate typed API clients from the running services
+kubectl -n kafka port-forward svc/payment-api 8085:8085 &
+kubectl -n kafka port-forward svc/analytics 8089:8089 &
+cd ui && pnpm gen:api
+
+# UI stability e2e (needs a global playwright install)
+NODE_PATH=$(npm root -g) node ui/e2e/layout-shift.cjs
+
+# Kafka CLI access from the host (SASL listeners forwarded per broker)
+./infra/k8s/scripts/port-forward.sh
+
+# Grafana (namespace `monitoring`)
+kubectl -n monitoring get secret grafana -o jsonpath='{.data.admin-password}' | base64 -d; echo
+kubectl -n monitoring port-forward svc/grafana 3000:80
+
+# Tear everything down / start fresh
+kind delete cluster --name kafka-psp
 ```
 
-Run `payment-api` standalone - no database, no Kafka broker, no Docker required at M1:
+There is also a docker-compose variant of the whole stack (pre-k8s modules) under
+[`infra/compose/`](infra/compose/) with its own README.
 
-```bash
-mvn -pl services/payment-api -am spring-boot:run
-```
+---
 
-```bash
-curl -i -X POST http://localhost:8081/api/payments \
-  -H 'Content-Type: application/json' \
-  -d '{"merchantId":"merchant-1","amount":10.00,"currency":"EUR"}'
+## Module index (the learning path)
 
-curl -i http://localhost:8081/actuator/health
-```
+Each module builds on the last. Full detail and "prove it" experiments: [`docs/PLAN.md`](docs/PLAN.md).
 
-`payment-api`'s persistence and event-publishing adapters are in-memory/logging stubs at this
-stage (see [Module index](#module-index-a-learning-path)) - real PostgreSQL and Kafka wiring
-land in M2/M3.
-
-## Module index (a learning path)
-
-Each module builds on the last; work through them in order. Full detail, "prove it" experiments,
-and time estimates live in [`docs/PLAN.md`](docs/PLAN.md).
-
-| Module | Path(s) | Teaches | Status |
-|---|---|---|---|
-| M1 - Repo scaffold | `libs/common-events`, `libs/common-web`, `services/payment-api` | Maven multi-module, Lombok/MapStruct wiring, hexagonal layout, ArchUnit enforcement | **Done** |
-| M2 - Infra baseline | `infra/compose/` | KRaft, `advertised.listeners`, broker vs topic config precedence | **Done** |
-| M3 - First producer | `services/payment-api` | `ProducerRecord`, acks, idempotence, batching, key choice | **Done** |
-| M4 - First consumer | `services/psp-connector` | Consumer groups, poll loop, manual ack, rebalancing | **Done** |
-| M5 - Idempotency & dedup | `services/psp-connector` | At-least-once + idempotent consumer dedup | **Done** |
-| M6 - Transactional outbox | `services/payment-api` | Dual-write problem, outbox, Debezium/Connect | **Done** |
-| M7 - Ledger: exactly-once | `services/ledger` | Kafka transactions, EOS boundary, zombie fencing | **Done** |
-| M8 - Retries, DLQ | `services/webhook-notifier` | Non-blocking retry topics, `DefaultErrorHandler`, DLQ | **Done** |
-| M9 - Schemas & evolution | `libs/common-events` (Avro) | Schema Registry, compatibility modes | **Done** |
-| M10 - Compacted topics & Streams | `services/analytics` | `KTable`/`GlobalKTable`, RocksDB, windows | **Done** |
-| M11 - Refund saga | `services/ledger`, `services/psp-connector` | Choreography, compensating transactions | **Done** |
-| M12 - Request-reply + realtime-gateway | `services/realtime-gateway` | `ReplyingKafkaTemplate`, the broadcast problem | **Done** |
-| M13 - Feature grab-bag | multiple | Streams joins, batch listener, claim check, quotas, Connect sink | **Done** - 5/5, all measured (claim check: `services/payment-api/README.md`'s "M13 - Claim check, measured") |
-| M14 - Security | all services | SASL/SCRAM, ACLs, TLS | **Done** |
-| M15 - Observability | all services | Trace propagation via Kafka headers, lag dashboards | **Done** - metrics on both stacks (compose, and on k8s via Strimzi `metricsConfig`/`kafkaExporter` + Prometheus/Grafana in `monitoring`; tracing still compose-only) |
-| M16 - Discovery + gateway | `services/discovery-server`, `services/api-gateway` | Eureka vs k8s-native discovery, Spring Cloud Gateway | **Done** |
-| M17 - React UI | `ui/` | SSE, OpenAPI-generated types, the six showcase pages | **Done** |
-| M18 - Kubernetes | `infra/k8s/` | Strimzi, Helm, KEDA | **Done** |
-| M19 - Failure drills | [`docs/M19-failure-drills.md`](docs/M19-failure-drills.md), [`part 2`](docs/M19-failure-drills-part2.md) | ISR/acks trade-offs, unclean leader election, partition count vs keyed ordering, rebalance cost, static membership, throttled reassignment, retention semantics, timestamp offset reset, chaos (a false alarm that surfaced a real latent loss window, fixed + regression-proven), Testcontainers ITs (`mvn verify`) asserting no loss across a real rebalance, EOS + dedup, the retry chain, and outbox atomicity | **Done** |
+| Module | Path(s) | Teaches |
+|---|---|---|
+| M1 - Repo scaffold | `libs/*`, `services/payment-api` | Maven multi-module, Lombok/MapStruct, hexagonal layout, ArchUnit |
+| M2 - Infra baseline | `infra/compose/` | KRaft, `advertised.listeners`, config precedence |
+| M3 - First producer | `services/payment-api` | acks, idempotence, batching, key choice |
+| M4 - First consumer | `services/psp-connector` | consumer groups, poll loop, manual ack, rebalancing |
+| M5 - Idempotency & dedup | `services/psp-connector` | at-least-once + idempotent consumer |
+| M6 - Transactional outbox | `services/payment-api` | dual-write problem, outbox, Debezium |
+| M7 - Exactly-once ledger | `services/ledger` | Kafka transactions, EOS, zombie fencing |
+| M8 - Retries & DLQ | `services/webhook-notifier` | non-blocking retry topics, DLQ, replay |
+| M9 - Schemas & evolution | `libs/common-events` | Avro, Schema Registry, compatibility |
+| M10 - Compaction & Streams | `services/analytics` | KTable/GlobalKTable, RocksDB, windows |
+| M11 - Refund saga | `ledger`, `psp-connector` | choreography, compensating transactions |
+| M12 - Request-reply + SSE | `services/realtime-gateway` | ReplyingKafkaTemplate, the broadcast problem |
+| M13 - Feature grab-bag | multiple | Streams joins, claim check (MinIO), quotas, Connect sink |
+| M14 - Security | everywhere | SASL/SCRAM, deny-by-default ACLs |
+| M15 - Observability | everywhere | metrics, lag dashboards, trace headers |
+| M16 - Discovery + gateway | `api-gateway`, `discovery-server` | Eureka, Spring Cloud Gateway |
+| M17 - React UI | `ui/` | SSE, OpenAPI types, the showcase pages |
+| M18 - Kubernetes | `infra/k8s/` | Strimzi, Helm, KEDA lag autoscaling |
+| M19 - Failure drills | `docs/M19-*.md` | measured failure semantics + a real found-and-fixed loss window |
+| M20+ - Lifecycle & expiration | `docs/M20-*.md` | five/six-stage trails, merchant-tunable expiration, honest analytics |
 
 ## Stack & persistence decisions
 
@@ -88,47 +179,15 @@ and time estimates live in [`docs/PLAN.md`](docs/PLAN.md).
 |---|---|---|
 | payment-api | PostgreSQL | outbox needs ACID |
 | ledger | PostgreSQL | balance integrity, transactions |
-| psp-connector | PostgreSQL | dedup table with unique constraints |
-| webhook-notifier | MongoDB | delivery-attempt documents, TTL indexes |
-| analytics | MongoDB + RocksDB | read projections + Streams state |
-| audit-trail | MongoDB | written by a Kafka Connect **sink**, zero code |
-
-## Lombok + MapStruct rules
-
-- Add `lombok-mapstruct-binding` and order annotation processors correctly - the #1 setup gotcha
-- No `@Data` on JPA entities (equals/hashCode + lazy-loading pitfalls); use `@Getter/@Setter/@Builder`
-- Java records for DTOs and events; Lombok only where records don't fit
-- MapStruct: `componentModel = "spring"`, `unmappedTargetPolicy = ERROR`, one mapper per hexagon boundary
-
-The annotation-processor order is fixed once, in the root `pom.xml`'s `maven-compiler-plugin`
-configuration, and inherited by every module: **Lombok → `lombok-mapstruct-binding` →
-MapStruct**. Getting this order wrong produces MapStruct mappers that silently ignore
-Lombok-generated accessors.
-
-## Repo layout
-
-```
-kafka-psp-pipeline/
-├── README.md
-├── docs/{adr, diagrams}/
-├── infra/
-│   ├── compose/               # docker-compose profiles
-│   └── k8s/                   # kind config, helm charts, strimzi, keda
-├── libs/
-│   ├── common-events/         # event envelope (ADR-0002), Avro schemas from M9
-│   └── common-web/            # RFC-7807 error handling, correlation-id filter
-├── services/
-│   ├── payment-api/  psp-connector/  ledger/
-│   ├── webhook-notifier/  analytics/
-│   ├── realtime-gateway/
-│   ├── api-gateway/  discovery-server/
-└── ui/                         # React + TS (M17)
-```
+| psp-connector | PostgreSQL | dedup tables with unique constraints |
+| webhook-notifier | MongoDB | delivery-attempt documents |
+| analytics | MongoDB + RocksDB | projections + Streams state |
+| audit-trail | MongoDB | Kafka Connect sink, zero code |
 
 ## Hexagonal template per service
 
 ```
-domain/          # pure Java: aggregate, value objects, ports (interfaces). No Spring, no Kafka
+domain/          # pure Java: aggregate, value objects, ports. No Spring, no Kafka
 application/     # use cases orchestrating ports
 adapters/
   in/web         # controllers, DTOs, MapStruct dto<->domain
@@ -138,5 +197,6 @@ adapters/
 config/
 ```
 
-The test that you're doing it right: `domain/` compiles with zero framework dependencies -
-enforced per service by an ArchUnit test (see `services/payment-api/.../architecture/HexagonalArchitectureTest.java`).
+`domain/` compiles with zero framework dependencies — enforced per service by an ArchUnit test.
+Annotation-processor order (root `pom.xml`, inherited): **Lombok → lombok-mapstruct-binding →
+MapStruct** — wrong order silently breaks MapStruct over Lombok accessors.
