@@ -13,8 +13,9 @@ const LOOKBACKS = [5, 15, 60] as const;
 
 /**
  * Page 2: merchant dashboard - live windowed metrics straight from the Kafka Streams store
- * (interactive queries), or the Mongo projection when "projected" is on. Poll-based (5 s):
- * realtime-gateway deliberately does not stream the metrics changelog, so the store IS the API.
+ * (interactive queries), or the Mongo projection when "projected" is on. No polling - data
+ * refreshes on navigation, mutations and the header's Refresh button; realtime-gateway
+ * deliberately does not stream the metrics changelog, so the store IS the API.
  * A 503 from any store endpoint means the Streams client is restoring - rendered as a banner,
  * never masked, because "the store is rebuilding from the changelog" is exactly the Kafka
  * lesson this page exists to show.
@@ -47,13 +48,14 @@ export function DashboardPage() {
     queryKey: ["op-totals", trimmed],
     queryFn: async () => {
       const m = trimmed || undefined;
-      const [all, ok, failed, created] = await Promise.all([
+      const [all, ok, failed, created, expired] = await Promise.all([
         listPayments({ merchantId: m, page: 0, size: 1 }),
         listPayments({ merchantId: m, status: "SUCCEEDED", page: 0, size: 1 }),
         listPayments({ merchantId: m, status: "FAILED", page: 0, size: 1 }),
         listPayments({ merchantId: m, status: "CREATED", page: 0, size: 1 }),
+        listPayments({ merchantId: m, status: "EXPIRED", page: 0, size: 1 }),
       ]);
-      return { all: all.total, ok: ok.total, failed: failed.total, created: created.total };
+      return { all: all.total, ok: ok.total, failed: failed.total, created: created.total, expired: expired.total };
     },
   });
   const latest = useQuery({
@@ -112,12 +114,13 @@ export function DashboardPage() {
         </span>
       </div>
 
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
         {[
           { label: "All operations", value: totals.data?.all, tone: "text-slate-900" },
           { label: "Succeeded", value: totals.data?.ok, tone: "text-emerald-700" },
           { label: "Failed", value: totals.data?.failed, tone: "text-rose-700" },
           { label: "In flight (CREATED)", value: totals.data?.created, tone: "text-amber-700" },
+          { label: "Expired", value: totals.data?.expired, tone: "text-violet-700" },
         ].map((c) => (
           <div key={c.label} className="rounded-lg border border-slate-300 bg-white px-4 py-3">
             <div className="text-xs text-slate-600">{c.label}</div>

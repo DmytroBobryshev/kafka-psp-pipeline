@@ -27,7 +27,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["search"];
         put?: never;
         post: operations["create"];
         delete?: never;
@@ -52,6 +52,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/payments/{paymentId}/disputes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["open"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/payments/{paymentId}/refunds/{refundId}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["refundHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/payments/{paymentId}/provider-status": {
         parameters: {
             query?: never;
@@ -60,6 +92,86 @@ export interface paths {
             cookie?: never;
         };
         get: operations["checkStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/payments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getById"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/payments/{id}/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["refunds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/payments/{id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["history"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/merchants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["search_1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/merchants/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getById_1"];
         put?: never;
         post?: never;
         delete?: never;
@@ -77,18 +189,24 @@ export interface components {
             /** @enum {string} */
             status: "ACTIVE" | "SUSPENDED";
             payoutCurrency: string;
+            allowedCurrencies: string[];
             webhookUrl?: string;
             /** Format: int32 */
             declineRateAlertThresholdBps?: number;
+            /** Format: int32 */
+            paymentExpirationSeconds?: number;
         };
         MerchantConfigResponse: {
             merchantId?: string;
             displayName?: string;
             status?: string;
             payoutCurrency?: string;
+            allowedCurrencies?: string[];
             webhookUrl?: string;
             /** Format: int32 */
             declineRateAlertThresholdBps?: number;
+            /** Format: int32 */
+            paymentExpirationSeconds?: number;
         };
         CreatePaymentRequest: {
             merchantId: string;
@@ -104,6 +222,8 @@ export interface components {
             status?: string;
             /** Format: date-time */
             createdAt?: string;
+            /** Format: date-time */
+            statusUpdatedAt?: string;
         };
         RequestRefundRequest: {
             amount: number;
@@ -123,6 +243,44 @@ export interface components {
             /** Format: date-time */
             createdAt?: string;
         };
+        OpenDisputeRequest: {
+            reason: string;
+            documentBase64: string;
+            contentType: string;
+        };
+        DisputeResponse: {
+            /** Format: uuid */
+            disputeId?: string;
+            /** Format: uuid */
+            paymentId?: string;
+            merchantId?: string;
+            /** Format: int64 */
+            sizeBytes?: number;
+            claimChecked?: boolean;
+            bucket?: string;
+            objectKey?: string;
+        };
+        PaymentPageResponse: {
+            items?: components["schemas"]["PaymentResponse"][];
+            /** Format: int32 */
+            page?: number;
+            /** Format: int32 */
+            size?: number;
+            /** Format: int64 */
+            total?: number;
+        };
+        RefundHistoryItemResponse: {
+            status?: string;
+            /** Format: date-time */
+            occurredAt?: string;
+            /** Format: uuid */
+            eventId?: string;
+            source?: string;
+            providerReference?: string;
+        };
+        RefundHistoryResponse: {
+            items?: components["schemas"]["RefundHistoryItemResponse"][];
+        };
         ProviderStatusResponse: {
             /** Format: uuid */
             paymentId?: string;
@@ -134,6 +292,41 @@ export interface components {
             checkedAt?: string;
             /** Format: int64 */
             roundTripMillis?: number;
+        };
+        PaymentHistoryItemResponse: {
+            status?: string;
+            /** Format: date-time */
+            occurredAt?: string;
+            /** Format: uuid */
+            eventId?: string;
+            source?: string;
+            providerReference?: string;
+        };
+        PaymentHistoryResponse: {
+            items?: components["schemas"]["PaymentHistoryItemResponse"][];
+        };
+        MerchantPageResponse: {
+            items?: components["schemas"]["MerchantResponse"][];
+            /** Format: int32 */
+            page?: number;
+            /** Format: int32 */
+            size?: number;
+            /** Format: int64 */
+            total?: number;
+        };
+        MerchantResponse: {
+            merchantId?: string;
+            displayName?: string;
+            status?: string;
+            payoutCurrency?: string;
+            allowedCurrencies?: string[];
+            webhookUrl?: string;
+            /** Format: int32 */
+            declineRateAlertThresholdBps?: number;
+            /** Format: int32 */
+            paymentExpirationSeconds?: number;
+            /** Format: date-time */
+            updatedAt?: string;
         };
     };
     responses: never;
@@ -190,6 +383,31 @@ export interface operations {
             };
         };
     };
+    search: {
+        parameters: {
+            query?: {
+                merchantId?: string;
+                status?: string;
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["PaymentPageResponse"];
+                };
+            };
+        };
+    };
     create: {
         parameters: {
             query?: never;
@@ -240,6 +458,55 @@ export interface operations {
             };
         };
     };
+    open: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                paymentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OpenDisputeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["DisputeResponse"];
+                };
+            };
+        };
+    };
+    refundHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                paymentId: string;
+                refundId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["RefundHistoryResponse"];
+                };
+            };
+        };
+    };
     checkStatus: {
         parameters: {
             query?: never;
@@ -258,6 +525,118 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["ProviderStatusResponse"];
+                };
+            };
+        };
+    };
+    getById: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["PaymentResponse"];
+                };
+            };
+        };
+    };
+    refunds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["RefundResponse"][];
+                };
+            };
+        };
+    };
+    history: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["PaymentHistoryResponse"];
+                };
+            };
+        };
+    };
+    search_1: {
+        parameters: {
+            query?: {
+                status?: string;
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["MerchantPageResponse"];
+                };
+            };
+        };
+    };
+    getById_1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["MerchantResponse"];
                 };
             };
         };

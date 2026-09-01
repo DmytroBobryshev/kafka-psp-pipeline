@@ -9,6 +9,7 @@ export interface MerchantView {
   allowedCurrencies: string[];
   webhookUrl: string | null;
   declineRateAlertThresholdBps: number;
+  paymentExpirationSeconds?: number;
   updatedAt: string;
 }
 

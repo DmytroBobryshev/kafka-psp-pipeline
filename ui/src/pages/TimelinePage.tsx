@@ -8,6 +8,7 @@ import { createPayment } from "../api/paymentApi";
 import { requestRefund } from "../api/refundApi";
 import { listMerchants } from "../api/merchantsApi";
 import { ApiError } from "../api/client";
+import { getPayment } from "../api/paymentsApi";
 import type { PaymentResponse } from "../api/types";
 
 type Mode = "payment" | "refund";
@@ -102,12 +103,18 @@ export function TimelinePage() {
     setError(null);
     setRefunding(true);
     try {
-      const h = history.find((x) => x.id === refundPaymentId);
-      if (h) setPayment({ ...h, status: "", createdAt: h.createdAt } as PaymentResponse);
       const known = history.find((x) => x.id === refundPaymentId);
+      if (known) setPayment({ ...known, status: "", createdAt: known.createdAt } as PaymentResponse);
+      let refundCurrency = known?.currency;
+      if (!refundCurrency) {
+        // hand-pasted id: the payment knows its own currency - never guess EUR
+        const p = await getPayment(refundPaymentId);
+        refundCurrency = p.currency;
+        setPayment(p);
+      }
       await requestRefund(refundPaymentId, {
         amount: Number(cents == null ? refundAmount : withEnding(refundAmount, cents)),
-        currency: known?.currency ?? "EUR",
+        currency: refundCurrency,
         reason: refundReason.trim() || undefined,
       });
     } catch (e) {
@@ -127,7 +134,7 @@ export function TimelinePage() {
         const p = await createPayment({
           merchantId,
           amount: Math.round((5 + Math.random() * 95) * 100) / 100,
-          currency: "EUR",
+          currency: merchantCurrencies[Math.floor(Math.random() * merchantCurrencies.length)] ?? "EUR",
         });
         onCreated(p);
         setAutoCount((c) => c + 1);

@@ -12,7 +12,7 @@ const DEFAULT_EXPIRATION_SECONDS = 900;
 
 type MerchantForm = UpsertMerchantConfigRequest & {
   merchantId: string;
-  paymentExpirationSeconds: number;
+  paymentExpirationSeconds: number;  // required in the form, optional on the wire
 };
 
 const EMPTY_FORM: MerchantForm = {
@@ -34,8 +34,7 @@ const toForm = (m: MerchantView): MerchantForm => ({
   allowedCurrencies: m.allowedCurrencies?.length ? m.allowedCurrencies : [m.payoutCurrency],
   webhookUrl: m.webhookUrl ?? "",
   declineRateAlertThresholdBps: m.declineRateAlertThresholdBps,
-  paymentExpirationSeconds:
-    (m as { paymentExpirationSeconds?: number }).paymentExpirationSeconds ?? DEFAULT_EXPIRATION_SECONDS,
+  paymentExpirationSeconds: m.paymentExpirationSeconds ?? DEFAULT_EXPIRATION_SECONDS,
 });
 
 const toRequest = (form: MerchantForm): UpsertMerchantConfigRequest => ({
@@ -45,7 +44,7 @@ const toRequest = (form: MerchantForm): UpsertMerchantConfigRequest => ({
   allowedCurrencies: form.allowedCurrencies,
   webhookUrl: form.webhookUrl?.trim() ? form.webhookUrl : null,
   declineRateAlertThresholdBps: form.declineRateAlertThresholdBps,
-  ...( { paymentExpirationSeconds: form.paymentExpirationSeconds } as Partial<UpsertMerchantConfigRequest>),
+  paymentExpirationSeconds: form.paymentExpirationSeconds,
 });
 
 export function MerchantConfigPage() {
@@ -238,8 +237,7 @@ function MerchantRowGroup({
   kebab: Parameters<typeof KebabMenu>[0]["items"];
   editor: React.ReactNode;
 }) {
-  const expiration =
-    (m as { paymentExpirationSeconds?: number }).paymentExpirationSeconds ?? DEFAULT_EXPIRATION_SECONDS;
+  const expiration = m.paymentExpirationSeconds ?? DEFAULT_EXPIRATION_SECONDS;
   return (
     <>
       <tr
