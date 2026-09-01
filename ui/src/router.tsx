@@ -7,7 +7,8 @@ import {
   createRouter,
   redirect,
 } from "@tanstack/react-router";
-import { useIsFetching, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { TimelinePage } from "./pages/TimelinePage";
 import { PaymentsPage } from "./pages/PaymentsPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -33,16 +34,22 @@ const NAV_ITEMS = [
 
 function RefreshButton() {
   // No background polling anywhere - data refreshes on navigation, on mutations, and here.
+  // Busy state is LOCAL to the button's own click: navigation fetches must not dim it.
   const queryClient = useQueryClient();
-  const fetching = useIsFetching();
+  const [busy, setBusy] = useState(false);
   return (
     <button
-      onClick={() => queryClient.invalidateQueries()}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await queryClient.invalidateQueries();
+        } finally {
+          setBusy(false);
+        }
+      }}
       className="rounded-md border border-slate-600 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 hover:text-white"
     >
-      {/* content is static; fetching only dims it - any animation toggle or label swap
-          visibly twitches when multi-query pages flip the fetching flag several times */}
-      <span className={`transition-opacity duration-200 ${fetching ? "opacity-50" : "opacity-100"}`}>
+      <span className={`transition-opacity duration-200 ${busy ? "opacity-50" : "opacity-100"}`}>
         ↻ Refresh
       </span>
     </button>
