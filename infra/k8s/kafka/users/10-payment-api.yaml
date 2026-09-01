@@ -1,4 +1,5 @@
-# payment-api (:8085) - 18 bindings, matching init-security.sh's "--- payment-api ---" block.
+# payment-api (:8085) - 23 bindings, matching init-security.sh's "--- payment-api ---" block.
+# M23: was 18 - the refund trail's read-side projection added 4 topic Read grants + 1 group prefix.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -55,4 +56,16 @@ spec:
       # Merchant read-model listener (adapters.in.kafka.MerchantConfigChangedListener) - fixed
       # group id (payment-api.merchant-view.v1), prefixed per this service's usual convention.
       - resource: { type: group, name: payment-api.merchant-view., patternType: prefix }
+        operations: [Read, Describe]
+      # M23: the refund trail's read-side projection (refund_status_history) - four independent
+      # consumer identities, all named "payment-api.refund-*", covered by one group prefix below.
+      - resource: { type: topic, name: refunds.refund-status-changed.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: refunds.refund-completed.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: refunds.refund-failed.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: topic, name: refunds.funds-reserved.v1, patternType: literal }
+        operations: [Read, Describe]
+      - resource: { type: group, name: payment-api.refund-, patternType: prefix }
         operations: [Read, Describe]

@@ -39,16 +39,19 @@ public class PaymentQueryController {
     private final PaymentWebMapper mapper;
     private final RefundWebMapper refundMapper;
     private final PaymentHistoryWebMapper historyMapper;
+    private final RefundHistoryWebMapper refundHistoryMapper;
 
     public PaymentQueryController(
             PaymentQueryUseCase useCase,
             PaymentWebMapper mapper,
             RefundWebMapper refundMapper,
-            PaymentHistoryWebMapper historyMapper) {
+            PaymentHistoryWebMapper historyMapper,
+            RefundHistoryWebMapper refundHistoryMapper) {
         this.useCase = useCase;
         this.mapper = mapper;
         this.refundMapper = refundMapper;
         this.historyMapper = historyMapper;
+        this.refundHistoryMapper = refundHistoryMapper;
     }
 
     /**
@@ -110,6 +113,25 @@ public class PaymentQueryController {
         List<PaymentHistoryItemResponse> items =
                 useCase.history(id).stream().map(historyMapper::toResponse).toList();
         return ResponseEntity.ok(new PaymentHistoryResponse(items));
+    }
+
+    /**
+     * {@code GET /api/payments/{paymentId}/refunds/{refundId}/history} (M23) - the refund-path
+     * mirror of {@link #history}: {@code REQUESTED -> PENDING -> IPN_RECEIVED -> VERIFIED ->
+     * COMPLETED/FAILED}, plus the ledger's {@code FUNDS_RESERVED} step, ordered
+     * {@code occurredAt} ascending. Nested under {@code /api/payments/{paymentId}} so gateway
+     * routing needs no change. {@code 200} with {@code {"items": [...]}} (never empty - every
+     * refund has at least its synthesized {@code REQUESTED} entry), or {@code 404} if
+     * {@code refundId} does not exist or does not belong to {@code paymentId} - same
+     * {@link java.util.NoSuchElementException} convention {@link #getById}/{@link #history}
+     * already use, propagated straight through from {@link PaymentQueryUseCase#refundHistory}.
+     */
+    @GetMapping("/{paymentId}/refunds/{refundId}/history")
+    public ResponseEntity<RefundHistoryResponse> refundHistory(
+            @PathVariable("paymentId") UUID paymentId, @PathVariable("refundId") UUID refundId) {
+        List<RefundHistoryItemResponse> items =
+                useCase.refundHistory(paymentId, refundId).stream().map(refundHistoryMapper::toResponse).toList();
+        return ResponseEntity.ok(new RefundHistoryResponse(items));
     }
 
     private PaymentStatus parseStatus(String status) {

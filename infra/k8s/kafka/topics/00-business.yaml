@@ -105,6 +105,24 @@ spec:
     cleanup.policy: delete
     min.insync.replicas: "2"
 ---
+# M23: the refund trail's PENDING/IPN_RECEIVED/VERIFIED mirror of
+# payments.payment-status-changed.v1 - config copied straight from refunds.refund-completed.v1
+# above (same producer, same key, same tier).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: refunds.refund-status-changed.v1
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: psp
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:

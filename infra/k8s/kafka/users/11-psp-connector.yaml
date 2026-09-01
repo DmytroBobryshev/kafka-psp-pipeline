@@ -1,5 +1,6 @@
-# psp-connector (:8086) - 20 bindings, matching init-security.sh's "--- psp-connector ---" block.
+# psp-connector (:8086) - 21 bindings, matching init-security.sh's "--- psp-connector ---" block.
 # M17: was 18 - DLQ replay added Write on payments.payment-requested.v1 and Read on its own DLQ.
+# M23: was 20 - the refund trail added Write on refunds.refund-status-changed.v1.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -29,6 +30,10 @@ spec:
       - resource: { type: topic, name: refunds.refund-completed.v1, patternType: literal }
         operations: [Write, Describe]
       - resource: { type: topic, name: refunds.refund-failed.v1, patternType: literal }
+        operations: [Write, Describe]
+      # M23: the refund trail's PENDING/IPN_RECEIVED/VERIFIED mirror of
+      # payments.payment-status-changed.v1 (adapters.out.kafka.KafkaRefundStatusPublisher).
+      - resource: { type: topic, name: refunds.refund-status-changed.v1, patternType: literal }
         operations: [Write, Describe]
       - resource: { type: topic, name: psp.provider-status-reply.v1, patternType: literal }
         operations: [Write, Describe]

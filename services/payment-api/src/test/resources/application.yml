@@ -57,6 +57,16 @@ payment-api:
     merchant-view-group-id: payment-api.merchant-view.test.v1
     # M13: same "only PRESENCE matters, never sent from in this context-load test" reasoning.
     dispute-opened-topic: disputes.dispute-opened.test.v1
+    # M23: same "only PRESENCE matters for context load" reasoning - the four refund-trail
+    # listener containers subscribe at context-refresh time, same as payment-status-view above.
+    refund-status-changed-topic: refunds.refund-status-changed.v1
+    refund-completed-topic: refunds.refund-completed.v1
+    refund-failed-topic: refunds.refund-failed.v1
+    funds-reserved-topic: refunds.funds-reserved.v1
+    refund-status-view-group-id: payment-api.refund-status-view.test.v1
+    refund-completed-view-group-id: payment-api.refund-completed-view.test.v1
+    refund-failed-view-group-id: payment-api.refund-failed-view.test.v1
+    refund-funds-reserved-view-group-id: payment-api.refund-funds-reserved-view.test.v1
   # M9 Phase 1: KafkaAvroSerializer#configure never connects eagerly (lazy on first serialize(),
   # which this context-load test never triggers - same lazy-connection reasoning as
   # bootstrap-servers above), so this value only needs to be present, not reachable.

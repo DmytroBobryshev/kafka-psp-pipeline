@@ -1,0 +1,53 @@
+{
+  "type": "record",
+  "name": "RefundStatusChanged",
+  "namespace": "com.example.psp.common.events.avro",
+  "doc": "Avro form of refunds.refund-status-changed.v1 - the refund-path mirror of payments.payment-status-changed.v1's PENDING/IPN_RECEIVED/VERIFIED trail (03-payment-status-changed.avsc), scoped down to just those three non-terminal stages: the refund saga's terminal outcome still travels on refunds.refund-completed.v1/refunds.refund-failed.v1 (09/10) unchanged, so this schema carries no declineReason and status never holds a terminal value. Produced by psp-connector's ExecuteRefundUseCase (adapters.out.kafka.KafkaRefundStatusPublisher), keyed by merchantId (ADR-0003, same reasoning as payment-status-changed: every refund-saga event for one merchant must land on one partition, in order). Consumed by payment-api's refund_status_history projection only - history-only, no state-machine impact anywhere. Registered under Schema Registry subject 'refunds.refund-status-changed.v1-value' (TopicNameStrategy, ADR-0001), BACKWARD compatibility.",
+  "fields": [
+    {
+      "name": "envelope",
+      "type": "com.example.psp.common.events.avro.EventEnvelope",
+      "doc": "envelope.aggregateId = refundId."
+    },
+    {
+      "name": "refundId",
+      "type": "string",
+      "doc": "UUID string form - the saga's correlation id, same value on every refunds.*.v1 event for this refund."
+    },
+    {
+      "name": "paymentId",
+      "type": "string",
+      "doc": "The payment being refunded (UUID string form), carried through for the history endpoint."
+    },
+    {
+      "name": "merchantId",
+      "type": "string",
+      "doc": "The owning merchant; IS the record key (ADR-0003)."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 4
+      },
+      "doc": "Generates java.math.BigDecimal (enableDecimalLogicalType=true)."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "doc": "ISO-4217 three-letter currency code."
+    },
+    {
+      "name": "status",
+      "type": "string",
+      "doc": "'PENDING' (accepted for processing, before the provider call) -> 'IPN_RECEIVED' (provider responded) -> 'VERIFIED' (the attempt is durably recorded, genuinely new work). Never a terminal value - COMPLETED/FAILED are refunds.refund-completed.v1/refunds.refund-failed.v1's job, unchanged."
+    },
+    {
+      "name": "providerReference",
+      "type": "string",
+      "doc": "The (simulated) provider's own reference for this refund attempt (UUID string form) - '' for PENDING (no provider call yet), populated for IPN_RECEIVED/VERIFIED."
+    }
+  ]
+}

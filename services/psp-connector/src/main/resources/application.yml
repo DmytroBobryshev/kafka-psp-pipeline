@@ -108,6 +108,9 @@ psp-connector:
     funds-reserved-topic: refunds.funds-reserved.v1
     refund-completed-topic: refunds.refund-completed.v1
     refund-failed-topic: refunds.refund-failed.v1
+    # M23: the refund trail's PENDING/IPN_RECEIVED/VERIFIED mirror of payment-status-changed - see
+    # adapters.out.kafka.KafkaRefundStatusPublisher's new publishPending/IpnReceived/Verified.
+    refund-status-changed-topic: refunds.refund-status-changed.v1
     # M12: request-reply responder. The reply topic (psp.provider-status-reply.v1) is
     # deliberately NOT configured anywhere in this service - see
     # adapters.in.kafka.ProviderStatusQueryListener's javadoc for why header-based correlation

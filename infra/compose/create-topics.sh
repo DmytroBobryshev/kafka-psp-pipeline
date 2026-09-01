@@ -85,6 +85,8 @@ TOPICS=(
   "refunds.funds-reserved.v1|6|3|delete|604800000"
   "refunds.refund-completed.v1|6|3|delete|604800000"
   "refunds.refund-failed.v1|6|3|delete|604800000"
+  # M23: refund trail (PENDING/IPN_RECEIVED/VERIFIED) - config copied from refunds.refund-completed.v1.
+  "refunds.refund-status-changed.v1|6|3|delete|604800000"
   "refunds.reservation-released.v1|6|3|delete|604800000"
   "ledger.ledger-entry-recorded.v1|6|3|delete|2592000000"
   "merchants.merchant-config-changed.v1|3|3|compact|-1"

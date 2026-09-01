@@ -37,6 +37,11 @@ export interface StatusHistoryEntry {
 export const getPaymentHistory = (id: string) =>
   apiFetch<{ items: StatusHistoryEntry[] }>(`/api/payments/${id}/history`).then((r) => r.items);
 
+export const getRefundHistory = (paymentId: string, refundId: string) =>
+  apiFetch<{ items: StatusHistoryEntry[] }>(
+    `/api/payments/${paymentId}/refunds/${refundId}/history`,
+  ).then((r) => r.items);
+
 export const getPaymentRefunds = (id: string) =>
   apiFetch<RefundResponse[]>(`/api/payments/${id}/refunds`);
 

@@ -165,6 +165,14 @@ group_acl payment-api prefixed "payment-api.status-view."              Read Desc
 # Merchant read-model listener (adapters.in.kafka.MerchantConfigChangedListener) - a second,
 # independent consumer group on the topic this principal also produces to above.
 group_acl payment-api prefixed "payment-api.merchant-view."            Read Describe
+# M23: the refund trail's read-side projection (refund_status_history) - four independent
+# consumer identities (refund-status-view / refund-completed-view / refund-failed-view /
+# refund-funds-reserved-view), one prefix grant since every group id starts "payment-api.refund-".
+topic_acl payment-api literal  "refunds.refund-status-changed.v1"      Read Describe
+topic_acl payment-api literal  "refunds.refund-completed.v1"           Read Describe
+topic_acl payment-api literal  "refunds.refund-failed.v1"              Read Describe
+topic_acl payment-api literal  "refunds.funds-reserved.v1"             Read Describe
+group_acl payment-api prefixed "payment-api.refund-"                   Read Describe
 
 # --- psp-connector (:8086) -------------------------------------------------------------------
 # M17: also Write - adapters.out.kafka.KafkaDlqRepublisher republishes DLQ records back onto this
@@ -176,6 +184,8 @@ topic_acl psp-connector literal  "psp.provider-status-query.v1"                 
 topic_acl psp-connector literal  "payments.payment-status-changed.v1"           Write Describe
 topic_acl psp-connector literal  "refunds.refund-completed.v1"                  Write Describe
 topic_acl psp-connector literal  "refunds.refund-failed.v1"                     Write Describe
+# M23: the refund trail's PENDING/IPN_RECEIVED/VERIFIED mirror of payments.payment-status-changed.
+topic_acl psp-connector literal  "refunds.refund-status-changed.v1"             Write Describe
 topic_acl psp-connector literal  "psp.provider-status-reply.v1"                 Write Describe
 # Its DeadLetterPublishingRecoverer target (ADR-0006), and (M17) its own replay source: Read added
 # for adapters.out.kafka.KafkaDlqReader, which polls this topic under the

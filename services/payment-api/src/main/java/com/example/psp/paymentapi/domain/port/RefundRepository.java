@@ -3,6 +3,7 @@ package com.example.psp.paymentapi.domain.port;
 import com.example.psp.paymentapi.domain.model.Refund;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -24,4 +25,13 @@ public interface RefundRepository {
     BigDecimal sumRequestedAmount(UUID paymentId);
 
     List<Refund> findByPaymentId(UUID paymentId);
+
+    /**
+     * The single-refund lookup {@code GET /api/payments/{paymentId}/refunds/{refundId}/history}
+     * (M23) needs: {@code refundId} scoped to {@code paymentId} in one query, so a refund that
+     * exists but belongs to a DIFFERENT payment answers empty, same as one that does not exist at
+     * all - both are a 404 to the caller (see {@code application.PaymentQueryUseCase
+     * #refundHistory}), and neither should be distinguishable by response shape.
+     */
+    Optional<Refund> findByIdAndPaymentId(UUID id, UUID paymentId);
 }

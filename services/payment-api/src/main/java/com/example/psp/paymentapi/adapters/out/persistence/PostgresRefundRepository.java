@@ -4,6 +4,7 @@ import com.example.psp.paymentapi.domain.model.Refund;
 import com.example.psp.paymentapi.domain.port.RefundRepository;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Repository;
 
@@ -36,5 +37,10 @@ public class PostgresRefundRepository implements RefundRepository {
     @Override
     public List<Refund> findByPaymentId(UUID paymentId) {
         return jpaRepository.findByPaymentId(paymentId).stream().map(mapper::toDomain).toList();
+    }
+
+    @Override
+    public Optional<Refund> findByIdAndPaymentId(UUID id, UUID paymentId) {
+        return jpaRepository.findByIdAndPaymentId(id, paymentId).map(mapper::toDomain);
     }
 }

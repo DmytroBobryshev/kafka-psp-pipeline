@@ -54,4 +54,30 @@ public class RefundStatusAvroEventFactory {
                 .setReason("PROVIDER_DECLINED")
                 .build();
     }
+
+    /**
+     * M23: builder for every non-terminal status this service emits before the terminal
+     * COMPLETED/DECLINED publish - PENDING ({@code providerReference ""}, no provider call yet),
+     * IPN_RECEIVED and VERIFIED (both carry the provider's own reference). Mirrors
+     * {@code PaymentStatusAvroEventFactory#toNonTerminalAvro}.
+     */
+    public com.example.psp.common.events.avro.RefundStatusChanged toNonTerminalAvro(
+            EventEnvelope envelope,
+            java.util.UUID refundId,
+            java.util.UUID paymentId,
+            String merchantId,
+            com.example.psp.pspconnector.domain.model.Money amount,
+            String status,
+            String providerReference) {
+        return com.example.psp.common.events.avro.RefundStatusChanged.newBuilder()
+                .setEnvelope(toAvroEnvelope(envelope))
+                .setRefundId(refundId.toString())
+                .setPaymentId(paymentId.toString())
+                .setMerchantId(merchantId)
+                .setAmount(amount.amount())
+                .setCurrency(amount.currency())
+                .setStatus(status)
+                .setProviderReference(providerReference)
+                .build();
+    }
 }

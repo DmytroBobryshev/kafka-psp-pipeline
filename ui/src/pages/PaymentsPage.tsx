@@ -3,6 +3,7 @@ import { useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getPaymentHistory,
+  getRefundHistory,
   getPaymentRefunds,
   getProviderStatus,
   getWebhookDeliveries,
@@ -213,9 +214,33 @@ function LifecycleRow({ label, at, tone }: { label: string; at?: string | null; 
   );
 }
 
-/** One refund with an expandable detail (its own fields + the ledger's saga state on demand). */
-function RefundRow({ refund }: { refund: RefundResponse }) {
+const REFUND_TRAIL_LABEL: Record<string, string> = {
+  REQUESTED: "Refund requested",
+  FUNDS_RESERVED: "Funds reserved",
+  PENDING: "Sent to provider",
+  IPN_RECEIVED: "IPN received",
+  VERIFIED: "Status verified",
+  COMPLETED: "Refund completed",
+  FAILED: "Refund failed",
+};
+
+const REFUND_TRAIL_TONE: Record<string, string> = {
+  COMPLETED: "text-emerald-700",
+  FAILED: "text-rose-700",
+  PENDING: "text-amber-700",
+  IPN_RECEIVED: "text-sky-700",
+  VERIFIED: "text-sky-700",
+};
+
+/** One refund with an expandable detail: full status trail + the ledger's saga state on demand. */
+function RefundRow({ paymentId, refund }: { paymentId: string; refund: RefundResponse }) {
   const [open, setOpen] = useState(false);
+  const trail = useQuery({
+    queryKey: ["refund-history", refund.id],
+    queryFn: () => getRefundHistory(paymentId, refund.id),
+    enabled: open,
+    retry: false,
+  });
   const ledger = useQuery({
     queryKey: ["refund-state", refund.id],
     queryFn: () => getRefundState(refund.id),
@@ -234,14 +259,25 @@ function RefundRow({ refund }: { refund: RefundResponse }) {
       </button>
       {open && (
         <div className="border-t border-slate-200 px-2 py-2">
-          <LifecycleRow label="Refund initiated" at={refund.createdAt} />
-          {ledger.data && (
-            <LifecycleRow
-              label={`Refund ${ledger.data.status.toLowerCase()} (ledger)`}
-              at={ledger.data.updatedAt}
-              tone={ledger.data.status === "COMPLETED" ? "text-emerald-700" : "text-rose-700"}
-            />
-          )}
+          {trail.isPending && <p className="pl-3 text-slate-500">loading trail…</p>}
+          {trail.error && <LifecycleRow label="Refund requested" at={refund.createdAt} />}
+          {(trail.data ?? []).map((h, i) => (
+            <div key={h.eventId ?? i} className="border-l-2 border-slate-200 py-1 pl-3">
+              <div className="flex items-center justify-between">
+                <span className={REFUND_TRAIL_TONE[h.status] ?? "text-slate-700"}>
+                  {REFUND_TRAIL_LABEL[h.status] ?? h.status}
+                </span>
+                <span className="font-mono text-slate-500">
+                  {new Date(h.occurredAt).toLocaleTimeString()}
+                </span>
+              </div>
+              <div className="truncate text-[10px] text-slate-500">
+                {h.source}
+                {h.providerReference ? ` · provider ref ${h.providerReference.slice(0, 8)}…` : ""}
+                {h.eventId ? ` · ${h.eventId.slice(0, 8)}…` : ""}
+              </div>
+            </div>
+          ))}
           {ledger.error && <p className="pl-3 text-slate-500">ledger has no saga row yet</p>}
           {ledger.data && (
             <div className="mt-2 rounded border border-slate-200 bg-slate-100 p-2">
@@ -471,7 +507,7 @@ function PaymentDetail({
           {refunds.data?.length === 0 && <p className="text-xs text-slate-500">none</p>}
           <ul className="space-y-1">
             {(refunds.data ?? []).map((r) => (
-              <RefundRow key={r.id} refund={r} />
+              <RefundRow key={r.id} paymentId={payment.id} refund={r} />
             ))}
           </ul>
         </div>

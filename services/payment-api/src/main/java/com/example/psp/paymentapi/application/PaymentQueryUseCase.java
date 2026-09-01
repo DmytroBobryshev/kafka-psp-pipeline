@@ -6,9 +6,12 @@ import com.example.psp.paymentapi.domain.model.PaymentPage;
 import com.example.psp.paymentapi.domain.model.PaymentStatus;
 import com.example.psp.paymentapi.domain.model.PaymentStatusHistoryEntry;
 import com.example.psp.paymentapi.domain.model.Refund;
+import com.example.psp.paymentapi.domain.model.RefundHistoryItem;
+import com.example.psp.paymentapi.domain.model.RefundStatusHistoryEntry;
 import com.example.psp.paymentapi.domain.port.PaymentRepository;
 import com.example.psp.paymentapi.domain.port.PaymentStatusHistoryRepository;
 import com.example.psp.paymentapi.domain.port.RefundRepository;
+import com.example.psp.paymentapi.domain.port.RefundStatusHistoryRepository;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -39,17 +42,26 @@ public class PaymentQueryUseCase {
     // possible value and nothing to look up per-row.
     private static final String SOURCE_PSP_CONNECTOR = "psp-connector";
 
+    // M23: refund_status_history's FUNDS_RESERVED rows are the one status this service's own
+    // sole-publisher shortcut above does NOT hold for - refunds.funds-reserved.v1 is published by
+    // the ledger, not psp-connector, so that one status is looked up per-row instead.
+    private static final String SOURCE_LEDGER = "ledger";
+    private static final String STATUS_FUNDS_RESERVED = "FUNDS_RESERVED";
+
     private final PaymentRepository paymentRepository;
     private final RefundRepository refundRepository;
     private final PaymentStatusHistoryRepository historyRepository;
+    private final RefundStatusHistoryRepository refundHistoryRepository;
 
     public PaymentQueryUseCase(
             PaymentRepository paymentRepository,
             RefundRepository refundRepository,
-            PaymentStatusHistoryRepository historyRepository) {
+            PaymentStatusHistoryRepository historyRepository,
+            RefundStatusHistoryRepository refundHistoryRepository) {
         this.paymentRepository = paymentRepository;
         this.refundRepository = refundRepository;
         this.historyRepository = historyRepository;
+        this.refundHistoryRepository = refundHistoryRepository;
     }
 
     /**
@@ -121,5 +133,46 @@ public class PaymentQueryUseCase {
         }
 
         return items.stream().sorted(Comparator.comparing(PaymentHistoryItem::occurredAt)).toList();
+    }
+
+    /**
+     * M23's status-trail read: {@code GET /api/payments/{paymentId}/refunds/{refundId}/history} -
+     * the refund-path mirror of {@link #history}. One synthetic {@code REQUESTED} entry from the
+     * {@link Refund} row's own {@code createdAt}, plus every recorded
+     * {@code refund_status_history} row, merged and sorted {@code occurredAt} ascending. Every
+     * non-REQUESTED entry is attributed by status - {@code FUNDS_RESERVED} to
+     * {@code "ledger"} (the sole publisher of {@code refunds.funds-reserved.v1}), every other
+     * status to {@code "psp-connector"} - same shortcut {@link #history} takes for
+     * {@code payment_status_history}, split one status wider here since this trail has two
+     * upstream publishers instead of one.
+     *
+     * @throws NoSuchElementException if {@code refundId} does not exist or does not belong to
+     *                                {@code paymentId} - both answer 404, and are deliberately
+     *                                indistinguishable to the caller (see
+     *                                {@code domain.port.RefundRepository#findByIdAndPaymentId}'s
+     *                                javadoc).
+     */
+    public List<RefundHistoryItem> refundHistory(UUID paymentId, UUID refundId) {
+        Refund refund =
+                refundRepository
+                        .findByIdAndPaymentId(refundId, paymentId)
+                        .orElseThrow(
+                                () ->
+                                        new NoSuchElementException(
+                                                "No refund with id=" + refundId + " for paymentId=" + paymentId));
+
+        List<RefundHistoryItem> items = new ArrayList<>();
+        items.add(new RefundHistoryItem("REQUESTED", refund.getCreatedAt(), null, SOURCE_PAYMENT_API, null));
+        for (RefundStatusHistoryEntry entry : refundHistoryRepository.findByRefundId(refundId)) {
+            items.add(
+                    new RefundHistoryItem(
+                            entry.getStatus(),
+                            entry.getOccurredAt(),
+                            entry.getEventId(),
+                            STATUS_FUNDS_RESERVED.equals(entry.getStatus()) ? SOURCE_LEDGER : SOURCE_PSP_CONNECTOR,
+                            entry.getProviderReference()));
+        }
+
+        return items.stream().sorted(Comparator.comparing(RefundHistoryItem::occurredAt)).toList();
     }
 }

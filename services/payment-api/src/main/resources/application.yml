@@ -168,6 +168,17 @@ payment-api:
     # M13: the claim-check demo's topic - produced directly, same as merchant-config-changed-topic
     # above (see domain.port.DisputeEventPublisher's javadoc for why it skips the outbox).
     dispute-opened-topic: disputes.dispute-opened.v1
+    # M23: the refund trail's read-side projection (refund_status_history) -
+    # config.RefundHistoryKafkaConfig, four independent consumer groups, one per topic. payment-api
+    # only ever CONSUMES these four - refund-requested is already produced above.
+    refund-status-changed-topic: refunds.refund-status-changed.v1
+    refund-completed-topic: refunds.refund-completed.v1
+    refund-failed-topic: refunds.refund-failed.v1
+    funds-reserved-topic: refunds.funds-reserved.v1
+    refund-status-view-group-id: payment-api.refund-status-view.v1
+    refund-completed-view-group-id: payment-api.refund-completed-view.v1
+    refund-failed-view-group-id: payment-api.refund-failed-view.v1
+    refund-funds-reserved-view-group-id: payment-api.refund-funds-reserved-view.v1
   # M22: the expiration engine (adapters.in.scheduler.PaymentExpirationScheduler,
   # application.ExpirePaymentsUseCase). Reuses payment-api.kafka.payment-status-changed-topic
   # above as its PRODUCE target too - config.PaymentExpirationKafkaConfig - this service was only

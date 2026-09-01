@@ -10,9 +10,12 @@ import com.example.psp.paymentapi.domain.model.PaymentPage;
 import com.example.psp.paymentapi.domain.model.PaymentStatus;
 import com.example.psp.paymentapi.domain.model.PaymentStatusHistoryEntry;
 import com.example.psp.paymentapi.domain.model.Refund;
+import com.example.psp.paymentapi.domain.model.RefundHistoryItem;
+import com.example.psp.paymentapi.domain.model.RefundStatusHistoryEntry;
 import com.example.psp.paymentapi.domain.port.PaymentRepository;
 import com.example.psp.paymentapi.domain.port.PaymentStatusHistoryRepository;
 import com.example.psp.paymentapi.domain.port.RefundRepository;
+import com.example.psp.paymentapi.domain.port.RefundStatusHistoryRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -42,7 +45,11 @@ class PaymentQueryUseCaseTest {
         FakePaymentRepository payments = new FakePaymentRepository();
         payments.put(paymentWithStatus(paymentId, createdAt, PaymentStatus.CREATED));
         PaymentQueryUseCase useCase =
-                new PaymentQueryUseCase(payments, new UnsupportedRefundRepository(), new FakeHistoryRepository());
+                new PaymentQueryUseCase(
+                        payments,
+                        new UnsupportedRefundRepository(),
+                        new FakeHistoryRepository(),
+                        new UnsupportedRefundStatusHistoryRepository());
 
         List<PaymentHistoryItem> history = useCase.history(paymentId);
 
@@ -80,7 +87,8 @@ class PaymentQueryUseCaseTest {
                 UUID.randomUUID(), paymentId, "PENDING", null, pendingEventId, pendingAt, pendingAt));
 
         PaymentQueryUseCase useCase =
-                new PaymentQueryUseCase(payments, new UnsupportedRefundRepository(), history);
+                new PaymentQueryUseCase(
+                        payments, new UnsupportedRefundRepository(), history, new UnsupportedRefundStatusHistoryRepository());
 
         List<PaymentHistoryItem> result = useCase.history(paymentId);
 
@@ -115,7 +123,8 @@ class PaymentQueryUseCaseTest {
                 UUID.randomUUID(), paymentId, "IPN_RECEIVED", providerReference, ipnEventId, ipnAt, ipnAt));
 
         PaymentQueryUseCase useCase =
-                new PaymentQueryUseCase(payments, new UnsupportedRefundRepository(), history);
+                new PaymentQueryUseCase(
+                        payments, new UnsupportedRefundRepository(), history, new UnsupportedRefundStatusHistoryRepository());
 
         List<PaymentHistoryItem> result = useCase.history(paymentId);
 
@@ -131,10 +140,131 @@ class PaymentQueryUseCaseTest {
     void unknownPaymentIdThrowsNoSuchElement() {
         PaymentQueryUseCase useCase =
                 new PaymentQueryUseCase(
-                        new FakePaymentRepository(), new UnsupportedRefundRepository(), new FakeHistoryRepository());
+                        new FakePaymentRepository(),
+                        new UnsupportedRefundRepository(),
+                        new FakeHistoryRepository(),
+                        new UnsupportedRefundStatusHistoryRepository());
 
         assertThatThrownBy(() -> useCase.history(UUID.randomUUID()))
                 .isInstanceOf(NoSuchElementException.class);
+    }
+
+    @Test
+    void refundHistoryAlwaysStartsWithASyntheticRequestedEntryFromTheRefundRow() {
+        Instant createdAt = Instant.parse("2026-08-01T10:00:00Z");
+        UUID paymentId = UUID.randomUUID();
+        UUID refundId = UUID.randomUUID();
+        FakeRefundRepository refunds = new FakeRefundRepository();
+        refunds.put(refundWithCreatedAt(refundId, paymentId, createdAt));
+        PaymentQueryUseCase useCase =
+                new PaymentQueryUseCase(
+                        new FakePaymentRepository(),
+                        refunds,
+                        new FakeHistoryRepository(),
+                        new FakeRefundStatusHistoryRepository());
+
+        List<RefundHistoryItem> history = useCase.refundHistory(paymentId, refundId);
+
+        assertThat(history).hasSize(1);
+        RefundHistoryItem requested = history.get(0);
+        assertThat(requested.status()).isEqualTo("REQUESTED");
+        assertThat(requested.occurredAt()).isEqualTo(createdAt);
+        assertThat(requested.eventId()).isNull();
+        assertThat(requested.source()).isEqualTo("payment-api");
+        assertThat(requested.providerReference()).isNull();
+    }
+
+    @Test
+    void refundHistoryMergesTheTrailSortsByOccurredAtAndAttributesFundsReservedToTheLedger() {
+        Instant createdAt = Instant.parse("2026-08-01T10:00:00Z");
+        Instant fundsReservedAt = createdAt.plus(1, ChronoUnit.SECONDS);
+        Instant pendingAt = createdAt.plus(2, ChronoUnit.SECONDS);
+        Instant completedAt = createdAt.plus(3, ChronoUnit.SECONDS);
+        UUID paymentId = UUID.randomUUID();
+        UUID refundId = UUID.randomUUID();
+        UUID fundsReservedEventId = UUID.randomUUID();
+        UUID pendingEventId = UUID.randomUUID();
+        UUID completedEventId = UUID.randomUUID();
+
+        FakeRefundRepository refunds = new FakeRefundRepository();
+        refunds.put(refundWithCreatedAt(refundId, paymentId, createdAt));
+        FakeRefundStatusHistoryRepository history = new FakeRefundStatusHistoryRepository();
+        // Inserted out of order on purpose - the use case must sort, not trust storage order.
+        history.add(
+                RefundStatusHistoryEntry.reconstitute(
+                        UUID.randomUUID(),
+                        refundId,
+                        paymentId,
+                        "COMPLETED",
+                        "provider-ref-1",
+                        completedEventId,
+                        completedAt,
+                        completedAt));
+        history.add(
+                RefundStatusHistoryEntry.reconstitute(
+                        UUID.randomUUID(),
+                        refundId,
+                        paymentId,
+                        "FUNDS_RESERVED",
+                        null,
+                        fundsReservedEventId,
+                        fundsReservedAt,
+                        fundsReservedAt));
+        history.add(
+                RefundStatusHistoryEntry.reconstitute(
+                        UUID.randomUUID(), refundId, paymentId, "PENDING", null, pendingEventId, pendingAt, pendingAt));
+
+        PaymentQueryUseCase useCase =
+                new PaymentQueryUseCase(
+                        new FakePaymentRepository(), refunds, new FakeHistoryRepository(), history);
+
+        List<RefundHistoryItem> result = useCase.refundHistory(paymentId, refundId);
+
+        assertThat(result).extracting(RefundHistoryItem::status)
+                .containsExactly("REQUESTED", "FUNDS_RESERVED", "PENDING", "COMPLETED");
+        assertThat(result).extracting(RefundHistoryItem::source)
+                .containsExactly("payment-api", "ledger", "psp-connector", "psp-connector");
+        assertThat(result.get(1).eventId()).isEqualTo(fundsReservedEventId);
+        assertThat(result.get(3).eventId()).isEqualTo(completedEventId);
+        assertThat(result.get(3).providerReference()).isEqualTo("provider-ref-1");
+    }
+
+    @Test
+    void unknownRefundIdThrowsNoSuchElement() {
+        PaymentQueryUseCase useCase =
+                new PaymentQueryUseCase(
+                        new FakePaymentRepository(),
+                        new FakeRefundRepository(),
+                        new FakeHistoryRepository(),
+                        new FakeRefundStatusHistoryRepository());
+
+        assertThatThrownBy(() -> useCase.refundHistory(UUID.randomUUID(), UUID.randomUUID()))
+                .isInstanceOf(NoSuchElementException.class);
+    }
+
+    @Test
+    void aRefundBelongingToADifferentPaymentThrowsNoSuchElement() {
+        // The wrong-pairing 404: a refundId that genuinely exists, but not under THIS paymentId,
+        // must answer exactly like an unknown refundId - see RefundRepository
+        // #findByIdAndPaymentId's javadoc for why the two are deliberately indistinguishable.
+        UUID actualPaymentId = UUID.randomUUID();
+        UUID otherPaymentId = UUID.randomUUID();
+        UUID refundId = UUID.randomUUID();
+        FakeRefundRepository refunds = new FakeRefundRepository();
+        refunds.put(refundWithCreatedAt(refundId, actualPaymentId, Instant.now()));
+        PaymentQueryUseCase useCase =
+                new PaymentQueryUseCase(
+                        new FakePaymentRepository(),
+                        refunds,
+                        new FakeHistoryRepository(),
+                        new FakeRefundStatusHistoryRepository());
+
+        assertThatThrownBy(() -> useCase.refundHistory(otherPaymentId, refundId))
+                .isInstanceOf(NoSuchElementException.class);
+    }
+
+    private static Refund refundWithCreatedAt(UUID id, UUID paymentId, Instant createdAt) {
+        return Refund.reconstitute(id, paymentId, "merchant-1", Money.of(BigDecimal.TEN, "EUR"), null, createdAt);
     }
 
     private static Payment paymentWithStatus(UUID id, Instant createdAt, PaymentStatus status) {
@@ -218,6 +348,71 @@ class PaymentQueryUseCaseTest {
         @Override
         public List<Refund> findByPaymentId(UUID paymentId) {
             throw new UnsupportedOperationException("not exercised by this test");
+        }
+
+        @Override
+        public Optional<Refund> findByIdAndPaymentId(UUID id, UUID paymentId) {
+            throw new UnsupportedOperationException("not exercised by this test");
+        }
+    }
+
+    /** {@code history()} never touches refund_status_history - every method throws if that breaks. */
+    private static final class UnsupportedRefundStatusHistoryRepository implements RefundStatusHistoryRepository {
+        @Override
+        public boolean tryRecord(RefundStatusHistoryEntry entry) {
+            throw new UnsupportedOperationException("not exercised by this test");
+        }
+
+        @Override
+        public List<RefundStatusHistoryEntry> findByRefundId(UUID refundId) {
+            throw new UnsupportedOperationException("not exercised by this test");
+        }
+    }
+
+    /** M23: minimal fake keyed on (id, paymentId) - the exact pairing #refundHistory checks. */
+    private static final class FakeRefundRepository implements RefundRepository {
+        private final Map<UUID, Refund> byId = new HashMap<>();
+
+        void put(Refund refund) {
+            byId.put(refund.getId(), refund);
+        }
+
+        @Override
+        public Refund save(Refund refund) {
+            throw new UnsupportedOperationException("not exercised by this test");
+        }
+
+        @Override
+        public BigDecimal sumRequestedAmount(UUID paymentId) {
+            throw new UnsupportedOperationException("not exercised by this test");
+        }
+
+        @Override
+        public List<Refund> findByPaymentId(UUID paymentId) {
+            throw new UnsupportedOperationException("not exercised by this test");
+        }
+
+        @Override
+        public Optional<Refund> findByIdAndPaymentId(UUID id, UUID paymentId) {
+            return Optional.ofNullable(byId.get(id)).filter(r -> r.getPaymentId().equals(paymentId));
+        }
+    }
+
+    private static final class FakeRefundStatusHistoryRepository implements RefundStatusHistoryRepository {
+        private final List<RefundStatusHistoryEntry> entries = new ArrayList<>();
+
+        void add(RefundStatusHistoryEntry entry) {
+            entries.add(entry);
+        }
+
+        @Override
+        public boolean tryRecord(RefundStatusHistoryEntry entry) {
+            throw new UnsupportedOperationException("not exercised by this test");
+        }
+
+        @Override
+        public List<RefundStatusHistoryEntry> findByRefundId(UUID refundId) {
+            return entries.stream().filter(e -> e.getRefundId().equals(refundId)).toList();
         }
     }
 }

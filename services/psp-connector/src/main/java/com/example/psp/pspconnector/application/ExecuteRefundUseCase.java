@@ -78,9 +78,33 @@ public class ExecuteRefundUseCase {
             return;
         }
 
+        // M23 stage 2 (PENDING) - before the provider call, mirroring
+        // ProcessPaymentRequestUseCase's identical pre-call publish. RefundOutcome has no TIMEOUT
+        // (SimulatedPaymentProviderAdapter's M11 javadoc: a refund timeout is not modelled), so -
+        // unlike the payment path - stages 3/4 below are never guarded by an outcome check.
+        statusPublisher.publishPending(
+                command.refundId(),
+                command.paymentId(),
+                command.merchantId(),
+                command.amount(),
+                inboundEventId,
+                command.traceId(),
+                command.correlationId());
+
         RefundProviderResult result =
                 refundProvider.refund(
                         command.refundId(), command.paymentId(), command.merchantId(), command.amount());
+
+        // M23 stage 3 (IPN_RECEIVED) - right after the provider responds.
+        statusPublisher.publishIpnReceived(
+                command.refundId(),
+                command.paymentId(),
+                command.merchantId(),
+                command.amount(),
+                result.providerReference(),
+                inboundEventId,
+                command.traceId(),
+                command.correlationId());
 
         RefundAttempt attempt =
                 RefundAttempt.from(
@@ -118,6 +142,19 @@ public class ExecuteRefundUseCase {
                 command.amount().amount(),
                 attempt.getOutcome(),
                 attempt.getProviderReference());
+
+        // M23 stage 4 (VERIFIED) - the attempt is now durably recorded (M5 level 1 cleared). Never
+        // reached by the check-first or race-path dedup branches above, so a redelivery never
+        // re-emits this.
+        statusPublisher.publishVerified(
+                command.refundId(),
+                command.paymentId(),
+                command.merchantId(),
+                command.amount(),
+                attempt.getProviderReference(),
+                inboundEventId,
+                command.traceId(),
+                command.correlationId());
 
         // ADR-0006 category B: COMPLETED and DECLINED are both business outcomes, not errors. Both
         // publish and both let the listener commit normally afterwards.

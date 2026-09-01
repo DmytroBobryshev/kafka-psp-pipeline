@@ -17,9 +17,10 @@ so): `replication.factor=3`, `min.insync.replicas=2`, `cleanup.policy=delete`,
 | `payments.payment-requested.v1` | `paymentId` | 12 | 7 d | delete | payment-api (via outbox → Debezium) | psp-connector, analytics, realtime-gateway |
 | `payments.payment-status-changed.v1` | `merchantId` | 12 | 7 d | delete | psp-connector | ledger, webhook-notifier, analytics, realtime-gateway |
 | `refunds.refund-requested.v1` | `merchantId` | 6 | 7 d | delete | payment-api (via outbox → Debezium) | ledger, analytics, realtime-gateway |
-| `refunds.funds-reserved.v1` | `merchantId` | 6 | 7 d | delete | ledger | psp-connector, analytics, realtime-gateway |
-| `refunds.refund-completed.v1` | `merchantId` | 6 | 7 d | delete | psp-connector | ledger, webhook-notifier, analytics, realtime-gateway |
-| `refunds.refund-failed.v1` | `merchantId` | 6 | 7 d | delete | psp-connector | ledger, webhook-notifier, analytics, realtime-gateway |
+| `refunds.funds-reserved.v1` | `merchantId` | 6 | 7 d | delete | ledger | psp-connector, payment-api, analytics, realtime-gateway |
+| `refunds.refund-completed.v1` | `merchantId` | 6 | 7 d | delete | psp-connector | ledger, webhook-notifier, payment-api, analytics, realtime-gateway |
+| `refunds.refund-failed.v1` | `merchantId` | 6 | 7 d | delete | psp-connector | ledger, webhook-notifier, payment-api, analytics, realtime-gateway |
+| `refunds.refund-status-changed.v1` | `merchantId` | 6 | 7 d | delete | psp-connector | payment-api |
 | `refunds.reservation-released.v1` | `merchantId` | 6 | 7 d | delete | ledger | analytics, realtime-gateway |
 | `ledger.ledger-entry-recorded.v1` | `merchantId` | 6 | 30 d | delete | ledger | analytics, realtime-gateway, Connect Mongo sink (audit-trail) |
 | `merchants.merchant-config-changed.v1` | `merchantId` | 3 | ∞ (compacted) | compact | payment-api (merchant config API, **direct produce — not the outbox**) | analytics (`GlobalKTable`, M10); psp-connector, webhook-notifier, ledger later, same way |
@@ -186,6 +187,7 @@ compacted config topic. Debezium's Postgres connector needs no schema-history to
 | `payment-api.replies.<instanceId>` | payment-api | `psp.provider-status-reply.v1` — **unique per instance** (M12); a shared group would let a reply land on a partition the SENDING instance's `ReplyingKafkaTemplate` never sees, timing out a request that was actually answered — see services/payment-api/README.md's M12 section |
 | `realtime-gateway.<instanceId>` | realtime-gateway | `payments.*`, `refunds.*` — **unique per instance**; consumer groups load-split, they do not fan out (M12) |
 | `connect-mongo-audit-sink` | Kafka Connect | `ledger.ledger-entry-recorded.v1`, `payments.payment-status-changed.v1` |
+| `payment-api.refund-status-view.v1` / `payment-api.refund-completed-view.v1` / `payment-api.refund-failed-view.v1` / `payment-api.refund-funds-reserved-view.v1` | payment-api | one group each, respectively, on `refunds.refund-status-changed.v1`, `refunds.refund-completed.v1`, `refunds.refund-failed.v1`, `refunds.funds-reserved.v1` — the refund trail's `refund_status_history` projection (M23), same "independent local projection" shape as `payment-api`'s pre-existing (undocumented above) `payment-api.status-view.v1`/`payment-api.merchant-view.v1` groups |
 | `analytics.dispute-projection.v1` | analytics | `disputes.dispute-opened.v1` (M13) - a plain single-record `@KafkaListener`, independent of both `analytics-streams.v1` and `analytics.status-audit-batch.v1` above |
 
 Every group sets `enable.auto.commit=false` with manual ack, `auto.offset.reset=earliest`,

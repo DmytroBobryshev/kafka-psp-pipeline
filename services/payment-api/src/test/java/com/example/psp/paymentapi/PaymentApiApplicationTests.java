@@ -30,7 +30,13 @@ import org.springframework.kafka.test.context.EmbeddedKafka;
             // subscribes at context-refresh time - same requirement as the M12 reply topic above.
             "payments.payment-status-changed.v1",
             // config.MerchantViewKafkaConfig's merchant-view listener container, same requirement.
-            "merchants.merchant-config-changed.v1"
+            "merchants.merchant-config-changed.v1",
+            // M23: config.RefundHistoryKafkaConfig's four refund-trail listener containers, same
+            // context-refresh-time subscription requirement.
+            "refunds.refund-status-changed.v1",
+            "refunds.refund-completed.v1",
+            "refunds.refund-failed.v1",
+            "refunds.funds-reserved.v1"
         })
 class PaymentApiApplicationTests {
 

@@ -2,6 +2,7 @@ package com.example.psp.pspconnector.adapters.out.kafka;
 
 import com.example.psp.common.events.EventEnvelope;
 import com.example.psp.common.events.UuidV7;
+import com.example.psp.pspconnector.domain.model.Money;
 import com.example.psp.pspconnector.domain.model.RefundAttempt;
 import com.example.psp.pspconnector.domain.model.RefundOutcome;
 import com.example.psp.pspconnector.domain.port.RefundStatusPublisher;
@@ -34,21 +35,121 @@ public class KafkaRefundStatusPublisher implements RefundStatusPublisher {
 
     private static final String REFUND_COMPLETED_EVENT_TYPE = "refunds.refund-completed.v1";
     private static final String REFUND_FAILED_EVENT_TYPE = "refunds.refund-failed.v1";
+    private static final String REFUND_STATUS_CHANGED_EVENT_TYPE = "refunds.refund-status-changed.v1";
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final RefundStatusAvroEventFactory avroEventFactory;
     private final String refundCompletedTopic;
     private final String refundFailedTopic;
+    private final String refundStatusChangedTopic;
 
     public KafkaRefundStatusPublisher(
             KafkaTemplate<String, Object> kafkaTemplate,
             RefundStatusAvroEventFactory avroEventFactory,
             @Value("${psp-connector.kafka.refund-completed-topic}") String refundCompletedTopic,
-            @Value("${psp-connector.kafka.refund-failed-topic}") String refundFailedTopic) {
+            @Value("${psp-connector.kafka.refund-failed-topic}") String refundFailedTopic,
+            @Value("${psp-connector.kafka.refund-status-changed-topic}") String refundStatusChangedTopic) {
         this.kafkaTemplate = kafkaTemplate;
         this.avroEventFactory = avroEventFactory;
         this.refundCompletedTopic = refundCompletedTopic;
         this.refundFailedTopic = refundFailedTopic;
+        this.refundStatusChangedTopic = refundStatusChangedTopic;
+    }
+
+    @Override
+    public void publishPending(
+            UUID refundId,
+            UUID paymentId,
+            String merchantId,
+            Money amount,
+            UUID causationEventId,
+            String traceId,
+            String correlationId) {
+        publishNonTerminal(
+                "PENDING", refundId, paymentId, merchantId, amount, "", causationEventId, traceId, correlationId);
+    }
+
+    @Override
+    public void publishIpnReceived(
+            UUID refundId,
+            UUID paymentId,
+            String merchantId,
+            Money amount,
+            UUID providerReference,
+            UUID causationEventId,
+            String traceId,
+            String correlationId) {
+        publishNonTerminal(
+                "IPN_RECEIVED",
+                refundId,
+                paymentId,
+                merchantId,
+                amount,
+                providerReference.toString(),
+                causationEventId,
+                traceId,
+                correlationId);
+    }
+
+    @Override
+    public void publishVerified(
+            UUID refundId,
+            UUID paymentId,
+            String merchantId,
+            Money amount,
+            UUID providerReference,
+            UUID causationEventId,
+            String traceId,
+            String correlationId) {
+        publishNonTerminal(
+                "VERIFIED",
+                refundId,
+                paymentId,
+                merchantId,
+                amount,
+                providerReference.toString(),
+                causationEventId,
+                traceId,
+                correlationId);
+    }
+
+    /** Shared shape for PENDING/IPN_RECEIVED/VERIFIED - mirrors KafkaPaymentStatusPublisher#publishNonTerminal. */
+    private void publishNonTerminal(
+            String status,
+            UUID refundId,
+            UUID paymentId,
+            String merchantId,
+            Money amount,
+            String providerReference,
+            UUID causationEventId,
+            String traceId,
+            String correlationId) {
+        EventEnvelope envelope =
+                EventEnvelope.causedBy(
+                        causationEventId,
+                        REFUND_STATUS_CHANGED_EVENT_TYPE,
+                        1,
+                        refundId.toString(),
+                        AGGREGATE_TYPE,
+                        SOURCE,
+                        traceId,
+                        correlationId);
+        var event =
+                avroEventFactory.toNonTerminalAvro(
+                        envelope, refundId, paymentId, merchantId, amount, status, providerReference);
+        ProducerRecord<String, Object> record = new ProducerRecord<>(refundStatusChangedTopic, merchantId, event);
+        record.headers()
+                .add("event-id", envelope.eventId().toString().getBytes(StandardCharsets.UTF_8))
+                .add("event-type", envelope.eventType().getBytes(StandardCharsets.UTF_8))
+                .add("aggregate-id", envelope.aggregateId().getBytes(StandardCharsets.UTF_8));
+        try {
+            kafkaTemplate.send(record).get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new KafkaException("interrupted while publishing " + status + " for refundId=" + refundId, e);
+        } catch (ExecutionException e) {
+            throw new KafkaException("failed to publish " + status + " for refundId=" + refundId, e.getCause());
+        }
     }
 
     @Override
