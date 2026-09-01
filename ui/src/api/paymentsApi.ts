@@ -27,10 +27,11 @@ export const listPayments = (params: { merchantId?: string; status?: string; pag
 export const getPayment = (id: string) => apiFetch<PaymentResponse>(`/api/payments/${id}`);
 
 export interface StatusHistoryEntry {
-  status: "CREATED" | "PENDING" | "SUCCEEDED" | "FAILED" | string;
+  status: "CREATED" | "PENDING" | "IPN_RECEIVED" | "VERIFIED" | "SUCCEEDED" | "FAILED" | string;
   occurredAt: string;
   eventId: string | null;
   source: string;
+  providerReference?: string | null;
 }
 
 export const getPaymentHistory = (id: string) =>

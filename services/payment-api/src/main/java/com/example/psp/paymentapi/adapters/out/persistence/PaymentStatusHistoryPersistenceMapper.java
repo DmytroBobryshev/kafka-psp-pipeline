@@ -29,6 +29,7 @@ public interface PaymentStatusHistoryPersistenceMapper {
                 entity.getId(),
                 entity.getPaymentId(),
                 entity.getStatus(),
+                entity.getProviderReference(),
                 entity.getEventId(),
                 entity.getOccurredAt(),
                 entity.getRecordedAt());

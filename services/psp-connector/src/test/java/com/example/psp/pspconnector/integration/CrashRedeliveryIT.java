@@ -138,10 +138,15 @@ class CrashRedeliveryIT extends PspConnectorIntegrationSupport {
 
             List<ConsumerRecord<String, PaymentStatusChanged>> beforeRecovery =
                     drainUntil(verifier, STATUS_TOPIC, Duration.ofSeconds(5), records -> false);
-            assertThat(beforeRecovery)
+            // M21: PENDING/IPN_RECEIVED/VERIFIED are unaffected by PUBLISH_FAILING (only the
+            // terminal publishStatusChanged is decorated below) and are expected here by this
+            // point - the drill-9 window is specifically "the terminal event is missing", not
+            // "nothing at all is on the topic yet".
+            assertThat(terminalOnly(beforeRecovery))
                     .as(
-                            "the attempt row is committed but the publish keeps failing - this is exactly "
-                                    + "the drill-9 window, and nothing may be on the topic yet")
+                            "the attempt row is committed but the terminal publish keeps failing - this is "
+                                    + "exactly the drill-9 window, and no TERMINAL status event may be on the "
+                                    + "topic yet")
                     .isEmpty();
 
             // ---- step 3: "the pod came back" ------------------------------------------------
@@ -245,6 +250,38 @@ class CrashRedeliveryIT extends PspConnectorIntegrationSupport {
                         String correlationId) {
                     delegate.publishPending(
                             paymentId, merchantId, amount, causationEventId, traceId, correlationId);
+                }
+
+                // M21: PENDING's sibling non-terminal stages - same "always delegate, never
+                // decorated" treatment. PUBLISH_FAILING only ever gates the terminal publish below,
+                // matching the drill-9 window this test opens (the row exists, the TERMINAL event
+                // does not - trail events are unaffected).
+                @Override
+                public void publishIpnReceived(
+                        java.util.UUID paymentId,
+                        String merchantId,
+                        com.example.psp.pspconnector.domain.model.Money amount,
+                        java.util.UUID providerReference,
+                        java.util.UUID causationEventId,
+                        String traceId,
+                        String correlationId) {
+                    delegate.publishIpnReceived(
+                            paymentId, merchantId, amount, providerReference, causationEventId, traceId,
+                            correlationId);
+                }
+
+                @Override
+                public void publishVerified(
+                        java.util.UUID paymentId,
+                        String merchantId,
+                        com.example.psp.pspconnector.domain.model.Money amount,
+                        java.util.UUID providerReference,
+                        java.util.UUID causationEventId,
+                        String traceId,
+                        String correlationId) {
+                    delegate.publishVerified(
+                            paymentId, merchantId, amount, providerReference, causationEventId, traceId,
+                            correlationId);
                 }
 
                 @Override

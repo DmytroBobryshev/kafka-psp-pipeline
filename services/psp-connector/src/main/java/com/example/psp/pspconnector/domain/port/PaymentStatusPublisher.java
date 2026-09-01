@@ -26,4 +26,34 @@ public interface PaymentStatusPublisher {
             UUID causationEventId,
             String traceId,
             String correlationId);
+
+    /**
+     * Non-terminal IPN_RECEIVED (stage 3 of the panel's trail), emitted right after {@link
+     * com.example.psp.pspconnector.domain.port.PaymentProviderPort#authorize} returns - a fresh
+     * eventId every time, same shape as {@link #publishPending}. {@code providerReference} is the
+     * provider's own event id for this attempt ({@link
+     * com.example.psp.pspconnector.domain.model.ProviderResult#providerEventId()}).
+     */
+    void publishIpnReceived(
+            UUID paymentId,
+            String merchantId,
+            Money amount,
+            UUID providerReference,
+            UUID causationEventId,
+            String traceId,
+            String correlationId);
+
+    /**
+     * Non-terminal VERIFIED (stage 4, "call to psp to get status" resolved as genuinely new work),
+     * emitted once both M5 dedup levels have cleared and the attempt row is durably recorded - a
+     * fresh eventId every time, same shape as {@link #publishPending}.
+     */
+    void publishVerified(
+            UUID paymentId,
+            String merchantId,
+            Money amount,
+            UUID providerReference,
+            UUID causationEventId,
+            String traceId,
+            String correlationId);
 }

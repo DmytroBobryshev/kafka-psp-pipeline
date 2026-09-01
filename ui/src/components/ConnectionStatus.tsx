@@ -1,7 +1,7 @@
 import type { ConnectionState } from "../hooks/useEventStream";
 
 const CONFIG: Record<ConnectionState, { label: string; dot: string; text: string }> = {
-  idle: { label: "Idle", dot: "bg-slate-300", text: "text-slate-500" },
+  idle: { label: "Idle", dot: "bg-slate-300", text: "text-slate-600" },
   connecting: { label: "Connecting…", dot: "bg-amber-400 animate-pulse", text: "text-amber-600" },
   live: { label: "Live", dot: "bg-emerald-500 animate-pulse", text: "text-emerald-600" },
   reconnecting: {
@@ -21,7 +21,7 @@ export function ConnectionStatus({ state, onReconnect }: Props) {
   const cfg = CONFIG[state];
   return (
     <div className="flex items-center gap-3">
-      <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-medium shadow-sm">
+      <span className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1 text-sm font-medium shadow-sm">
         <span className={`h-2 w-2 rounded-full ${cfg.dot}`} aria-hidden />
         <span className={cfg.text}>{cfg.label}</span>
       </span>

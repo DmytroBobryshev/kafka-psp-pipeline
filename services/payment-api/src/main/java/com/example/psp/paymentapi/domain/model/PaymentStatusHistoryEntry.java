@@ -20,10 +20,12 @@ import lombok.Getter;
  * {@code domain.port.PaymentStatusHistoryRepository#tryRecord} for the insert-or-detect-duplicate
  * contract this identity backs.
  *
- * <p>{@code status} here is already this table's own vocabulary (never {@code "DECLINED"|"PENDING"}
- * the wire spelling) - the event-vocabulary translation happens once, upstream, in
- * {@code adapters.in.kafka.PaymentStatusChangedMapper#toPaymentStatus}, before a row ever reaches
- * this class or {@code application.ApplyPaymentOutcomeUseCase}.
+ * <p>{@code status} here is the event's own raw wire string (M21 - was a translated
+ * {@link PaymentStatus} through M20: {@code "DECLINED"} stored as {@code "FAILED"}). Widened from
+ * {@link PaymentStatus} to a plain {@code String} because IPN_RECEIVED/VERIFIED (M21's stage 3/4
+ * trail events) have no {@link PaymentStatus} equivalent - they are history-only and never touch
+ * {@code payments.status} (see {@code application.ApplyPaymentOutcomeUseCase}). One representation
+ * for every row, no special-casing per status.
  *
  * <p>Pure Java, no framework dependency (ADR-0007) - same identity-based-equality-by-convention
  * shape as {@link Payment}/{@link Refund} (equality is not implemented here since no caller needs
@@ -34,7 +36,13 @@ public final class PaymentStatusHistoryEntry {
 
     private final UUID id;
     private final UUID paymentId;
-    private final PaymentStatus status;
+    private final String status;
+
+    // M21: the provider's own event id for this attempt, or null - populated for every status
+    // whose event carries a non-blank providerReference (SUCCEEDED/DECLINED/IPN_RECEIVED/VERIFIED);
+    // PENDING's is always blank on the wire, mapped to null here (V10's nullable column).
+    private final String providerReference;
+
     private final UUID eventId;
 
     // Domain event time (envelope.occurredAt) - when psp-connector says the outcome happened.
@@ -46,10 +54,17 @@ public final class PaymentStatusHistoryEntry {
     private final Instant recordedAt;
 
     private PaymentStatusHistoryEntry(
-            UUID id, UUID paymentId, PaymentStatus status, UUID eventId, Instant occurredAt, Instant recordedAt) {
+            UUID id,
+            UUID paymentId,
+            String status,
+            String providerReference,
+            UUID eventId,
+            Instant occurredAt,
+            Instant recordedAt) {
         this.id = Objects.requireNonNull(id, "id must not be null");
         this.paymentId = Objects.requireNonNull(paymentId, "paymentId must not be null");
         this.status = Objects.requireNonNull(status, "status must not be null");
+        this.providerReference = providerReference; // nullable - see field javadoc
         this.eventId = Objects.requireNonNull(eventId, "eventId must not be null");
         this.occurredAt = Objects.requireNonNull(occurredAt, "occurredAt must not be null");
         this.recordedAt = Objects.requireNonNull(recordedAt, "recordedAt must not be null");
@@ -62,14 +77,21 @@ public final class PaymentStatusHistoryEntry {
      * #updateStatus}'s "the clock is a persistence detail" reasoning for {@code statusUpdatedAt}.
      */
     public static PaymentStatusHistoryEntry record(
-            UUID paymentId, PaymentStatus status, UUID eventId, Instant occurredAt) {
+            UUID paymentId, String status, String providerReference, UUID eventId, Instant occurredAt) {
         return new PaymentStatusHistoryEntry(
-                UUID.randomUUID(), paymentId, status, eventId, occurredAt, Instant.now());
+                UUID.randomUUID(), paymentId, status, providerReference, eventId, occurredAt, Instant.now());
     }
 
     /** Reconstitutes a row from persisted state - used by {@code adapters/out/persistence}. */
     public static PaymentStatusHistoryEntry reconstitute(
-            UUID id, UUID paymentId, PaymentStatus status, UUID eventId, Instant occurredAt, Instant recordedAt) {
-        return new PaymentStatusHistoryEntry(id, paymentId, status, eventId, occurredAt, recordedAt);
+            UUID id,
+            UUID paymentId,
+            String status,
+            String providerReference,
+            UUID eventId,
+            Instant occurredAt,
+            Instant recordedAt) {
+        return new PaymentStatusHistoryEntry(
+                id, paymentId, status, providerReference, eventId, occurredAt, recordedAt);
     }
 }

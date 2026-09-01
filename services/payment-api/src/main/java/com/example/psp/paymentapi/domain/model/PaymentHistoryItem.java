@@ -25,12 +25,16 @@ import java.util.UUID;
  * which has no {@code source} and never includes a synthetic {@code CREATED} row) - this is a
  * read-side projection assembled on the way out, not an aggregate.
  *
- * <p>{@code status} is already this table's vocabulary (never the wire's {@code "DECLINED"}) -
- * see {@link PaymentStatusHistoryEntry}'s javadoc for where that translation happens. There is
- * deliberately no separate {@code rawStatus} field carrying the original wire spelling: by the
- * time a status reaches this class (via {@code adapters.in.kafka.PaymentStatusChangedMapper}),
- * {@code "DECLINED"} has already become {@link PaymentStatus#FAILED} and the original string is
- * gone - there is nothing left to carry.
+ * <p>{@code status} is a plain {@code String} (M21 - was {@link PaymentStatus} through M20): the
+ * synthetic {@code CREATED} entry carries {@link PaymentStatus#CREATED}{@code .name()}, and every
+ * other entry carries {@link PaymentStatusHistoryEntry#getStatus()} verbatim - the event's raw wire
+ * spelling, including {@code "IPN_RECEIVED"}/{@code "VERIFIED"}, which have no {@link PaymentStatus}
+ * equivalent to translate into.
+ *
+ * @param providerReference the provider's own event id, or {@code null} - see
+ *                           {@link PaymentStatusHistoryEntry#getProviderReference()}; always
+ *                           {@code null} for the synthetic {@code CREATED} entry.
  */
-public record PaymentHistoryItem(PaymentStatus status, Instant occurredAt, UUID eventId, String source) {
+public record PaymentHistoryItem(
+        String status, Instant occurredAt, UUID eventId, String source, String providerReference) {
 }

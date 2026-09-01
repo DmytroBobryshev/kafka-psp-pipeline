@@ -56,6 +56,22 @@ class ProcessPaymentRequestUseCaseTest {
     private static final Money AMOUNT = new Money(BigDecimal.TEN, "EUR");
 
     @Test
+    void happyPathEmitsPendingThenIpnReceivedThenVerifiedThenTerminalInOrder() {
+        // M21: the panel's full trail in one call - stage 2 (PENDING, pre-existing), stage 3
+        // (IPN_RECEIVED, right after authorize() returns), stage 4 (VERIFIED, once both M5 dedup
+        // levels have cleared), then the terminal SUCCEEDED/DECLINED publish.
+        FakeProvider provider = new FakeProvider(ProviderOutcome.APPROVED);
+        RecordingAttemptLog attemptLog = new RecordingAttemptLog();
+        RecordingPublisher publisher = new RecordingPublisher();
+        ProcessPaymentRequestUseCase useCase = useCase(provider, attemptLog, publisher);
+
+        useCase.execute(command());
+
+        assertThat(publisher.emissionOrder)
+                .containsExactly("PENDING", "IPN_RECEIVED", "VERIFIED", "TERMINAL");
+    }
+
+    @Test
     void approvedAttemptIsRecordedAndPublished() {
         FakeProvider provider = new FakeProvider(ProviderOutcome.APPROVED);
         RecordingAttemptLog attemptLog = new RecordingAttemptLog();
@@ -127,6 +143,11 @@ class ProcessPaymentRequestUseCaseTest {
         assertThat(attemptLog.recorded).hasSize(1);
         assertThat(publisher.published).hasSize(2);
         assertThat(publisher.distinctStatusEventIds()).hasSize(1);
+        // M21: the replay takes the republish() path (level 1, before authorize() is ever called
+        // again), so it must re-emit ONLY the terminal event - none of PENDING/IPN_RECEIVED/
+        // VERIFIED a second time.
+        assertThat(publisher.emissionOrder)
+                .containsExactly("PENDING", "IPN_RECEIVED", "VERIFIED", "TERMINAL", "TERMINAL");
         assertThat(meterRegistry.counter("psp-connector.payment.attempts.processed").count())
                 .isEqualTo(1.0);
         assertThat(
@@ -540,6 +561,10 @@ class ProcessPaymentRequestUseCaseTest {
      */
     private static final class RecordingPublisher implements PaymentStatusPublisher {
         private final List<PaymentAttempt> published = new ArrayList<>();
+        // M21: one tag per call, in call order - "PENDING"/"IPN_RECEIVED"/"VERIFIED"/"TERMINAL" -
+        // the cheapest way to assert cross-method emission ORDER, which distinctStatusEventIds()
+        // and published.size() alone cannot express.
+        private final List<String> emissionOrder = new ArrayList<>();
         private final AtomicInteger pendingCount = new AtomicInteger();
         private final int failFirstN;
 
@@ -560,11 +585,37 @@ class ProcessPaymentRequestUseCaseTest {
                 String traceId,
                 String correlationId) {
             pendingCount.incrementAndGet();
+            emissionOrder.add("PENDING");
+        }
+
+        @Override
+        public void publishIpnReceived(
+                UUID paymentId,
+                String merchantId,
+                Money amount,
+                UUID providerReference,
+                UUID causationEventId,
+                String traceId,
+                String correlationId) {
+            emissionOrder.add("IPN_RECEIVED");
+        }
+
+        @Override
+        public void publishVerified(
+                UUID paymentId,
+                String merchantId,
+                Money amount,
+                UUID providerReference,
+                UUID causationEventId,
+                String traceId,
+                String correlationId) {
+            emissionOrder.add("VERIFIED");
         }
 
         @Override
         public void publishStatusChanged(PaymentAttempt attempt) {
             published.add(attempt);
+            emissionOrder.add("TERMINAL");
             if (published.size() <= failFirstN) {
                 throw new RuntimeException("simulated broker-unacknowledged publish");
             }

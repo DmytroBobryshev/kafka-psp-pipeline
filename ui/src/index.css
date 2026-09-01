@@ -11,3 +11,9 @@ body {
   font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
 }
+
+@layer base {
+  ::placeholder {
+    color: var(--color-slate-500);
+  }
+}

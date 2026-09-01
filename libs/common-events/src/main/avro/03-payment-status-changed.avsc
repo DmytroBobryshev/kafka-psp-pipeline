@@ -36,7 +36,7 @@
     {
       "name": "status",
       "type": "string",
-      "doc": "'PENDING' (accepted for processing, pre-provider), 'SUCCEEDED' or 'DECLINED' - never emitted for a TIMEOUT outcome (ADR-0006 category A is not a business outcome). PENDING carries providerReference=\"\" - no provider call has happened yet."
+      "doc": "Full vocabulary (M21): 'PENDING' (accepted for processing, pre-provider) -> 'IPN_RECEIVED' (provider responded) -> 'VERIFIED' (M5 dedup cleared, genuinely new work) -> 'SUCCEEDED'/'DECLINED' (terminal). PENDING/IPN_RECEIVED/VERIFIED are non-terminal trail stages, history-only downstream; never emitted for a TIMEOUT outcome (ADR-0006 category A is not a business outcome). PENDING carries providerReference=\"\" - no provider call has happened yet; every other status carries the provider's real event id."
     },
     {
       "name": "providerReference",

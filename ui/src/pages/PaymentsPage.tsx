@@ -16,34 +16,47 @@ import type { PaymentResponse } from "../api/types";
 const STATUSES = ["", "CREATED", "PENDING", "SUCCEEDED", "FAILED"] as const;
 
 const STATUS_BADGE: Record<string, string> = {
-  SUCCEEDED: "bg-emerald-100 text-emerald-700",
-  FAILED: "bg-rose-100 text-rose-700",
-  PENDING: "bg-amber-100 text-amber-700",
-  CREATED: "bg-slate-100 text-slate-600",
+  SUCCEEDED: "bg-emerald-100 text-emerald-800 ring-1 ring-inset ring-emerald-600/40",
+  FAILED: "bg-rose-100 text-rose-800 ring-1 ring-inset ring-rose-600/40",
+  PENDING: "bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-600/40",
+  CREATED: "bg-slate-200 text-slate-800 ring-1 ring-inset ring-slate-500/40",
 };
 
 /**
  * The single transactions panel (payments + their refunds + deliveries in one place): every payment the platform has ever taken, straight from payment-api's
  * Postgres (now kept in sync by its payment-status-changed listener), filterable by merchant and
- * status. Selecting a row opens the full detail: fields, refund history, on-demand provider
- * status (M12 request-reply over Kafka) and webhook delivery attempts (M8's Mongo log).
+ * status. Each row carries a kebab menu; details expand full-width under the row: fields, refund
+ * history, on-demand provider status (M12 request-reply over Kafka) and webhook deliveries.
  */
 export function PaymentsPage() {
   const search = useSearch({ strict: false }) as { merchantId?: string };
   const [merchantId, setMerchantId] = useState(search.merchantId ?? "");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(0);
-  const [selected, setSelected] = useState<PaymentResponse | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [showRefundForm, setShowRefundForm] = useState(false);
+  const [showProvider, setShowProvider] = useState(false);
+  const { copy, copiedKey } = useCopy();
   const size = 25;
 
   const payments = useQuery({
     queryKey: ["payments", merchantId.trim(), status, page],
     queryFn: () => listPayments({ merchantId: merchantId.trim() || undefined, status: status || undefined, page, size }),
-    refetchInterval: 10000,
     placeholderData: (prev) => prev,
   });
 
   const totalPages = payments.data ? Math.max(1, Math.ceil(payments.data.total / size)) : 1;
+
+  const toggle = (id: string) => {
+    setShowRefundForm(false);
+    setShowProvider(false);
+    setExpandedId(expandedId === id ? null : id);
+  };
+  const openWith = (id: string, opts: { refund?: boolean; provider?: boolean }) => {
+    setExpandedId(id);
+    setShowRefundForm(!!opts.refund);
+    setShowProvider(!!opts.provider);
+  };
 
   return (
     <main className="mx-auto max-w-[1500px] px-6 py-8">
@@ -54,7 +67,7 @@ export function PaymentsPage() {
             value={merchantId}
             onChange={(e) => { setMerchantId(e.target.value); setPage(0); }}
             placeholder="merchant-1 (exact)"
-            className="w-56 rounded-md border border-slate-300 px-3 py-2 font-mono text-sm"
+            className="w-56 rounded-md border border-slate-400 px-3 py-2 font-mono text-sm"
           />
         </label>
         <label className="block">
@@ -62,14 +75,14 @@ export function PaymentsPage() {
           <select
             value={status}
             onChange={(e) => { setStatus(e.target.value); setPage(0); }}
-            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="rounded-md border border-slate-400 px-3 py-2 text-sm"
           >
             {STATUSES.map((s) => (
               <option key={s} value={s}>{s || "any"}</option>
             ))}
           </select>
         </label>
-        <span className="pb-2 text-xs text-slate-400">
+        <span className="pb-2 text-xs text-slate-500">
           {payments.data ? `${payments.data.total} payment(s)` : payments.isPending ? "loading…" : ""}
         </span>
         {payments.error && (
@@ -77,51 +90,155 @@ export function PaymentsPage() {
         )}
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1fr_500px]">
-        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="px-4 py-3">Payment</th>
-                <th className="px-4 py-3">Merchant</th>
-                <th className="px-4 py-3 text-right">Amount</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(payments.data?.items ?? []).map((p) => (
-                <tr
-                  key={p.id}
-                  onClick={() => setSelected(p)}
-                  className={`cursor-pointer border-t border-slate-100 ${selected?.id === p.id ? "bg-slate-100" : "hover:bg-slate-50"}`}
-                >
-                  <td className="px-4 py-2 font-mono text-xs">{p.id.slice(0, 8)}…</td>
-                  <td className="px-4 py-2">{p.merchantId}</td>
-                  <td className="px-4 py-2 text-right">{p.amount} {p.currency}</td>
-                  <td className="px-4 py-2">
-                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_BADGE[p.status] ?? "bg-slate-100 text-slate-600"}`}>
-                      {p.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2 text-xs text-slate-500">{new Date(p.createdAt).toLocaleString()}</td>
-                </tr>
-              ))}
-              {payments.data?.items.length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-400">No payments match.</td></tr>
-              )}
-            </tbody>
-          </table>
-          <div className="flex items-center justify-between border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
-            <button disabled={page === 0} onClick={() => setPage(page - 1)} className="disabled:opacity-30">← prev</button>
-            <span>page {page + 1} / {totalPages}</span>
-            <button disabled={page + 1 >= totalPages} onClick={() => setPage(page + 1)} className="disabled:opacity-30">next →</button>
-          </div>
+      <div className="rounded-lg border border-slate-300 bg-white">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-100 text-left text-xs uppercase tracking-wide text-slate-600">
+            <tr>
+              <th className="px-4 py-3">Payment</th>
+              <th className="px-4 py-3">Merchant</th>
+              <th className="px-4 py-3 text-right">Amount</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Created</th>
+              <th className="w-10 px-2 py-3" />
+            </tr>
+          </thead>
+          <tbody>
+            {(payments.data?.items ?? []).map((p) => (
+              <PaymentRowGroup
+                key={p.id}
+                payment={p}
+                expanded={expandedId === p.id}
+                onToggle={() => toggle(p.id)}
+                onCopy={() => copy(p.id, p.id)}
+                copied={copiedKey === p.id}
+                onRefund={() => openWith(p.id, { refund: true })}
+                onProvider={() => openWith(p.id, { provider: true })}
+                showRefundForm={showRefundForm}
+                setShowRefundForm={setShowRefundForm}
+                showProvider={showProvider}
+                setShowProvider={setShowProvider}
+              />
+            ))}
+            {payments.data?.items.length === 0 && (
+              <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">No payments match.</td></tr>
+            )}
+          </tbody>
+        </table>
+        <div className="flex items-center justify-between border-t border-slate-200 px-4 py-2 text-xs text-slate-600">
+          <button disabled={page === 0} onClick={() => setPage(page - 1)} className="rounded-md border border-slate-400 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 shadow-sm hover:bg-slate-200 disabled:opacity-40">← prev</button>
+          <span>page {page + 1} / {totalPages}</span>
+          <button disabled={page + 1 >= totalPages} onClick={() => setPage(page + 1)} className="rounded-md border border-slate-400 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 shadow-sm hover:bg-slate-200 disabled:opacity-40">next →</button>
         </div>
-
-        <PaymentDetail payment={selected} />
       </div>
     </main>
+  );
+}
+
+function PaymentRowGroup(props: {
+  payment: PaymentResponse;
+  expanded: boolean;
+  onToggle: () => void;
+  onCopy: () => void;
+  copied: boolean;
+  onRefund: () => void;
+  onProvider: () => void;
+  showRefundForm: boolean;
+  setShowRefundForm: (v: boolean) => void;
+  showProvider: boolean;
+  setShowProvider: (v: boolean) => void;
+}) {
+  const { payment: p, expanded } = props;
+  return (
+    <>
+      <tr
+        onClick={props.onToggle}
+        className={`cursor-pointer border-t border-slate-200 ${expanded ? "bg-slate-200" : "hover:bg-slate-100"}`}
+      >
+        <td className="px-4 py-2 font-mono text-xs">{p.id.slice(0, 8)}…</td>
+        <td className="px-4 py-2">{p.merchantId}</td>
+        <td className="px-4 py-2 text-right">{p.amount} {p.currency}</td>
+        <td className="px-4 py-2">
+          <span className={`rounded px-2 py-0.5 text-xs font-semibold ${STATUS_BADGE[p.status] ?? "bg-slate-200 text-slate-700"}`}>
+            {p.status}
+          </span>
+        </td>
+        <td className="px-4 py-2 text-xs text-slate-600">{new Date(p.createdAt).toLocaleString()}</td>
+        <td className="px-2 py-2 text-right">
+          <KebabMenu
+            items={[
+              { label: expanded ? "Hide details" : "View details", onClick: props.onToggle },
+              { label: props.copied ? "Copied ✓" : "Copy payment ID", onClick: props.onCopy },
+              {
+                label: "Request refund…",
+                onClick: props.onRefund,
+                disabled: p.status !== "SUCCEEDED",
+                title: p.status !== "SUCCEEDED" ? "only SUCCEEDED payments can be refunded" : undefined,
+              },
+              { label: "Check provider status", onClick: props.onProvider },
+            ]}
+          />
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="border-t border-slate-200">
+          <td colSpan={6} className="bg-slate-100/60 p-0">
+            <PaymentDetail
+              payment={p}
+              showRefundForm={props.showRefundForm}
+              setShowRefundForm={props.setShowRefundForm}
+              showProvider={props.showProvider}
+              setShowProvider={props.setShowProvider}
+            />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function KebabMenu({
+  items,
+}: {
+  items: { label: string; onClick: () => void; disabled?: boolean; title?: string }[];
+}) {
+  // position:fixed escapes the table container's clipping, so the menu never gets cut off
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  return (
+    <>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          if (pos) { setPos(null); return; }
+          const r = e.currentTarget.getBoundingClientRect();
+          setPos({ top: r.bottom + 4, left: r.right - 192 });
+        }}
+        title="Actions"
+        className="rounded-md border border-slate-400 bg-white px-2 py-0.5 text-base font-bold leading-tight text-slate-700 shadow-sm hover:bg-slate-200 hover:text-slate-900"
+      >
+        ⋮
+      </button>
+      {pos && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={(e) => { e.stopPropagation(); setPos(null); }} />
+          <div
+            style={{ top: pos.top, left: pos.left }}
+            className="fixed z-20 w-48 rounded-md border border-slate-300 bg-white py-1 text-left shadow-lg"
+          >
+            {items.map((it) => (
+              <button
+                key={it.label}
+                disabled={it.disabled}
+                title={it.title}
+                onClick={(e) => { e.stopPropagation(); setPos(null); it.onClick(); }}
+                className="block w-full px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+              >
+                {it.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </>
   );
 }
 
@@ -130,7 +247,7 @@ function KeyValue({ data }: { data: Record<string, unknown> }) {
     <dl className="grid grid-cols-[140px_1fr] gap-y-1 text-xs">
       {Object.entries(data).map(([k, v]) => (
         <div key={k} className="contents">
-          <dt className="text-slate-500">{k}</dt>
+          <dt className="text-slate-600">{k}</dt>
           <dd className="break-all font-mono">{v == null ? "–" : String(v)}</dd>
         </div>
       ))}
@@ -140,9 +257,9 @@ function KeyValue({ data }: { data: Record<string, unknown> }) {
 
 function LifecycleRow({ label, at, tone }: { label: string; at?: string | null; tone?: string }) {
   return (
-    <div className="flex items-center justify-between border-l-2 border-slate-200 py-1 pl-3 text-xs">
+    <div className="flex items-center justify-between border-l-2 border-slate-300 py-1 pl-3 text-xs">
       <span className={tone ?? "text-slate-700"}>{label}</span>
-      <span className="font-mono text-slate-500">{at ? new Date(at).toLocaleString() : "—"}</span>
+      <span className="font-mono text-slate-600">{at ? new Date(at).toLocaleString() : "—"}</span>
     </div>
   );
 }
@@ -158,16 +275,16 @@ function RefundRow({ refund }: { refund: RefundResponse }) {
   });
 
   return (
-    <li className="rounded border border-slate-100 text-xs">
+    <li className="rounded border border-slate-200 bg-white text-xs">
       <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between px-2 py-1.5">
         <span className="font-mono">{refund.id.slice(0, 8)}…</span>
         <span>
           {refund.amount} {refund.currency}
-          <span className="ml-2 text-slate-400">{open ? "▲" : "▼"}</span>
+          <span className="ml-2 text-slate-500">{open ? "▲" : "▼"}</span>
         </span>
       </button>
       {open && (
-        <div className="border-t border-slate-100 px-2 py-2">
+        <div className="border-t border-slate-200 px-2 py-2">
           <LifecycleRow label="Refund initiated" at={refund.createdAt} />
           {ledger.data && (
             <LifecycleRow
@@ -176,10 +293,10 @@ function RefundRow({ refund }: { refund: RefundResponse }) {
               tone={ledger.data.status === "COMPLETED" ? "text-emerald-700" : "text-rose-700"}
             />
           )}
-          {ledger.error && <p className="pl-3 text-slate-400">ledger has no saga row yet</p>}
+          {ledger.error && <p className="pl-3 text-slate-500">ledger has no saga row yet</p>}
           {ledger.data && (
-            <div className="mt-2 rounded border border-slate-100 bg-slate-50 p-2">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            <div className="mt-2 rounded border border-slate-200 bg-slate-100 p-2">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Ledger's view — GET /api/refunds/{"{id}"}, full response
               </div>
               <KeyValue data={ledger.data as unknown as Record<string, unknown>} />
@@ -207,18 +324,18 @@ function InlineRefundForm({ paymentId, onDone }: { paymentId: string; onDone: ()
   });
 
   return (
-    <div className="rounded border border-slate-200 bg-slate-50 p-3">
+    <div className="rounded border border-slate-300 bg-slate-100 p-3">
       <div className="mb-2 grid grid-cols-[1fr_90px] gap-2">
         <input
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
-          className="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+          className="rounded-md border border-slate-400 px-2 py-1.5 text-xs"
           placeholder="amount"
         />
         <select
           value={currency}
           onChange={(e) => setCurrency(e.target.value)}
-          className="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+          className="rounded-md border border-slate-400 px-2 py-1.5 text-xs"
         >
           <option>EUR</option>
           <option>USD</option>
@@ -228,7 +345,7 @@ function InlineRefundForm({ paymentId, onDone }: { paymentId: string; onDone: ()
       <input
         value={reason}
         onChange={(e) => setReason(e.target.value)}
-        className="mb-2 w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+        className="mb-2 w-full rounded-md border border-slate-400 px-2 py-1.5 text-xs"
         placeholder="reason (optional)"
       />
       <button
@@ -239,7 +356,7 @@ function InlineRefundForm({ paymentId, onDone }: { paymentId: string; onDone: ()
         {refund.isPending ? "Submitting…" : "POST refund"}
       </button>
       {refund.error && <p className="mt-2 text-xs text-rose-600">{refund.error.message}</p>}
-      <p className="mt-2 text-[10px] text-slate-400">
+      <p className="mt-2 text-[11px] text-slate-500">
         The saga runs async - watch the refund appear in the list below (initiated → completed,
         usually ~3 s) and its webhook delivery land underneath.
       </p>
@@ -247,94 +364,94 @@ function InlineRefundForm({ paymentId, onDone }: { paymentId: string; onDone: ()
   );
 }
 
-function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
-  const [showProvider, setShowProvider] = useState(false);
-  const [showRefundForm, setShowRefundForm] = useState(false);
+function PaymentDetail({
+  payment,
+  showRefundForm,
+  setShowRefundForm,
+  showProvider,
+  setShowProvider,
+}: {
+  payment: PaymentResponse;
+  showRefundForm: boolean;
+  setShowRefundForm: (v: boolean) => void;
+  showProvider: boolean;
+  setShowProvider: (v: boolean) => void;
+}) {
   const { copy, copiedKey } = useCopy();
 
   const refunds = useQuery({
-    queryKey: ["payment-refunds", payment?.id],
-    queryFn: () => getPaymentRefunds(payment!.id),
-    enabled: !!payment,
-    refetchInterval: 5000,
+    queryKey: ["payment-refunds", payment.id],
+    queryFn: () => getPaymentRefunds(payment.id),
   });
   const deliveries = useQuery({
-    queryKey: ["payment-deliveries", payment?.id],
-    queryFn: () => getWebhookDeliveries({ paymentId: payment!.id }),
-    enabled: !!payment,
+    queryKey: ["payment-deliveries", payment.id],
+    queryFn: () => getWebhookDeliveries({ paymentId: payment.id }),
     retry: false,
-    refetchInterval: 7000,
   });
   const statusTrail = useQuery({
-    queryKey: ["payment-history", payment?.id],
-    queryFn: () => getPaymentHistory(payment!.id),
-    enabled: !!payment,
-    refetchInterval: 5000,
+    queryKey: ["payment-history", payment.id],
+    queryFn: () => getPaymentHistory(payment.id),
     retry: false,
   });
   const provider = useQuery({
-    queryKey: ["provider-status", payment?.id],
-    queryFn: () => getProviderStatus(payment!.id),
-    enabled: !!payment && showProvider,
+    queryKey: ["provider-status", payment.id],
+    queryFn: () => getProviderStatus(payment.id),
+    enabled: showProvider,
     retry: false,
   });
-
-  if (!payment) {
-    return (
-      <aside className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-400">
-        Select a payment to see its full detail: lifecycle, fields, refund history, provider
-        status and webhook deliveries.
-      </aside>
-    );
-  }
 
   const outcomeLabel =
     payment.status === "SUCCEEDED" ? "Paid" : payment.status === "FAILED" ? "Declined" : null;
 
   return (
-    <aside className="space-y-4 rounded-lg border border-slate-200 bg-white p-5">
-      <div>
-        <div className="mb-1 flex items-center justify-between">
-          <h3 className="text-sm font-semibold">Payment</h3>
-          <button
-            onClick={() => copy(payment.id, "pid")}
-            title="Copy payment id"
-            className="font-mono text-xs text-slate-500 hover:text-slate-900"
-          >
-            {copiedKey === "pid" ? "copied ✓" : "copy id ⧉"}
-          </button>
+    <div className="grid gap-6 p-5 lg:grid-cols-3">
+      <div className="space-y-4">
+        <div>
+          <div className="mb-1 flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Payment</h3>
+            <button
+              onClick={() => copy(payment.id, "pid")}
+              title="Copy payment id"
+              className="font-mono text-xs text-slate-600 hover:text-slate-900"
+            >
+              {copiedKey === "pid" ? "copied ✓" : "copy id ⧉"}
+            </button>
+          </div>
+          <KeyValue data={payment as unknown as Record<string, unknown>} />
+          <div className="mt-3 flex gap-3 text-xs">
+            <button
+              onClick={() => setShowRefundForm(!showRefundForm)}
+              disabled={payment.status !== "SUCCEEDED"}
+              title={payment.status !== "SUCCEEDED" ? "only SUCCEEDED payments can be refunded" : undefined}
+              className="rounded-md border border-slate-400 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 shadow-sm hover:bg-slate-200 disabled:opacity-40"
+            >
+              {showRefundForm ? "hide refund form" : "request refund"}
+            </button>
+            <button onClick={() => setShowProvider(!showProvider)} className="rounded-md border border-slate-400 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 shadow-sm hover:bg-slate-200">
+              {showProvider ? "hide" : "check"} provider status
+            </button>
+          </div>
         </div>
-        <KeyValue data={payment as unknown as Record<string, unknown>} />
-        <div className="mt-3 flex gap-3 text-xs">
-          <button
-            onClick={() => setShowRefundForm((s) => !s)}
-            disabled={payment.status !== "SUCCEEDED"}
-            title={payment.status !== "SUCCEEDED" ? "only SUCCEEDED payments can be refunded" : undefined}
-            className="font-medium text-slate-700 underline-offset-2 hover:underline disabled:opacity-40"
-          >
-            {showRefundForm ? "hide refund form" : "request refund"}
-          </button>
-          <button onClick={() => setShowProvider((s) => !s)} className="text-slate-500 underline-offset-2 hover:underline">
-            {showProvider ? "hide" : "check"} provider status
-          </button>
-        </div>
+        {showRefundForm && <InlineRefundForm paymentId={payment.id} onDone={() => setShowRefundForm(false)} />}
       </div>
 
-      {showRefundForm && <InlineRefundForm paymentId={payment.id} onDone={() => setShowRefundForm(false)} />}
-
       <div>
-        <h4 className="mb-1 text-xs font-semibold text-slate-600">History</h4>
+        <h4 className="mb-1 text-xs font-semibold text-slate-700">History</h4>
         {(() => {
           type Entry = { at: string | null; label: string; tone?: string; sub?: string };
           const TONE: Record<string, string> = {
             SUCCEEDED: "text-emerald-700",
             FAILED: "text-rose-700",
             PENDING: "text-amber-700",
+            IPN_RECEIVED: "text-sky-700",
+            VERIFIED: "text-sky-700",
             CREATED: "text-slate-700",
           };
           const LABEL: Record<string, string> = {
             CREATED: "Created",
             PENDING: "Pending — sent to provider",
+            IPN_RECEIVED: "IPN received",
+            VERIFIED: "Status verified",
             SUCCEEDED: "Paid",
             FAILED: "Declined",
           };
@@ -344,7 +461,7 @@ function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
               at: h.occurredAt,
               label: LABEL[h.status] ?? h.status,
               tone: TONE[h.status],
-              sub: `${h.source}${h.eventId ? ` · ${h.eventId.slice(0, 8)}…` : ""}`,
+              sub: `${h.source}${h.providerReference ? ` · provider ref ${h.providerReference.slice(0, 8)}…` : ""}${h.eventId ? ` · ${h.eventId.slice(0, 8)}…` : ""}`,
             }));
           } else {
             entries = [{ at: payment.createdAt, label: "Created" }];
@@ -355,7 +472,7 @@ function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
                 tone: payment.status === "SUCCEEDED" ? "text-emerald-700" : "text-rose-700",
               });
             } else {
-              entries.push({ at: null, label: "Awaiting outcome…", tone: "text-slate-400" });
+              entries.push({ at: null, label: "Awaiting outcome…", tone: "text-slate-500" });
             }
           }
           for (const r of refunds.data ?? []) {
@@ -376,38 +493,38 @@ function PaymentDetail({ payment }: { payment: PaymentResponse | null }) {
           }
           entries.sort((a, b) => (a.at ?? "9999").localeCompare(b.at ?? "9999"));
           return entries.map((e, i) => (
-            <div key={i} className="border-l-2 border-slate-200 py-1 pl-3 text-xs">
+            <div key={i} className="border-l-2 border-slate-300 py-1 pl-3 text-xs">
               <div className="flex items-center justify-between">
                 <span className={e.tone ?? "text-slate-700"}>{e.label}</span>
-                <span className="font-mono text-slate-500">
+                <span className="font-mono text-slate-600">
                   {e.at ? new Date(e.at).toLocaleTimeString() : "—"}
                 </span>
               </div>
-              {e.sub && <div className="truncate text-[10px] text-slate-400">{e.sub}</div>}
+              {e.sub && <div className="truncate text-[11px] text-slate-500">{e.sub}</div>}
             </div>
           ));
         })()}
       </div>
 
-      {showProvider && (
-        <div className="rounded border border-slate-100 bg-slate-50 p-3">
-          <h4 className="mb-1 text-xs font-semibold text-slate-600">Provider status (request-reply over Kafka)</h4>
-          {provider.isPending && <p className="text-xs text-slate-400">asking psp-connector…</p>}
-          {provider.error && <p className="text-xs text-rose-600">{provider.error.message}</p>}
-          {provider.data && <KeyValue data={provider.data} />}
+      <div className="space-y-4">
+        {showProvider && (
+          <div className="rounded border border-slate-200 bg-white p-3">
+            <h4 className="mb-1 text-xs font-semibold text-slate-700">Provider status (request-reply over Kafka)</h4>
+            {provider.isPending && <p className="text-xs text-slate-500">asking psp-connector…</p>}
+            {provider.error && <p className="text-xs text-rose-600">{provider.error.message}</p>}
+            {provider.data && <KeyValue data={provider.data} />}
+          </div>
+        )}
+        <div>
+          <h4 className="mb-1 text-xs font-semibold text-slate-700">Refunds (click to expand)</h4>
+          {refunds.data?.length === 0 && <p className="text-xs text-slate-500">none</p>}
+          <ul className="space-y-1">
+            {(refunds.data ?? []).map((r) => (
+              <RefundRow key={r.id} refund={r} />
+            ))}
+          </ul>
         </div>
-      )}
-
-      <div>
-        <h4 className="mb-1 text-xs font-semibold text-slate-600">Refunds (click to expand)</h4>
-        {refunds.data?.length === 0 && <p className="text-xs text-slate-400">none</p>}
-        <ul className="space-y-1">
-          {(refunds.data ?? []).map((r) => (
-            <RefundRow key={r.id} refund={r} />
-          ))}
-        </ul>
       </div>
-
-    </aside>
+    </div>
   );
 }

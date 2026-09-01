@@ -2,6 +2,7 @@ package com.example.psp.webhooknotifier.adapters.in.kafka;
 
 import com.example.psp.common.events.avro.PaymentStatusChanged;
 import com.example.psp.webhooknotifier.application.PlanWebhookDeliveryUseCase;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -24,18 +25,21 @@ import org.springframework.stereotype.Component;
  * against loss (the source of truth, {@code payments.payment-status-changed.v1}, is retained for
  * 7 days and already has its own consumers/DLQs elsewhere in the system).
  *
- * <p><b>PENDING is filtered here, not planned.</b> {@code status = "PENDING"} is psp-connector's
- * non-terminal, pre-provider-call event - there is nothing to tell a merchant yet. Only a terminal
- * {@code SUCCEEDED}/{@code DECLINED} becomes a planned delivery; a PENDING record is acknowledged
- * and dropped before {@link PlanWebhookDeliveryUseCase} - which stays reused unchanged across all
- * three planner sources (see its own javadoc) - ever sees it.
+ * <p><b>Only a terminal status is planned.</b> M20 added {@code "PENDING"} (psp-connector's
+ * non-terminal, pre-provider-call event); M21 added {@code "IPN_RECEIVED"}/{@code "VERIFIED"}
+ * (stage 3/4 trail events, emitted before the terminal outcome). None of the three has anything to
+ * tell a merchant yet, so this filters by a terminal ALLOWLIST rather than growing an ever-longer
+ * skip-list of non-terminal statuses one at a time - only {@code SUCCEEDED}/{@code DECLINED}
+ * becomes a planned delivery; anything else is acknowledged and dropped before {@link
+ * PlanWebhookDeliveryUseCase} - which stays reused unchanged across all three planner sources (see
+ * its own javadoc) - ever sees it.
  */
 @Component
 public class PaymentStatusChangedListener {
 
     private static final Logger log = LoggerFactory.getLogger(PaymentStatusChangedListener.class);
 
-    private static final String PENDING_STATUS = "PENDING";
+    private static final Set<String> TERMINAL_STATUSES = Set.of("SUCCEEDED", "DECLINED");
 
     private final PlanWebhookDeliveryUseCase useCase;
     private final PaymentStatusChangedMapper mapper;
@@ -49,12 +53,13 @@ public class PaymentStatusChangedListener {
             topics = "${webhook-notifier.kafka.payment-status-changed-topic}",
             containerFactory = "plannerKafkaListenerContainerFactory")
     public void onMessage(PaymentStatusChanged event, Acknowledgment ack) {
-        if (PENDING_STATUS.equals(event.getStatus())) {
+        if (!TERMINAL_STATUSES.contains(event.getStatus())) {
             log.info(
-                    "Skipping non-terminal payment-status-changed paymentId={} merchantId={} status=PENDING - "
+                    "Skipping non-terminal payment-status-changed paymentId={} merchantId={} status={} - "
                             + "nothing to notify a merchant about yet",
                     event.getPaymentId(),
-                    event.getMerchantId());
+                    event.getMerchantId(),
+                    event.getStatus());
             ack.acknowledge();
             return;
         }

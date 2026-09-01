@@ -150,6 +150,21 @@ public class ProcessPaymentRequestUseCase {
         ProviderResult result =
                 paymentProvider.authorize(command.paymentId(), command.merchantId(), command.amount());
 
+        // Stage 3 of the panel's trail (IPN received) - the provider actually responded, so this
+        // mirrors that immediately, before the level-2 dedup check even runs. TIMEOUT means no
+        // callback ever arrived at all (ADR-0006 category A) - nothing new is emitted for it, same
+        // as the terminal publish below.
+        if (result.outcome() != ProviderOutcome.TIMEOUT) {
+            statusPublisher.publishIpnReceived(
+                    command.paymentId(),
+                    command.merchantId(),
+                    command.amount(),
+                    result.providerEventId(),
+                    inboundEventId,
+                    command.traceId(),
+                    command.correlationId());
+        }
+
         // LEVEL 2 (unchanged): a genuinely different failure - the provider redelivering the same
         // callback for an attempt we ourselves only made once. Level 1 above cannot see this: it
         // only knows about our own inbound message id, not what the provider chose to do with it.
@@ -194,6 +209,22 @@ public class ProcessPaymentRequestUseCase {
         }
 
         processedCounter.increment();
+
+        // Stage 4 (verified) - both M5 dedup levels are now cleared and the attempt is durably
+        // recorded as genuinely new work. Never reached by any republish() path above (level 1's
+        // replayed branch returns before authorize() is even called, and the level-2/race branches
+        // both return before tryRecord ever succeeds) - so a redelivery can never re-emit this.
+        // Same TIMEOUT guard as stage 3 above: nothing new for a TIMEOUT attempt either.
+        if (attempt.getOutcome() != ProviderOutcome.TIMEOUT) {
+            statusPublisher.publishVerified(
+                    command.paymentId(),
+                    command.merchantId(),
+                    command.amount(),
+                    result.providerEventId(),
+                    inboundEventId,
+                    command.traceId(),
+                    command.correlationId());
+        }
 
         if (attempt.getOutcome() == ProviderOutcome.TIMEOUT) {
             // ADR-0006 category A (retryable). Deliberately NOT published, and this throw

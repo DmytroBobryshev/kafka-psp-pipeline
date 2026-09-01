@@ -28,7 +28,7 @@ const SAGA_STEPS = [
 ] as const;
 
 const KIND_STYLES: Record<string, string> = {
-  step: "border-slate-300 bg-white",
+  step: "border-slate-400 bg-white",
   success: "border-emerald-300 bg-emerald-50",
   failure: "border-rose-300 bg-rose-50",
   compensation: "border-amber-300 bg-amber-50",
@@ -61,7 +61,6 @@ export function RefundTrackerPage() {
     queryKey: ["refund-state", refundId],
     queryFn: () => getRefundState(refundId!),
     enabled: !!refundId,
-    refetchInterval: 3000,
     retry: false,
   });
 
@@ -77,9 +76,9 @@ export function RefundTrackerPage() {
 
   return (
     <main className="mx-auto grid max-w-[1500px] gap-8 px-6 py-8 lg:grid-cols-[360px_1fr]">
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
+      <section className="rounded-lg border border-slate-300 bg-white p-6">
         <h2 className="mb-4 text-base font-semibold">Request a refund</h2>
-        <p className="mb-4 text-xs text-slate-500">
+        <p className="mb-4 text-xs text-slate-600">
           Needs an APPROVED payment. Pick one below, use "refund →" on the Timeline page, or
           paste an id.
         </p>
@@ -89,7 +88,7 @@ export function RefundTrackerPage() {
             <select
               value={history.some((h) => h.id === paymentId) ? paymentId : ""}
               onChange={(e) => e.target.value && setPaymentId(e.target.value)}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-xs"
+              className="w-full rounded-md border border-slate-400 px-3 py-2 font-mono text-xs"
             >
               <option value="">— pick a recent payment —</option>
               {history.map((h) => (
@@ -106,7 +105,7 @@ export function RefundTrackerPage() {
             value={paymentId}
             onChange={(e) => setPaymentId(e.target.value)}
             placeholder="uuid of an approved payment"
-            className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-xs"
+            className="w-full rounded-md border border-slate-400 px-3 py-2 font-mono text-xs"
           />
         </label>
         <div className="mb-3 grid grid-cols-2 gap-3">
@@ -115,7 +114,7 @@ export function RefundTrackerPage() {
             <input
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
             />
           </label>
           <label className="block">
@@ -123,7 +122,7 @@ export function RefundTrackerPage() {
             <select
               value={currency}
               onChange={(e) => setCurrency(e.target.value)}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
             >
               <option>EUR</option>
               <option>USD</option>
@@ -136,7 +135,7 @@ export function RefundTrackerPage() {
           <input
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
           />
         </label>
         <button
@@ -150,7 +149,7 @@ export function RefundTrackerPage() {
           <p className="mt-3 text-sm text-rose-600">{refund.error.message}</p>
         )}
         {refund.data && (
-          <p className="mt-3 text-xs text-slate-500">
+          <p className="mt-3 text-xs text-slate-600">
             refundId <span className="font-mono">{refund.data.id}</span> accepted - the saga now
             runs on its own; steps appear on the right as their events hit the topics.
           </p>
@@ -171,7 +170,7 @@ export function RefundTrackerPage() {
               <li
                 key={step.type}
                 className={`rounded-lg border ${
-                  evt ? KIND_STYLES[step.kind] : "border-dashed border-slate-200 bg-slate-50 opacity-60"
+                  evt ? KIND_STYLES[step.kind] : "border-dashed border-slate-300 bg-slate-100 opacity-60"
                 }`}
               >
                 <button
@@ -182,28 +181,28 @@ export function RefundTrackerPage() {
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium">{step.label}</span>
                     {evt ? (
-                      <span className="font-mono text-xs text-slate-500">
+                      <span className="font-mono text-xs text-slate-600">
                         {new Date(evt.occurredAt).toLocaleTimeString()}
-                        <span className="ml-2 text-slate-400">{open ? "▲" : "▼"}</span>
+                        <span className="ml-2 text-slate-500">{open ? "▲" : "▼"}</span>
                       </span>
                     ) : (
-                      <span className="text-xs text-slate-400">not seen</span>
+                      <span className="text-xs text-slate-500">not seen</span>
                     )}
                   </div>
                   {evt && !open && (
-                    <div className="mt-1 font-mono text-xs text-slate-500">
+                    <div className="mt-1 font-mono text-xs text-slate-600">
                       {evt.eventType} · click for full event
                       {evt.reason && <span className="ml-2 text-amber-700">reason: {evt.reason}</span>}
                     </div>
                   )}
                 </button>
                 {evt && open && (
-                  <dl className="grid grid-cols-[130px_1fr] gap-y-1 border-t border-slate-200/60 px-4 py-3 text-xs">
+                  <dl className="grid grid-cols-[130px_1fr] gap-y-1 border-t border-slate-300/60 px-4 py-3 text-xs">
                     {Object.entries(evt)
                       .filter(([, v]) => v != null && v !== "")
                       .map(([k, v]) => (
                         <div key={k} className="contents">
-                          <dt className="text-slate-500">{k}</dt>
+                          <dt className="text-slate-600">{k}</dt>
                           <dd className="break-all font-mono">{String(v)}</dd>
                         </div>
                       ))}
@@ -214,11 +213,11 @@ export function RefundTrackerPage() {
           })}
         </ol>
 
-        <div className="mt-6 rounded-lg border border-slate-200 bg-white p-4">
+        <div className="mt-6 rounded-lg border border-slate-300 bg-white p-4">
           <h3 className="mb-2 text-sm font-semibold">Ledger's view (GET /api/refunds/{"{id}"})</h3>
-          {!refundId && <p className="text-xs text-slate-400">No refund yet.</p>}
+          {!refundId && <p className="text-xs text-slate-500">No refund yet.</p>}
           {ledgerState.error instanceof ApiError && ledgerState.error.status === 404 && (
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-slate-600">
               404 - ledger hasn't consumed refund-requested yet (its local saga row doesn't exist
               until step 1 lands).
             </p>
@@ -226,7 +225,7 @@ export function RefundTrackerPage() {
           {ledgerState.data && (
             <p className="text-sm">
               status <span className="font-mono font-medium">{ledgerState.data.status}</span>
-              <span className="ml-3 text-xs text-slate-500">
+              <span className="ml-3 text-xs text-slate-600">
                 updated {new Date(ledgerState.data.updatedAt).toLocaleTimeString()}
               </span>
             </p>

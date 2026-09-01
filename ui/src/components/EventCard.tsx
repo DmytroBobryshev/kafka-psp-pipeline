@@ -9,20 +9,20 @@ interface Props {
 }
 
 const STATUS_COLOR: Record<string, string> = {
-  CREATED: "bg-slate-100 text-slate-700 ring-slate-200",
-  REQUESTED: "bg-indigo-100 text-indigo-700 ring-indigo-200",
-  RESERVED: "bg-indigo-100 text-indigo-700 ring-indigo-200",
-  SUCCEEDED: "bg-emerald-100 text-emerald-700 ring-emerald-200",
-  COMPLETED: "bg-emerald-100 text-emerald-700 ring-emerald-200",
-  DECLINED: "bg-red-100 text-red-700 ring-red-200",
-  FAILED: "bg-red-100 text-red-700 ring-red-200",
-  TIMEOUT: "bg-amber-100 text-amber-700 ring-amber-200",
-  RELEASED: "bg-slate-100 text-slate-700 ring-slate-200",
+  CREATED: "bg-slate-200 text-slate-700 ring-slate-400",
+  REQUESTED: "bg-indigo-100 text-indigo-700 ring-indigo-400",
+  RESERVED: "bg-indigo-100 text-indigo-700 ring-indigo-400",
+  SUCCEEDED: "bg-emerald-100 text-emerald-800 ring-emerald-400",
+  COMPLETED: "bg-emerald-100 text-emerald-800 ring-emerald-400",
+  DECLINED: "bg-red-100 text-red-700 ring-red-400",
+  FAILED: "bg-red-100 text-red-700 ring-red-400",
+  TIMEOUT: "bg-amber-100 text-amber-800 ring-amber-400",
+  RELEASED: "bg-slate-200 text-slate-700 ring-slate-400",
 };
 
 function statusClass(status?: string | null): string {
-  if (!status) return "bg-slate-100 text-slate-600 ring-slate-200";
-  return STATUS_COLOR[status] ?? "bg-slate-100 text-slate-600 ring-slate-200";
+  if (!status) return "bg-slate-200 text-slate-700 ring-slate-400";
+  return STATUS_COLOR[status] ?? "bg-slate-200 text-slate-700 ring-slate-400";
 }
 
 function formatClock(iso: string): string {
@@ -68,16 +68,16 @@ export function EventCard({ event, payment, priorEvents, index }: Props) {
       <span className="absolute left-[13px] top-3 -bottom-2 w-px bg-slate-200 last:hidden" aria-hidden />
       {/* node */}
       <span
-        className="absolute left-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full border-2 border-white bg-indigo-500 text-[10px] font-bold text-white shadow"
+        className="absolute left-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full border-2 border-white bg-indigo-500 text-[11px] font-bold text-white shadow"
         aria-hidden
       >
         {index + 1}
       </span>
 
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="rounded-xl border border-slate-300 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <span className="font-mono text-sm font-semibold text-slate-900">{event.eventType}</span>
-          <span className="font-mono text-xs text-slate-400">
+          <span className="font-mono text-xs text-slate-500">
             {formatClock(event.occurredAt)}{" "}
             <span className="text-slate-300">({formatElapsed(event.occurredAt, payment.createdAt)})</span>
           </span>
@@ -92,7 +92,7 @@ export function EventCard({ event, payment, priorEvents, index }: Props) {
             </span>
           )}
           {event.source && (
-            <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-200">
+            <span className="inline-flex items-center rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-400">
               source: {event.source}
             </span>
           )}
@@ -105,18 +105,18 @@ export function EventCard({ event, payment, priorEvents, index }: Props) {
         </div>
 
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-          <dt className="font-medium text-slate-400">eventId</dt>
-          <dd className="font-mono text-slate-600" title={event.eventId}>
+          <dt className="font-medium text-slate-500">eventId</dt>
+          <dd className="font-mono text-slate-700" title={event.eventId}>
             {shortId(event.eventId)}
           </dd>
 
-          <dt className="font-medium text-slate-400">causationId</dt>
-          <dd className="font-mono text-slate-600">
+          <dt className="font-medium text-slate-500">causationId</dt>
+          <dd className="font-mono text-slate-700">
             {event.causationId ? (
               <span title={event.causationId}>
                 {shortId(event.causationId)}
                 {causedBy && (
-                  <span className="ml-1 text-slate-400">
+                  <span className="ml-1 text-slate-500">
                     (caused by #{priorEvents.indexOf(causedBy) + 1} {causedBy.eventType})
                   </span>
                 )}
@@ -124,16 +124,16 @@ export function EventCard({ event, payment, priorEvents, index }: Props) {
             ) : (
               // The gateway forwards causationId, so an absent one means this event genuinely
               // had no cause - it is the root of the chain, not missing data.
-              <span className="italic text-slate-400">none — root event</span>
+              <span className="italic text-slate-500">none — root event</span>
             )}
           </dd>
 
           {domainFields(event).map(([key, value]) => (
             <>
-              <dt key={`${key}-label`} className="font-medium text-slate-400">
+              <dt key={`${key}-label`} className="font-medium text-slate-500">
                 {key}
               </dt>
-              <dd key={`${key}-value`} className="text-slate-600">
+              <dd key={`${key}-value`} className="text-slate-700">
                 {value}
               </dd>
             </>

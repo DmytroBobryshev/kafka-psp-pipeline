@@ -25,7 +25,6 @@ export function DashboardPage() {
   const streamsState = useQuery({
     queryKey: ["streams-state"],
     queryFn: getStreamsState,
-    refetchInterval: 5000,
   });
 
   const windows = useQuery<WindowMetricsResponse[], Error>({
@@ -36,7 +35,6 @@ export function DashboardPage() {
           ? getProjectedWindows(trimmed, lookback)
           : getMerchantWindows(trimmed, lookback)
         : getAllWindows(lookback),
-    refetchInterval: 5000,
     enabled: !projected || trimmed.length > 0,
   });
 
@@ -52,12 +50,10 @@ export function DashboardPage() {
       ]);
       return { all: all.total, ok: ok.total, failed: failed.total, created: created.total };
     },
-    refetchInterval: 10000,
   });
   const latest = useQuery({
     queryKey: ["op-latest", trimmed],
     queryFn: () => listPayments({ merchantId: trimmed || undefined, page: 0, size: 5 }),
-    refetchInterval: 10000,
   });
 
   const restoring =
@@ -67,7 +63,7 @@ export function DashboardPage() {
   return (
     <main className="mx-auto max-w-[1500px] px-6 py-8">
       <h2 className="mb-1 text-base font-semibold text-slate-900">Operations overview</h2>
-      <p className="mb-4 text-xs text-slate-500">
+      <p className="mb-4 text-xs text-slate-600">
         Totals and latest transactions from payment-api; windowed metrics below come live from the
         Kafka Streams store.
       </p>
@@ -78,7 +74,7 @@ export function DashboardPage() {
             value={merchantId}
             onChange={(e) => setMerchantId(e.target.value)}
             placeholder="merchant-1"
-            className="w-64 rounded-md border border-slate-300 px-3 py-2 font-mono text-sm"
+            className="w-64 rounded-md border border-slate-400 px-3 py-2 font-mono text-sm"
           />
         </label>
         <label className="block">
@@ -86,7 +82,7 @@ export function DashboardPage() {
           <select
             value={lookback}
             onChange={(e) => setLookback(Number(e.target.value))}
-            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="rounded-md border border-slate-400 px-3 py-2 text-sm"
           >
             {LOOKBACKS.map((m) => (
               <option key={m} value={m}>
@@ -104,7 +100,7 @@ export function DashboardPage() {
           />
           projected (Mongo, survives restarts; per-merchant only)
         </label>
-        <span className="pb-2 text-xs text-slate-400">
+        <span className="pb-2 text-xs text-slate-500">
           {streamsState.data
             ? `streams: ${streamsState.data.clientState}`
             : "streams state unknown"}
@@ -118,21 +114,21 @@ export function DashboardPage() {
           { label: "Failed", value: totals.data?.failed, tone: "text-rose-700" },
           { label: "In flight (CREATED)", value: totals.data?.created, tone: "text-amber-700" },
         ].map((c) => (
-          <div key={c.label} className="rounded-lg border border-slate-200 bg-white px-4 py-3">
-            <div className="text-xs text-slate-500">{c.label}</div>
+          <div key={c.label} className="rounded-lg border border-slate-300 bg-white px-4 py-3">
+            <div className="text-xs text-slate-600">{c.label}</div>
             <div className={`text-2xl font-semibold ${c.tone}`}>{c.value ?? "–"}</div>
           </div>
         ))}
       </div>
 
-      <div className="mb-6 rounded-lg border border-slate-200 bg-white p-4">
+      <div className="mb-6 rounded-lg border border-slate-300 bg-white p-4">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-slate-700">Latest operations</h3>
-          <Link to="/payments" search={{ merchantId: undefined, paymentId: undefined }} className="text-xs text-slate-500 underline-offset-2 hover:underline">
+          <Link to="/payments" search={{ merchantId: undefined, paymentId: undefined }} className="rounded-md border border-slate-400 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 shadow-sm hover:bg-slate-200">
             open transactions panel →
           </Link>
         </div>
-        <div className="grid grid-cols-[110px_1fr_110px_110px_80px] gap-3 border-b border-slate-200 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+        <div className="grid grid-cols-[110px_1fr_110px_110px_80px] gap-3 border-b border-slate-300 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
           <span>Payment</span>
           <span>Merchant</span>
           <span className="text-right">Amount</span>
@@ -142,13 +138,15 @@ export function DashboardPage() {
         <ul className="divide-y divide-slate-100 text-xs">
           {(latest.data?.items ?? []).map((p) => (
             <li key={p.id} className="grid grid-cols-[110px_1fr_110px_110px_80px] items-center gap-3 py-1.5">
-              <span className="truncate font-mono text-slate-500">{p.id.slice(0, 8)}…</span>
+              <span className="truncate font-mono text-slate-600">{p.id.slice(0, 8)}…</span>
               <span className="truncate">{p.merchantId}</span>
               <span className="text-right tabular-nums">{p.amount} {p.currency}</span>
-              <span className={`text-right font-medium ${p.status === "SUCCEEDED" ? "text-emerald-700" : p.status === "FAILED" ? "text-rose-700" : "text-slate-500"}`}>
-                {p.status}
+              <span className="text-right">
+                <span className={`rounded px-2 py-0.5 font-semibold ${p.status === "SUCCEEDED" ? "bg-emerald-100 text-emerald-800 ring-1 ring-inset ring-emerald-600/40" : p.status === "FAILED" ? "bg-rose-100 text-rose-800 ring-1 ring-inset ring-rose-600/40" : "bg-slate-200 text-slate-800 ring-1 ring-inset ring-slate-500/40"}`}>
+                  {p.status}
+                </span>
               </span>
-              <span className="text-right text-slate-400">{new Date(p.createdAt).toLocaleTimeString()}</span>
+              <span className="text-right text-slate-500">{new Date(p.createdAt).toLocaleTimeString()}</span>
             </li>
           ))}
         </ul>
@@ -166,9 +164,9 @@ export function DashboardPage() {
       )}
 
       <h3 className="mb-2 text-sm font-semibold text-slate-700">Windowed metrics (1-minute tumbling, Kafka Streams)</h3>
-      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+      <div className="overflow-x-auto rounded-lg border border-slate-300 bg-white">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+          <thead className="bg-slate-100 text-left text-xs uppercase tracking-wide text-slate-600">
             <tr>
               <th className="px-4 py-3">Window</th>
               <th className="px-4 py-3">Merchant</th>
@@ -183,7 +181,7 @@ export function DashboardPage() {
             {(windows.data ?? []).map((w) => (
               <tr
                 key={`${w.merchantId}-${w.windowStart}`}
-                className="border-t border-slate-100 hover:bg-slate-50"
+                className="border-t border-slate-200 hover:bg-slate-100"
               >
                 <td className="px-4 py-2 font-mono text-xs">
                   {new Date(w.windowStart).toLocaleTimeString()}–
@@ -199,18 +197,18 @@ export function DashboardPage() {
                 </td>
                 <td className="px-4 py-2">
                   {w.declineRateAlert ? (
-                    <span className="rounded bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700">
+                    <span className="rounded bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800 ring-1 ring-inset ring-rose-600/40">
                       over threshold
                     </span>
                   ) : (
-                    <span className="text-xs text-slate-400">ok</span>
+                    <span className="text-xs text-slate-500">ok</span>
                   )}
                 </td>
               </tr>
             ))}
             {windows.data?.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
                   No windows in the lookback - create payments on the Timeline page to feed the
                   1-minute tumbling windows.
                 </td>

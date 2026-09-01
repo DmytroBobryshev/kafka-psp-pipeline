@@ -309,6 +309,14 @@ public class AnalyticsTopology {
                                 .withTimestampExtractor(new EnvelopeEventTimeExtractor())
                                 .withName("payment-status-changed-source"));
 
+        // The topic now carries the full lifecycle trail (PENDING, IPN_RECEIVED, VERIFIED) next
+        // to the terminal statuses; only terminal events are outcomes, everything else would
+        // count the same payment several times per window.
+        KStream<String, PaymentStatusChanged> terminalPayments =
+                payments.filter(
+                        (merchantId, status) -> isTerminalStatus(status.getStatus()),
+                        Named.as("terminal-status-only"));
+
         // ---- the join: stream x global table, keyed by merchantId ------------------------------
         // The KeyValueMapper below is what a GlobalKTable join has and a KTable join does not: an
         // explicit "given this stream record, which table key do I want?". Here it is the identity
@@ -316,7 +324,7 @@ public class AnalyticsTopology {
         // merchant - without any repartitioning, which is the other reason GlobalKTable joins are
         // reached for.
         KStream<String, PaymentOutcome> outcomes =
-                payments.leftJoin(
+                terminalPayments.leftJoin(
                         merchantConfig,
                         (merchantId, payment) -> merchantId,
                         (payment, config) -> toOutcome(payment, config, clock),
@@ -388,7 +396,7 @@ public class AnalyticsTopology {
         // Kafka Streams' "repartition required" flag on this branch only - M10's groupByKey()
         // above is unaffected, because Kafka Streams tracks that flag per-KStream, not per-topic.
         KStream<String, PaymentStatusChanged> statusByPaymentId =
-                payments.selectKey(
+                terminalPayments.selectKey(
                         (merchantId, status) -> status.getPaymentId(),
                         Named.as("rekey-status-changed-by-payment-id"));
 
@@ -445,6 +453,12 @@ public class AnalyticsTopology {
      * reads a clock, it is also the one part of the aggregate that does not reproduce identically
      * on a replay from offset 0 (the counters do).
      */
+    private static boolean isTerminalStatus(String status) {
+        return "SUCCEEDED".equalsIgnoreCase(status)
+                || "DECLINED".equalsIgnoreCase(status)
+                || "FAILED".equalsIgnoreCase(status);
+    }
+
     private static PaymentOutcome toOutcome(
             PaymentStatusChanged payment, MerchantConfigChanged config, Clock clock) {
 

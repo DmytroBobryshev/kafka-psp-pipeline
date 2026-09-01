@@ -20,7 +20,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
- * M19 (extended M20). Plain JUnit against {@code application/} + {@code domain/} - no Spring, no
+ * M19 (extended M20, M21). Plain JUnit against {@code application/} + {@code domain/} - no Spring, no
  * Kafka, no database, same "fakes, not a live broker/container" style as every other use-case test
  * in this module ({@code CreatePaymentUseCaseTest}, {@code MerchantConfigUseCaseTest}). Exercises
  * the properties {@code adapters.in.kafka.PaymentStatusChangedMapper} and
@@ -38,7 +38,10 @@ import org.junit.jupiter.api.Test;
  *       late-replayed {@code PENDING} arriving after the payment has already resolved is a no-op;
  *   <li>M20: a redelivered event (same {@code eventId}) records at most one
  *       {@code payment_status_history} row - {@link RecordingHistoryRepository} models the table's
- *       UNIQUE({@code event_id}) constraint the real adapter's {@code tryRecord} relies on.
+ *       UNIQUE({@code event_id}) constraint the real adapter's {@code tryRecord} relies on;
+ *   <li>M21: IPN_RECEIVED/VERIFIED are history-only - a {@code null} {@code domainStatus} means
+ *       {@code payments.status} is never touched, while the raw wire status string and
+ *       providerReference still land in {@code payment_status_history}.
  * </ul>
  */
 class ApplyPaymentOutcomeUseCaseTest {
@@ -154,8 +157,9 @@ class ApplyPaymentOutcomeUseCaseTest {
         useCase.execute(command(paymentId, PaymentStatus.SUCCEEDED));
 
         assertThat(history.recorded).hasSize(2);
+        // M21: the history row's status is now the raw wire string, not the PaymentStatus enum.
         assertThat(history.recorded.stream().map(PaymentStatusHistoryEntry::getStatus))
-                .containsExactly(PaymentStatus.PENDING, PaymentStatus.SUCCEEDED);
+                .containsExactly("PENDING", "SUCCEEDED");
     }
 
     @Test
@@ -170,8 +174,12 @@ class ApplyPaymentOutcomeUseCaseTest {
         UUID eventId = UUID.randomUUID();
         Instant occurredAt = Instant.now();
 
-        useCase.execute(new ApplyPaymentOutcomeCommand(paymentId, PaymentStatus.SUCCEEDED, eventId, occurredAt));
-        useCase.execute(new ApplyPaymentOutcomeCommand(paymentId, PaymentStatus.SUCCEEDED, eventId, occurredAt));
+        useCase.execute(
+                new ApplyPaymentOutcomeCommand(
+                        paymentId, PaymentStatus.SUCCEEDED, "SUCCEEDED", null, eventId, occurredAt));
+        useCase.execute(
+                new ApplyPaymentOutcomeCommand(
+                        paymentId, PaymentStatus.SUCCEEDED, "SUCCEEDED", null, eventId, occurredAt));
 
         assertThat(history.recorded).hasSize(1);
         // The status UPDATE side still runs (and is itself idempotent) on both deliveries - only
@@ -180,8 +188,74 @@ class ApplyPaymentOutcomeUseCaseTest {
         assertThat(repository.appliedStatuses).hasSize(2);
     }
 
+    @Test
+    void ipnReceivedIsHistoryOnlyAndNeverTouchesPaymentsStatus() {
+        // M21 stage 3: history-only - domainStatus is null (see
+        // adapters.in.kafka.PaymentStatusChangedMapper's javadoc for why), so payments.status must
+        // stay completely untouched, while the raw status string and providerReference still land
+        // in payment_status_history.
+        RecordingRepository repository = new RecordingRepository();
+        RecordingHistoryRepository history = new RecordingHistoryRepository();
+        ApplyPaymentOutcomeUseCase useCase = new ApplyPaymentOutcomeUseCase(repository, history);
+        UUID paymentId = UUID.randomUUID();
+        String providerReference = UUID.randomUUID().toString();
+
+        useCase.execute(historyOnlyCommand(paymentId, "IPN_RECEIVED", providerReference));
+
+        assertThat(repository.appliedStatuses).isEmpty();
+        assertThat(repository.currentStatus(paymentId)).isNull();
+        assertThat(history.recorded).hasSize(1);
+        assertThat(history.recorded.get(0).getStatus()).isEqualTo("IPN_RECEIVED");
+        assertThat(history.recorded.get(0).getProviderReference()).isEqualTo(providerReference);
+    }
+
+    @Test
+    void verifiedIsHistoryOnlyAndNeverTouchesPaymentsStatus() {
+        // M21 stage 4 - same contract as IPN_RECEIVED above.
+        RecordingRepository repository = new RecordingRepository();
+        RecordingHistoryRepository history = new RecordingHistoryRepository();
+        ApplyPaymentOutcomeUseCase useCase = new ApplyPaymentOutcomeUseCase(repository, history);
+        UUID paymentId = UUID.randomUUID();
+        String providerReference = UUID.randomUUID().toString();
+
+        useCase.execute(historyOnlyCommand(paymentId, "VERIFIED", providerReference));
+
+        assertThat(repository.appliedStatuses).isEmpty();
+        assertThat(repository.currentStatus(paymentId)).isNull();
+        assertThat(history.recorded).hasSize(1);
+        assertThat(history.recorded.get(0).getStatus()).isEqualTo("VERIFIED");
+        assertThat(history.recorded.get(0).getProviderReference()).isEqualTo(providerReference);
+    }
+
+    @Test
+    void historyOnlyEventsFollowedByTheTerminalOutcomeStillRecordAllThreeRowsAndOneStatusApply() {
+        // The realistic sequence: IPN_RECEIVED and VERIFIED (history-only) precede the terminal
+        // SUCCEEDED - three history rows total, but exactly one payments.status write.
+        RecordingRepository repository = new RecordingRepository();
+        RecordingHistoryRepository history = new RecordingHistoryRepository();
+        ApplyPaymentOutcomeUseCase useCase = new ApplyPaymentOutcomeUseCase(repository, history);
+        UUID paymentId = UUID.randomUUID();
+        String providerReference = UUID.randomUUID().toString();
+
+        useCase.execute(historyOnlyCommand(paymentId, "IPN_RECEIVED", providerReference));
+        useCase.execute(historyOnlyCommand(paymentId, "VERIFIED", providerReference));
+        useCase.execute(command(paymentId, PaymentStatus.SUCCEEDED));
+
+        assertThat(repository.appliedStatuses).containsExactly(PaymentStatus.SUCCEEDED);
+        assertThat(repository.currentStatus(paymentId)).isEqualTo(PaymentStatus.SUCCEEDED);
+        assertThat(history.recorded).hasSize(3);
+    }
+
     private static ApplyPaymentOutcomeCommand command(UUID paymentId, PaymentStatus status) {
-        return new ApplyPaymentOutcomeCommand(paymentId, status, UUID.randomUUID(), Instant.now());
+        return new ApplyPaymentOutcomeCommand(
+                paymentId, status, status.name(), null, UUID.randomUUID(), Instant.now());
+    }
+
+    /** {@code domainStatus == null} - IPN_RECEIVED/VERIFIED's history-only shape (M21). */
+    private static ApplyPaymentOutcomeCommand historyOnlyCommand(
+            UUID paymentId, String rawStatus, String providerReference) {
+        return new ApplyPaymentOutcomeCommand(
+                paymentId, null, rawStatus, providerReference, UUID.randomUUID(), Instant.now());
     }
 
     /** Fake port: models both writes with the same semantics as the real Postgres adapter. */

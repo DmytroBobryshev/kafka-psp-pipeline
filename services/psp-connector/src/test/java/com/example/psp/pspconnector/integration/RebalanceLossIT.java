@@ -147,17 +147,23 @@ class RebalanceLossIT extends PspConnectorIntegrationSupport {
             bounce(listener, 1);
             bounce(listener, 2);
 
+            // M21: PENDING/IPN_RECEIVED/VERIFIED now precede every payment's terminal event on this
+            // same topic, so both the drain predicate and the "no payment lost" check below must
+            // count the TERMINAL event specifically - counting any record's paymentId would let the
+            // drain stop (and this assertion pass) the moment every payment's PENDING has arrived,
+            // long before most of them have actually reached SUCCEEDED.
             List<ConsumerRecord<String, PaymentStatusChanged>> afterRebalances =
                     drainUntil(
                             verifier,
                             STATUS_TOPIC,
                             Duration.ofSeconds(90),
-                            records -> distinctPaymentIds(records).size() >= PAYMENT_COUNT);
+                            records -> distinctPaymentIds(terminalOnly(records)).size() >= PAYMENT_COUNT);
 
-            assertThat(distinctPaymentIds(afterRebalances))
+            assertThat(distinctPaymentIds(terminalOnly(afterRebalances)))
                     .as(
-                            "no payment may be lost across two rebalances - %d/%d status events arrived",
-                            distinctPaymentIds(afterRebalances).size(), PAYMENT_COUNT)
+                            "no payment may be lost across two rebalances - %d/%d terminal status events "
+                                    + "arrived",
+                            distinctPaymentIds(terminalOnly(afterRebalances)).size(), PAYMENT_COUNT)
                     .containsExactlyInAnyOrderElementsOf(
                             paymentIdByEventId.values().stream().map(UUID::toString).toList());
 
@@ -180,28 +186,36 @@ class RebalanceLossIT extends PspConnectorIntegrationSupport {
                             verifier,
                             STATUS_TOPIC,
                             Duration.ofSeconds(60),
-                            records -> records.size() >= REPLAYED_COUNT);
+                            records -> terminalOnly(records).size() >= REPLAYED_COUNT);
             List<ConsumerRecord<String, PaymentStatusChanged>> all =
                     Stream.concat(afterRebalances.stream(), replayEvents.stream()).toList();
+            // The republish() path (level 1) sits before authorize() is ever called again, so a
+            // replay re-emits ONLY the terminal event - never PENDING/IPN_RECEIVED/VERIFIED (see
+            // ProcessPaymentRequestUseCase). The "no double-count" accounting below is therefore
+            // about the terminal event specifically; filter once and reuse everywhere.
+            List<ConsumerRecord<String, PaymentStatusChanged>> terminalEvents = terminalOnly(all);
 
             log.info(
-                    "RebalanceLossIT saw {} status events for {} payments ({} duplicate deliveries)",
+                    "RebalanceLossIT saw {} total status events ({} terminal) for {} payments "
+                            + "({} duplicate terminal deliveries)",
                     all.size(),
-                    distinctPaymentIds(all).size(),
-                    all.size() - distinctPaymentIds(all).size());
+                    terminalEvents.size(),
+                    distinctPaymentIds(terminalEvents).size(),
+                    terminalEvents.size() - distinctPaymentIds(terminalEvents).size());
 
             Map<String, List<ConsumerRecord<String, PaymentStatusChanged>>> byPaymentId =
-                    all.stream().collect(Collectors.groupingBy(record -> record.value().getPaymentId()));
+                    terminalEvents.stream()
+                            .collect(Collectors.groupingBy(record -> record.value().getPaymentId()));
 
             assertThat(byPaymentId.keySet())
                     .as("still no payment lost after the deliberate replay")
                     .hasSize(PAYMENT_COUNT);
 
-            assertThat(all.size() - byPaymentId.size())
+            assertThat(terminalEvents.size() - byPaymentId.size())
                     .as(
-                            "the %d verbatim replays must each have produced a REPUBLISHED status event "
-                                    + "(M19 drill 9) - if this is 0 the republish path never ran and the "
-                                    + "identity assertion below would be vacuous",
+                            "the %d verbatim replays must each have produced a REPUBLISHED terminal status "
+                                    + "event (M19 drill 9) - if this is 0 the republish path never ran and "
+                                    + "the identity assertion below would be vacuous",
                             REPLAYED_COUNT)
                     .isGreaterThanOrEqualTo(REPLAYED_COUNT);
 
@@ -213,16 +227,16 @@ class RebalanceLossIT extends PspConnectorIntegrationSupport {
                                         .collect(Collectors.toSet());
                         assertThat(envelopeEventIds)
                                 .as(
-                                        "paymentId=%s produced %d status events; duplicates are allowed ONLY "
-                                                + "under one envelope eventId (the attempt row's stored "
-                                                + "statusEventId), otherwise downstream dedup cannot see them "
-                                                + "as the same event",
+                                        "paymentId=%s produced %d terminal status events; duplicates are "
+                                                + "allowed ONLY under one envelope eventId (the attempt row's "
+                                                + "stored statusEventId), otherwise downstream dedup cannot see "
+                                                + "them as the same event",
                                         paymentId, records.size())
                                 .hasSize(1);
                     });
 
-            assertThat(all)
-                    .as("forced-outcome=APPROVED must map to SUCCEEDED on every status event")
+            assertThat(terminalEvents)
+                    .as("forced-outcome=APPROVED must map to SUCCEEDED on every terminal status event")
                     .allMatch(record -> "SUCCEEDED".equals(record.value().getStatus()));
         }
 

@@ -7,6 +7,7 @@ import {
   createRouter,
   redirect,
 } from "@tanstack/react-router";
+import { useIsFetching, useQueryClient } from "@tanstack/react-query";
 import { TimelinePage } from "./pages/TimelinePage";
 import { PaymentsPage } from "./pages/PaymentsPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -46,21 +47,35 @@ const NAV_GROUPS = [
   },
 ] as const;
 
+function RefreshButton() {
+  // No background polling anywhere - data refreshes on navigation, on mutations, and here.
+  const queryClient = useQueryClient();
+  const fetching = useIsFetching();
+  return (
+    <button
+      onClick={() => queryClient.invalidateQueries()}
+      className="rounded-md border border-slate-400 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-200"
+    >
+      {fetching ? "Refreshing…" : "↻ Refresh"}
+    </button>
+  );
+}
+
 function Shell() {
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="border-b border-slate-200 bg-white">
+    <div className="min-h-screen bg-slate-100 text-slate-900">
+      <header className="border-b border-slate-300 bg-white">
         <div className="mx-auto flex max-w-[1500px] flex-wrap items-center justify-between gap-3 px-6 py-4">
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Kafka PSP Pipeline</h1>
-            <p className="mt-0.5 text-sm text-slate-500">
+            <p className="mt-0.5 text-sm text-slate-600">
               Six windows into one event pipeline - every page is a Kafka concept, live.
             </p>
           </div>
           <nav className="flex flex-wrap items-center gap-3">
             {NAV_GROUPS.map((group) => (
-              <div key={group.label} className="flex items-center gap-1 rounded-lg border border-slate-100 bg-slate-50 p-1">
-                <span className="px-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              <div key={group.label} className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-100 p-1">
+                <span className="px-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   {group.label}
                 </span>
                 {group.items.map((item) => (
@@ -68,13 +83,14 @@ function Shell() {
                 key={item.to}
                 to={item.to}
                 activeOptions={{ exact: "exact" in item && item.exact }}
-                className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-200 hover:text-slate-900 data-[status=active]:bg-slate-900 data-[status=active]:text-white data-[status=active]:hover:bg-slate-700 data-[status=active]:hover:text-white"
+                className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200 hover:text-slate-900 data-[status=active]:bg-slate-900 data-[status=active]:text-white data-[status=active]:hover:bg-slate-700 data-[status=active]:hover:text-white"
               >
                     {item.label}
                   </Link>
                 ))}
               </div>
             ))}
+            <RefreshButton />
           </nav>
         </div>
       </header>

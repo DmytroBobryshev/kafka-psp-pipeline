@@ -28,7 +28,6 @@ export function MerchantConfigPage() {
   const merchants = useQuery({
     queryKey: ["merchants-list", statusFilter],
     queryFn: () => listMerchants({ status: statusFilter || undefined }),
-    refetchInterval: 3000,
     retry: false,
   });
 
@@ -82,7 +81,7 @@ export function MerchantConfigPage() {
                 key={s}
                 onClick={() => setStatusFilter(s)}
                 className={`rounded-md px-3 py-1.5 text-xs font-medium ${
-                  statusFilter === s ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
+                  statusFilter === s ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-200"
                 }`}
               >
                 {s || "all"}
@@ -106,9 +105,9 @@ export function MerchantConfigPage() {
           </p>
         )}
 
-        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+        <div className="overflow-x-auto rounded-lg border border-slate-300 bg-white">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+            <thead className="bg-slate-100 text-left text-xs uppercase tracking-wide text-slate-600">
               <tr>
                 <th className="px-4 py-3">Merchant</th>
                 <th className="px-4 py-3">ID</th>
@@ -124,8 +123,8 @@ export function MerchantConfigPage() {
                 <tr
                   key={m.merchantId}
                   onClick={() => select(m)}
-                  className={`cursor-pointer border-t border-slate-100 ${
-                    form.merchantId === m.merchantId ? "bg-slate-100" : "hover:bg-slate-50"
+                  className={`cursor-pointer border-t border-slate-200 ${
+                    form.merchantId === m.merchantId ? "bg-slate-200" : "hover:bg-slate-100"
                   }`}
                 >
                   <td className="px-4 py-2 font-medium">{m.displayName}</td>
@@ -134,18 +133,18 @@ export function MerchantConfigPage() {
                     <span
                       className={`rounded px-2 py-0.5 text-xs font-medium ${
                         m.status === "ACTIVE"
-                          ? "bg-emerald-100 text-emerald-700"
-                          : "bg-amber-100 text-amber-700"
+                          ? "bg-emerald-100 text-emerald-800 ring-1 ring-inset ring-emerald-600/40"
+                          : "bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-600/40"
                       }`}
                     >
                       {m.status}
                     </span>
                   </td>
                   <td className="px-4 py-2 text-xs">{(m.allowedCurrencies?.length ? m.allowedCurrencies : [m.payoutCurrency]).join(" · ")}</td>
-                  <td className="px-4 py-2 font-mono text-[10px] text-slate-400">
+                  <td className="px-4 py-2 font-mono text-[11px] text-slate-500">
                     {m.webhookUrl ? "✓ set" : "–"}
                   </td>
-                  <td className="px-4 py-2 text-xs text-slate-500">
+                  <td className="px-4 py-2 text-xs text-slate-600">
                     {new Date(m.updatedAt).toLocaleString()}
                   </td>
                   <td className="px-4 py-2 text-right">
@@ -153,7 +152,7 @@ export function MerchantConfigPage() {
                       to="/payments"
                       search={{ merchantId: m.merchantId, paymentId: undefined }}
                       onClick={(e) => e.stopPropagation()}
-                      className="text-xs text-slate-500 underline-offset-2 hover:underline"
+                      className="rounded-md border border-slate-400 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 shadow-sm hover:bg-slate-200"
                     >
                       transactions →
                     </Link>
@@ -162,7 +161,7 @@ export function MerchantConfigPage() {
               ))}
               {merchants.data?.items.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
+                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
                     No merchants{statusFilter ? ` with status ${statusFilter}` : ""} yet — create one
                     on the right.
                   </td>
@@ -173,7 +172,7 @@ export function MerchantConfigPage() {
         </div>
       </section>
 
-      <aside className="rounded-lg border border-slate-200 bg-white p-6">
+      <aside className="rounded-lg border border-slate-300 bg-white p-6">
         <h2 className="mb-4 text-base font-semibold">
           {editing ? `Edit ${form.merchantId}` : "Create merchant"}
         </h2>
@@ -184,7 +183,7 @@ export function MerchantConfigPage() {
             onChange={(e) => setForm({ ...form, merchantId: e.target.value })}
             disabled={editing}
             placeholder="merchant-acme"
-            className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-sm disabled:bg-slate-50 disabled:text-slate-500"
+            className="w-full rounded-md border border-slate-400 px-3 py-2 font-mono text-sm disabled:bg-slate-100 disabled:text-slate-600"
           />
         </label>
         <label className="mb-3 block">
@@ -192,7 +191,7 @@ export function MerchantConfigPage() {
           <input
             value={form.displayName}
             onChange={(e) => setForm({ ...form, displayName: e.target.value })}
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
           />
         </label>
         <div className="mb-3 grid grid-cols-2 gap-3">
@@ -201,7 +200,7 @@ export function MerchantConfigPage() {
             <select
               value={form.status}
               onChange={(e) => setForm({ ...form, status: e.target.value as MerchantStatus })}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
             >
               <option>ACTIVE</option>
               <option>SUSPENDED</option>
@@ -212,7 +211,7 @@ export function MerchantConfigPage() {
             <select
               value={form.payoutCurrency}
               onChange={(e) => setForm({ ...form, payoutCurrency: e.target.value })}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
             >
               {form.allowedCurrencies.map((c) => (
                 <option key={c}>{c}</option>
@@ -222,13 +221,13 @@ export function MerchantConfigPage() {
         </div>
         <div className="mb-3">
           <span className="mb-1 block text-sm font-medium text-slate-700">
-            Accepted currencies <span className="text-xs font-normal text-slate-400">(1–3; payments allowed only in these)</span>
+            Accepted currencies <span className="text-xs font-normal text-slate-500">(1–3; payments allowed only in these)</span>
           </span>
           <div className="flex gap-3">
             {CURRENCIES.map((c) => {
               const checked = form.allowedCurrencies.includes(c);
               return (
-                <label key={c} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${checked ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-600"}`}>
+                <label key={c} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${checked ? "border-slate-900 bg-slate-900 text-white" : "border-slate-400 text-slate-700"}`}>
                   <input
                     type="checkbox"
                     className="hidden"
@@ -253,12 +252,12 @@ export function MerchantConfigPage() {
         </div>
         <label className="mb-3 block">
           <span className="mb-1 block text-sm font-medium text-slate-700">
-            Webhook URL <span className="text-xs font-normal text-slate-400">(payment + refund notifications)</span>
+            Webhook URL <span className="text-xs font-normal text-slate-500">(payment + refund notifications)</span>
           </span>
           <input
             value={form.webhookUrl ?? ""}
             onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })}
-            className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-xs"
+            className="w-full rounded-md border border-slate-400 px-3 py-2 font-mono text-xs"
           />
         </label>
         <label className="mb-4 block">
@@ -298,7 +297,7 @@ export function MerchantConfigPage() {
         {(upsert.error || tombstone.error) && (
           <p className="mt-3 text-sm text-rose-600">{(upsert.error ?? tombstone.error)?.message}</p>
         )}
-        <p className="mt-3 text-[10px] text-slate-400">
+        <p className="mt-3 text-[11px] text-slate-500">
           Only ACTIVE merchants can take payments. Deleting publishes a tombstone — the merchant
           disappears everywhere once compaction and the projections catch up.
         </p>

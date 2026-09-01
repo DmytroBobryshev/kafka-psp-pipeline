@@ -11,7 +11,7 @@ interface Props {
 export function EventTimeline({ events, payment, state }: Props) {
   if (!payment) {
     return (
-      <div className="flex h-64 items-center justify-center rounded-xl border border-dashed border-slate-300 text-sm text-slate-400">
+      <div className="flex h-64 items-center justify-center rounded-xl border border-dashed border-slate-400 text-sm text-slate-500">
         Create a payment to start watching its timeline.
       </div>
     );
@@ -20,7 +20,7 @@ export function EventTimeline({ events, payment, state }: Props) {
   return (
     <div>
       {events.length === 0 ? (
-        <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-slate-300 text-sm text-slate-400">
+        <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-slate-400 text-sm text-slate-500">
           {state === "live" || state === "connecting"
             ? "Connected — waiting for the first event…"
             : "No events received."}

@@ -11,25 +11,24 @@ import { getGroupLag, listGroups, listTopics } from "../api/clusterApi";
 export function ClusterOpsPage() {
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
 
-  const topics = useQuery({ queryKey: ["topics"], queryFn: listTopics, refetchInterval: 15000 });
-  const groups = useQuery({ queryKey: ["groups"], queryFn: listGroups, refetchInterval: 10000 });
+  const topics = useQuery({ queryKey: ["topics"], queryFn: listTopics });
+  const groups = useQuery({ queryKey: ["groups"], queryFn: listGroups });
   const lag = useQuery({
     queryKey: ["lag", selectedGroup],
     queryFn: () => getGroupLag(selectedGroup!),
     enabled: !!selectedGroup,
-    refetchInterval: 5000,
   });
 
   return (
     <main className="mx-auto grid max-w-[1500px] gap-8 px-6 py-8 lg:grid-cols-2">
       <section>
         <h2 className="mb-3 text-base font-semibold">
-          Topics {topics.data && <span className="text-sm font-normal text-slate-400">({topics.data.length})</span>}
+          Topics {topics.data && <span className="text-sm font-normal text-slate-500">({topics.data.length})</span>}
         </h2>
         {topics.error && <p className="text-sm text-rose-600">{topics.error.message}</p>}
-        <div className="max-h-[560px] overflow-auto rounded-lg border border-slate-200 bg-white">
+        <div className="max-h-[560px] overflow-auto rounded-lg border border-slate-300 bg-white">
           <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+            <thead className="sticky top-0 bg-slate-100 text-left text-xs uppercase tracking-wide text-slate-600">
               <tr>
                 <th className="px-4 py-2">Name</th>
                 <th className="px-4 py-2 text-right">Partitions</th>
@@ -38,7 +37,7 @@ export function ClusterOpsPage() {
             </thead>
             <tbody>
               {(topics.data ?? []).map((t) => (
-                <tr key={t.name} className="border-t border-slate-100">
+                <tr key={t.name} className="border-t border-slate-200">
                   <td className="px-4 py-1.5 font-mono text-xs">{t.name}</td>
                   <td className="px-4 py-1.5 text-right">{t.partitionCount}</td>
                   <td className="px-4 py-1.5 text-right">{t.replicationFactor}</td>
@@ -54,19 +53,19 @@ export function ClusterOpsPage() {
         {groups.error && <p className="text-sm text-rose-600">{groups.error.message}</p>}
         <div className="space-y-2">
           {(groups.data ?? []).map((g) => (
-            <div key={g.groupId} className="rounded-lg border border-slate-200 bg-white">
+            <div key={g.groupId} className="rounded-lg border border-slate-300 bg-white">
               <button
                 onClick={() => setSelectedGroup(selectedGroup === g.groupId ? null : g.groupId)}
                 className="flex w-full items-center justify-between px-4 py-2.5 text-left"
               >
                 <span className="font-mono text-xs">{g.groupId}</span>
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-slate-600">
                   {g.state} · {g.memberCount} member{g.memberCount === 1 ? "" : "s"}
                 </span>
               </button>
               {selectedGroup === g.groupId && (
-                <div className="border-t border-slate-100 px-4 py-3">
-                  {lag.isPending && <p className="text-xs text-slate-400">loading lag…</p>}
+                <div className="border-t border-slate-200 px-4 py-3">
+                  {lag.isPending && <p className="text-xs text-slate-500">loading lag…</p>}
                   {lag.error && <p className="text-xs text-rose-600">{lag.error.message}</p>}
                   {lag.data && (
                     <>
@@ -79,7 +78,7 @@ export function ClusterOpsPage() {
                         </span>
                       </p>
                       <table className="w-full text-xs">
-                        <thead className="text-left text-slate-500">
+                        <thead className="text-left text-slate-600">
                           <tr>
                             <th className="py-1 pr-2">topic</th>
                             <th className="py-1 pr-2 text-right">p</th>

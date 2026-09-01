@@ -106,11 +106,15 @@ public class PaymentQueryUseCase {
         List<PaymentHistoryItem> items = new ArrayList<>();
         items.add(
                 new PaymentHistoryItem(
-                        PaymentStatus.CREATED, payment.getCreatedAt(), null, SOURCE_PAYMENT_API));
+                        PaymentStatus.CREATED.name(), payment.getCreatedAt(), null, SOURCE_PAYMENT_API, null));
         for (PaymentStatusHistoryEntry entry : historyRepository.findByPaymentId(paymentId)) {
             items.add(
                     new PaymentHistoryItem(
-                            entry.getStatus(), entry.getOccurredAt(), entry.getEventId(), SOURCE_PSP_CONNECTOR));
+                            entry.getStatus(),
+                            entry.getOccurredAt(),
+                            entry.getEventId(),
+                            SOURCE_PSP_CONNECTOR,
+                            entry.getProviderReference()));
         }
 
         return items.stream().sorted(Comparator.comparing(PaymentHistoryItem::occurredAt)).toList();

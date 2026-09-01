@@ -28,7 +28,7 @@ function Field({
 }
 
 const inputClass =
-  "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 aria-[invalid=true]:border-red-400 aria-[invalid=true]:ring-red-100";
+  "w-full rounded-lg border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 aria-[invalid=true]:border-red-400 aria-[invalid=true]:ring-red-100";
 
 export function PaymentForm({ onCreated }: Props) {
   const [merchantId, setMerchantId] = useState("merchant-acme");
@@ -51,10 +51,10 @@ export function PaymentForm({ onCreated }: Props) {
   }
 
   return (
-    <section className="h-fit rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <section className="h-fit rounded-xl border border-slate-300 bg-white p-6 shadow-sm">
       <h2 className="text-base font-semibold text-slate-900">Create payment</h2>
-      <p className="mt-1 text-sm text-slate-500">
-        Posts to <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">/api/payments</code>.
+      <p className="mt-1 text-sm text-slate-600">
+        Posts to <code className="rounded bg-slate-200 px-1 py-0.5 text-xs">/api/payments</code>.
       </p>
 
       <form onSubmit={handleSubmit} className="mt-5 space-y-4">
@@ -112,7 +112,7 @@ export function PaymentForm({ onCreated }: Props) {
         </button>
 
         {mutation.isSuccess && (
-          <p className="text-center text-xs text-slate-400">
+          <p className="text-center text-xs text-slate-500">
             Created {mutation.data.id} — watch the timeline for its events.
           </p>
         )}

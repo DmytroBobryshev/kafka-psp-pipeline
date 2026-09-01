@@ -77,11 +77,71 @@ public class KafkaPaymentStatusPublisher implements PaymentStatusPublisher {
             UUID causationEventId,
             String traceId,
             String correlationId) {
+        publishNonTerminal(
+                "PENDING", paymentId, merchantId, amount, "", causationEventId, traceId, correlationId);
+    }
+
+    @Override
+    public void publishIpnReceived(
+            UUID paymentId,
+            String merchantId,
+            Money amount,
+            UUID providerReference,
+            UUID causationEventId,
+            String traceId,
+            String correlationId) {
+        publishNonTerminal(
+                "IPN_RECEIVED",
+                paymentId,
+                merchantId,
+                amount,
+                providerReference.toString(),
+                causationEventId,
+                traceId,
+                correlationId);
+    }
+
+    @Override
+    public void publishVerified(
+            UUID paymentId,
+            String merchantId,
+            Money amount,
+            UUID providerReference,
+            UUID causationEventId,
+            String traceId,
+            String correlationId) {
+        publishNonTerminal(
+                "VERIFIED",
+                paymentId,
+                merchantId,
+                amount,
+                providerReference.toString(),
+                causationEventId,
+                traceId,
+                correlationId);
+    }
+
+    /**
+     * Shared shape for every non-terminal status (PENDING/IPN_RECEIVED/VERIFIED): fresh eventId per
+     * emission, blocking send - same as {@link #publishStatusChanged}'s blocking-send discipline,
+     * minus the stored-eventId republish logic that only applies to the terminal event.
+     */
+    private void publishNonTerminal(
+            String status,
+            UUID paymentId,
+            String merchantId,
+            Money amount,
+            String providerReference,
+            UUID causationEventId,
+            String traceId,
+            String correlationId) {
         EventEnvelope envelope =
                 EventEnvelope.causedBy(
                         causationEventId, EVENT_TYPE, 1, paymentId.toString(), AGGREGATE_TYPE, SOURCE,
                         traceId, correlationId);
-        var event = avroEventFactory.toPendingAvro(envelope, paymentId, merchantId, amount);
+        var event =
+                avroEventFactory.toNonTerminalAvro(
+                        envelope, paymentId, merchantId, amount, status, providerReference);
         ProducerRecord<String, Object> record = new ProducerRecord<>(topic, merchantId, event);
         record.headers()
                 .add("event-id", envelope.eventId().toString().getBytes(StandardCharsets.UTF_8))
@@ -91,9 +151,9 @@ public class KafkaPaymentStatusPublisher implements PaymentStatusPublisher {
             kafkaTemplate.send(record).get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new KafkaException("interrupted while publishing PENDING for paymentId=" + paymentId, e);
+            throw new KafkaException("interrupted while publishing " + status + " for paymentId=" + paymentId, e);
         } catch (ExecutionException e) {
-            throw new KafkaException("failed to publish PENDING for paymentId=" + paymentId, e.getCause());
+            throw new KafkaException("failed to publish " + status + " for paymentId=" + paymentId, e.getCause());
         }
     }
 

@@ -16,6 +16,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Predicate;
@@ -310,5 +311,24 @@ abstract class PspConnectorIntegrationSupport {
     /** Convenience for the "record on the wire" step of the tests. */
     protected static void send(Producer<String, Object> producer, String topic, String key, Object value) {
         producer.send(new ProducerRecord<>(topic, key, value));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // M21: terminal-vs-trail filtering
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * PENDING/IPN_RECEIVED/VERIFIED (M20/M21) are non-terminal trail events every payment now emits
+     * BEFORE its one terminal SUCCEEDED/DECLINED event. The "no loss / no double-count" accounting
+     * in {@code RebalanceLossIT} and {@code CrashRedeliveryIT} is about the terminal event
+     * specifically (republish() only ever re-emits that one, under the stored statusEventId - see
+     * {@code ProcessPaymentRequestUseCase}) - counting/grouping the raw, unfiltered record stream
+     * would count each payment's trail events too and break those assertions.
+     */
+    protected static final Set<String> TERMINAL_STATUSES = Set.of("SUCCEEDED", "DECLINED");
+
+    protected static List<ConsumerRecord<String, PaymentStatusChanged>> terminalOnly(
+            List<ConsumerRecord<String, PaymentStatusChanged>> records) {
+        return records.stream().filter(r -> TERMINAL_STATUSES.contains(r.value().getStatus())).toList();
     }
 }

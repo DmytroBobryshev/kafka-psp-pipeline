@@ -48,10 +48,11 @@ class PaymentQueryUseCaseTest {
 
         assertThat(history).hasSize(1);
         PaymentHistoryItem created = history.get(0);
-        assertThat(created.status()).isEqualTo(PaymentStatus.CREATED);
+        assertThat(created.status()).isEqualTo("CREATED");
         assertThat(created.occurredAt()).isEqualTo(createdAt);
         assertThat(created.eventId()).isNull();
         assertThat(created.source()).isEqualTo("payment-api");
+        assertThat(created.providerReference()).isNull();
     }
 
     @Test
@@ -68,9 +69,15 @@ class PaymentQueryUseCaseTest {
         FakeHistoryRepository history = new FakeHistoryRepository();
         // Inserted out of order on purpose - the use case must sort, not trust storage order.
         history.add(PaymentStatusHistoryEntry.reconstitute(
-                UUID.randomUUID(), paymentId, PaymentStatus.SUCCEEDED, succeededEventId, succeededAt, succeededAt));
+                UUID.randomUUID(),
+                paymentId,
+                "SUCCEEDED",
+                "provider-ref-1",
+                succeededEventId,
+                succeededAt,
+                succeededAt));
         history.add(PaymentStatusHistoryEntry.reconstitute(
-                UUID.randomUUID(), paymentId, PaymentStatus.PENDING, pendingEventId, pendingAt, pendingAt));
+                UUID.randomUUID(), paymentId, "PENDING", null, pendingEventId, pendingAt, pendingAt));
 
         PaymentQueryUseCase useCase =
                 new PaymentQueryUseCase(payments, new UnsupportedRefundRepository(), history);
@@ -78,15 +85,46 @@ class PaymentQueryUseCaseTest {
         List<PaymentHistoryItem> result = useCase.history(paymentId);
 
         assertThat(result).extracting(PaymentHistoryItem::status)
-                .containsExactly(PaymentStatus.CREATED, PaymentStatus.PENDING, PaymentStatus.SUCCEEDED);
+                .containsExactly("CREATED", "PENDING", "SUCCEEDED");
         assertThat(result).extracting(PaymentHistoryItem::occurredAt)
                 .containsExactly(createdAt, pendingAt, succeededAt);
         // Every non-CREATED entry carries its eventId and is attributed to psp-connector, the
         // sole publisher of payments.payment-status-changed.v1.
         assertThat(result.get(1).eventId()).isEqualTo(pendingEventId);
         assertThat(result.get(1).source()).isEqualTo("psp-connector");
+        assertThat(result.get(1).providerReference()).isNull();
         assertThat(result.get(2).eventId()).isEqualTo(succeededEventId);
         assertThat(result.get(2).source()).isEqualTo("psp-connector");
+        assertThat(result.get(2).providerReference()).isEqualTo("provider-ref-1");
+    }
+
+    @Test
+    void historyIncludesNonTerminalTrailStatusesVerbatim() {
+        // M21: IPN_RECEIVED/VERIFIED have no PaymentStatus equivalent - the read side passes them
+        // through as opaque strings, exactly like every other status, providerReference included.
+        Instant createdAt = Instant.parse("2026-08-01T10:00:00Z");
+        Instant ipnAt = createdAt.plus(1, ChronoUnit.SECONDS);
+        UUID paymentId = UUID.randomUUID();
+        UUID ipnEventId = UUID.randomUUID();
+        String providerReference = UUID.randomUUID().toString();
+
+        FakePaymentRepository payments = new FakePaymentRepository();
+        payments.put(paymentWithStatus(paymentId, createdAt, PaymentStatus.PENDING));
+        FakeHistoryRepository history = new FakeHistoryRepository();
+        history.add(PaymentStatusHistoryEntry.reconstitute(
+                UUID.randomUUID(), paymentId, "IPN_RECEIVED", providerReference, ipnEventId, ipnAt, ipnAt));
+
+        PaymentQueryUseCase useCase =
+                new PaymentQueryUseCase(payments, new UnsupportedRefundRepository(), history);
+
+        List<PaymentHistoryItem> result = useCase.history(paymentId);
+
+        assertThat(result).hasSize(2);
+        PaymentHistoryItem ipn = result.get(1);
+        assertThat(ipn.status()).isEqualTo("IPN_RECEIVED");
+        assertThat(ipn.eventId()).isEqualTo(ipnEventId);
+        assertThat(ipn.providerReference()).isEqualTo(providerReference);
+        assertThat(ipn.source()).isEqualTo("psp-connector");
     }
 
     @Test

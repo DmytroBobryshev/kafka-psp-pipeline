@@ -21,17 +21,27 @@ import org.springframework.stereotype.Component;
 public class PaymentStatusAvroEventFactory {
 
     /**
-     * @param envelope the JSON-era {@link EventEnvelope} this service already builds for every
-     *                 outbound event (unchanged - {@link KafkaPaymentStatusPublisher} still owns
-     *                 causation/trace/correlation wiring).
-     * @param attempt  the payment attempt that was just processed.
+     * Builder for every non-terminal status this service emits before the terminal SUCCEEDED/
+     * DECLINED publish: PENDING (providerReference {@code ""}, no provider call yet), IPN_RECEIVED
+     * and VERIFIED (both carry the provider's own event id as {@code providerReference}). One
+     * generalized method rather than three near-identical ones - {@code toPendingAvro} was this
+     * method under a stage-specific name before M21 added the other two stages.
+     *
+     * @param envelope         the JSON-era {@link EventEnvelope} this service already builds for
+     *                         every outbound event (unchanged - {@link KafkaPaymentStatusPublisher}
+     *                         still owns causation/trace/correlation wiring).
+     * @param status           {@code "PENDING"}, {@code "IPN_RECEIVED"}, or {@code "VERIFIED"}.
+     * @param providerReference the provider's event id, or {@code ""} for PENDING (no provider call
+     *                          has happened yet).
      * @return the Avro record ready to hand to {@code KafkaTemplate#send}.
      */
-    public com.example.psp.common.events.avro.PaymentStatusChanged toPendingAvro(
+    public com.example.psp.common.events.avro.PaymentStatusChanged toNonTerminalAvro(
             com.example.psp.common.events.EventEnvelope envelope,
             java.util.UUID paymentId,
             String merchantId,
-            com.example.psp.pspconnector.domain.model.Money amount) {
+            com.example.psp.pspconnector.domain.model.Money amount,
+            String status,
+            String providerReference) {
         com.example.psp.common.events.avro.EventEnvelope avroEnvelope =
                 com.example.psp.common.events.avro.EventEnvelope.newBuilder()
                         .setEventId(envelope.eventId().toString())
@@ -51,8 +61,8 @@ public class PaymentStatusAvroEventFactory {
                 .setMerchantId(merchantId)
                 .setAmount(amount.amount())
                 .setCurrency(amount.currency())
-                .setStatus("PENDING")
-                .setProviderReference("")
+                .setStatus(status)
+                .setProviderReference(providerReference)
                 .setDeclineReason(null)
                 .build();
     }

@@ -19,7 +19,6 @@ export function DlqConsolePage() {
   const records = useQuery({
     queryKey: ["dlq", selected.topic],
     queryFn: () => peekDlq(selected.topic, 20),
-    refetchInterval: 10000,
   });
 
   const replay = useMutation({
@@ -39,7 +38,7 @@ export function DlqConsolePage() {
               setSelected(t);
               setExpanded(null);
             }}
-            className="w-[480px] max-w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-xs"
+            className="w-[480px] max-w-full rounded-md border border-slate-400 px-3 py-2 font-mono text-xs"
           >
             {DLQ_TOPICS.map((d) => (
               <option key={d.topic} value={d.topic}>
@@ -47,7 +46,7 @@ export function DlqConsolePage() {
               </option>
             ))}
           </select>
-          <span className="mt-1 block text-xs text-slate-500">owner: {selected.owner}</span>
+          <span className="mt-1 block text-xs text-slate-600">owner: {selected.owner}</span>
         </label>
 
         {selected.replayPath ? (
@@ -59,7 +58,7 @@ export function DlqConsolePage() {
             {replay.isPending ? "Replaying…" : "Replay up to 10"}
           </button>
         ) : (
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-slate-500">
             browse-only: this DLQ is written by Kafka Connect, no service owns a replay path
           </span>
         )}
@@ -82,7 +81,7 @@ export function DlqConsolePage() {
           const id = `${r.partition}-${r.offset}`;
           const isOpen = expanded === id;
           return (
-            <div key={id} className="rounded-lg border border-slate-200 bg-white">
+            <div key={id} className="rounded-lg border border-slate-300 bg-white">
               <button
                 onClick={() => setExpanded(isOpen ? null : id)}
                 className="flex w-full items-center justify-between px-4 py-3 text-left"
@@ -90,30 +89,30 @@ export function DlqConsolePage() {
                 <span className="font-mono text-xs">
                   p{r.partition} · offset {r.offset} · key {r.keyString ?? "null"}
                 </span>
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-slate-600">
                   {new Date(r.timestamp).toLocaleString()}
-                  <span className="ml-3 text-slate-400">{isOpen ? "▲" : "▼"}</span>
+                  <span className="ml-3 text-slate-500">{isOpen ? "▲" : "▼"}</span>
                 </span>
               </button>
               {isOpen && (
-                <div className="border-t border-slate-100 px-4 py-3">
-                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <div className="border-t border-slate-200 px-4 py-3">
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
                     Retry / dead-letter headers
                   </h4>
                   <dl className="mb-4 grid grid-cols-[280px_1fr] gap-y-1 text-xs">
                     {Object.entries(r.headers).map(([k, v]) => (
                       <div key={k} className="contents">
-                        <dt className="font-mono text-slate-500">{k}</dt>
-                        <dd className={`font-mono ${k.includes("stacktrace") ? "whitespace-pre-wrap break-all text-[10px] leading-tight" : "break-all"}`}>
+                        <dt className="font-mono text-slate-600">{k}</dt>
+                        <dd className={`font-mono ${k.includes("stacktrace") ? "whitespace-pre-wrap break-all text-[11px] leading-tight" : "break-all"}`}>
                           {v}
                         </dd>
                       </div>
                     ))}
                   </dl>
-                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
                     Value {r.valueBase64 && "(binary Avro, base64)"}
                   </h4>
-                  <pre className="max-h-48 overflow-auto rounded bg-slate-50 p-3 font-mono text-[11px] leading-snug">
+                  <pre className="max-h-48 overflow-auto rounded bg-slate-100 p-3 font-mono text-[11px] leading-snug">
                     {r.valuePreview}
                   </pre>
                 </div>
@@ -122,7 +121,7 @@ export function DlqConsolePage() {
           );
         })}
         {records.data?.length === 0 && (
-          <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-400">
+          <p className="rounded-lg border border-dashed border-slate-300 bg-slate-100 px-4 py-8 text-center text-sm text-slate-500">
             DLQ is empty - which is the state you want it in.
           </p>
         )}

@@ -1,10 +1,7 @@
 package com.example.psp.paymentapi.adapters.out.persistence;
 
-import com.example.psp.paymentapi.domain.model.PaymentStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
@@ -37,9 +34,15 @@ public class PaymentStatusHistoryEntity {
     @Column(name = "payment_id", nullable = false)
     private UUID paymentId;
 
-    @Enumerated(EnumType.STRING)
+    // M21: the event's raw wire status string (was PaymentStatus via @Enumerated through M20) -
+    // see domain.model.PaymentStatusHistoryEntry's javadoc for why.
     @Column(nullable = false, length = 20)
-    private PaymentStatus status;
+    private String status;
+
+    // M21 (V10): the provider's own event id, or null - see
+    // domain.model.PaymentStatusHistoryEntry#getProviderReference()'s javadoc.
+    @Column(name = "provider_reference", length = 64)
+    private String providerReference;
 
     @Column(name = "event_id", nullable = false)
     private UUID eventId;

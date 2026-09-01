@@ -37,7 +37,6 @@ export function TimelinePage() {
   const merchants = useQuery({
     queryKey: ["merchants", "ACTIVE"],
     queryFn: () => listMerchants({ status: "ACTIVE" }),
-    refetchInterval: 15000,
     retry: false,
   });
   const activeMerchants = merchants.data?.items ?? [];
@@ -149,14 +148,14 @@ export function TimelinePage() {
   return (
     <main className="mx-auto grid max-w-[1500px] gap-8 px-6 py-8 lg:grid-cols-[400px_1fr]">
       <div className="space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5">
-          <div className="mb-4 flex rounded-lg border border-slate-200 p-0.5">
+        <section className="rounded-lg border border-slate-300 bg-white p-5">
+          <div className="mb-4 flex rounded-lg border border-slate-300 p-0.5">
             {(["payment", "refund"] as Mode[]).map((m) => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
                 className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium capitalize ${
-                  mode === m ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
+                  mode === m ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-200"
                 }`}
               >
                 simulate {m}
@@ -168,13 +167,13 @@ export function TimelinePage() {
             <>
               <label className="mb-3 block">
                 <span className="mb-1 block text-sm font-medium text-slate-700">
-                  Merchant <span className="text-xs font-normal text-slate-400">(ACTIVE only)</span>
+                  Merchant <span className="text-xs font-normal text-slate-500">(ACTIVE only)</span>
                 </span>
                 {activeMerchants.length > 0 ? (
                   <select
                     value={merchantId}
                     onChange={(e) => setMerchantId(e.target.value)}
-                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
                   >
                     {activeMerchants.map((m) => (
                       <option key={m.merchantId} value={m.merchantId}>
@@ -195,7 +194,7 @@ export function TimelinePage() {
                   <input
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
-                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
                   />
                 </label>
                 <label className="block">
@@ -203,7 +202,7 @@ export function TimelinePage() {
                   <select
                     value={currency}
                     onChange={(e) => setCurrency(e.target.value)}
-                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
                   >
                     {merchantCurrencies.map((c) => (
                       <option key={c}>{c}</option>
@@ -212,7 +211,7 @@ export function TimelinePage() {
                 </label>
               </div>
               <div className="mb-3">
-                <span className="mb-1 block text-xs font-medium text-slate-600">Outcome</span>
+                <span className="mb-1 block text-xs font-medium text-slate-700">Outcome</span>
                 <div className="grid grid-cols-3 gap-2">
                   {PAYMENT_OUTCOMES.map((o) => (
                     <button
@@ -236,7 +235,7 @@ export function TimelinePage() {
                   ? "Sending…"
                   : `Create payment · ${withEnding(amount, paymentOutcome.cents)} ${currency}`}
               </button>
-              <p className="mt-2 text-[10px] leading-relaxed text-slate-400">
+              <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
                 The amount's ending selects the outcome (Stripe/Adyen sandbox convention).
                 Timeout never publishes a status — it goes down the retry path.
               </p>
@@ -245,7 +244,7 @@ export function TimelinePage() {
             <>
               <label className="mb-3 block">
                 <span className="mb-1 block text-sm font-medium text-slate-700">
-                  Payment ID <span className="text-xs font-normal text-slate-400">(paste, or pick from suggestions)</span>
+                  Payment ID <span className="text-xs font-normal text-slate-500">(paste, or pick from suggestions)</span>
                 </span>
                 <input
                   list="recent-payment-ids"
@@ -256,7 +255,7 @@ export function TimelinePage() {
                     if (full != null) setRefundAmount(String(full));
                   }}
                   placeholder="uuid of a succeeded payment"
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-xs"
+                  className="w-full rounded-md border border-slate-400 px-3 py-2 font-mono text-xs"
                 />
                 <datalist id="recent-payment-ids">
                   {history.map((h) => (
@@ -272,7 +271,7 @@ export function TimelinePage() {
                   <input
                     value={refundAmount}
                     onChange={(e) => setRefundAmount(e.target.value)}
-                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
                   />
                 </label>
                 <button
@@ -280,23 +279,23 @@ export function TimelinePage() {
                     const full = fullAmountOf(refundPaymentId);
                     if (full != null) setRefundAmount(String(full));
                   }}
-                  className="mt-6 rounded-md border border-slate-300 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
+                  className="mt-6 rounded-md border border-slate-400 px-3 py-2 text-xs text-slate-700 hover:bg-slate-100"
                 >
                   full
                 </button>
               </div>
               <label className="mb-3 block">
                 <span className="mb-1 block text-sm font-medium text-slate-700">
-                  Reason <span className="text-xs font-normal text-slate-400">(optional)</span>
+                  Reason <span className="text-xs font-normal text-slate-500">(optional)</span>
                 </span>
                 <input
                   value={refundReason}
                   onChange={(e) => setRefundReason(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  className="w-full rounded-md border border-slate-400 px-3 py-2 text-sm"
                 />
               </label>
               <div className="mb-3">
-                <span className="mb-1 block text-xs font-medium text-slate-600">Outcome</span>
+                <span className="mb-1 block text-xs font-medium text-slate-700">Outcome</span>
                 <div className="grid grid-cols-2 gap-2">
                   {REFUND_OUTCOMES.map((o) => (
                     <button
@@ -320,7 +319,7 @@ export function TimelinePage() {
                   ? "Sending…"
                   : `Send refund · ${refundOutcome.cents == null ? refundAmount : withEnding(refundAmount, refundOutcome.cents)} EUR`}
               </button>
-              <p className="mt-2 text-[10px] leading-relaxed text-slate-400">
+              <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
                 A failed refund fires the compensating transaction — watch reservation-released
                 appear in the timeline.
               </p>
@@ -329,10 +328,10 @@ export function TimelinePage() {
           {error && <p className="mt-3 text-xs text-rose-600">{error}</p>}
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <section className="rounded-lg border border-slate-300 bg-white p-4">
           <h3 className="mb-2 text-sm font-semibold text-slate-700">Auto-run (operation + idle)</h3>
           <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-xs text-slate-600">
+            <label className="flex items-center gap-2 text-xs text-slate-700">
               every
               <input
                 type="number"
@@ -340,7 +339,7 @@ export function TimelinePage() {
                 max={120}
                 value={idleSeconds}
                 onChange={(e) => setIdleSeconds(Number(e.target.value))}
-                className="w-16 rounded-md border border-slate-300 px-2 py-1 text-xs"
+                className="w-16 rounded-md border border-slate-400 px-2 py-1 text-xs"
               />
               s
             </label>
@@ -353,40 +352,40 @@ export function TimelinePage() {
             >
               {autoRunning ? "Stop" : "Start"}
             </button>
-            <span className="text-xs text-slate-400">
+            <span className="text-xs text-slate-500">
               {autoRunning ? `running · ${autoCount} created` : autoCount ? `${autoCount} created` : "idle"}
             </span>
           </div>
-          <p className="mt-2 text-[10px] text-slate-400">
+          <p className="mt-2 text-[11px] text-slate-500">
             Random 5–100 EUR payments for the selected merchant, one per interval.
           </p>
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <section className="rounded-lg border border-slate-300 bg-white p-4">
           <h3 className="mb-2 text-sm font-semibold text-slate-700">Recent payments (this browser)</h3>
           {history.length === 0 && (
-            <p className="text-xs text-slate-400">Payments you create appear here with quick actions.</p>
+            <p className="text-xs text-slate-500">Payments you create appear here with quick actions.</p>
           )}
           <ul className="max-h-64 space-y-1.5 overflow-auto">
             {history.map((h) => (
-              <li key={h.id} className="rounded border border-slate-100 px-2.5 py-1.5 text-xs">
+              <li key={h.id} className="rounded border border-slate-200 px-2.5 py-1.5 text-xs">
                 <div className="flex items-center justify-between gap-2">
                   <button
-                    className="truncate font-mono text-slate-600 hover:text-slate-900"
+                    className="truncate font-mono text-slate-700 hover:text-slate-900"
                     title="Copy payment id"
                     onClick={() => copy(h.id)}
                   >
                     {copiedKey === h.id ? "copied ✓" : `${h.id.slice(0, 8)}… ⧉`}
                   </button>
-                  <span className="whitespace-nowrap text-slate-500">
+                  <span className="whitespace-nowrap text-slate-600">
                     {h.amount} {h.currency}
                   </span>
                 </div>
                 <div className="mt-0.5 flex items-center justify-between gap-2">
-                  <span className="truncate text-slate-400">{h.merchantId}</span>
+                  <span className="truncate text-slate-500">{h.merchantId}</span>
                   <span className="flex gap-2 whitespace-nowrap">
                     <button
-                      className="text-slate-500 underline-offset-2 hover:underline"
+                      className="rounded-md border border-slate-400 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 shadow-sm hover:bg-slate-200"
                       onClick={() =>
                         setPayment({ ...h, status: "", createdAt: h.createdAt } as PaymentResponse)
                       }
@@ -394,7 +393,7 @@ export function TimelinePage() {
                       track
                     </button>
                     <button
-                      className="font-medium text-slate-700 underline-offset-2 hover:underline"
+                      className="rounded-md border border-slate-400 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 shadow-sm hover:bg-slate-200"
                       onClick={() => {
                         setMode("refund");
                         setRefundPaymentId(h.id);
@@ -416,7 +415,7 @@ export function TimelinePage() {
           <h2 className="text-base font-semibold text-slate-900">
             Event timeline
             {payment && (
-              <span className="ml-2 font-mono text-sm font-normal text-slate-400">
+              <span className="ml-2 font-mono text-sm font-normal text-slate-500">
                 {payment.id}
               </span>
             )}

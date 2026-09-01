@@ -23,22 +23,28 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <ul>
  *   <li>apply the status to {@code payments.status} - {@code PENDING} through the NO-DOWNGRADE
- *       conditional UPDATE ({@link PaymentRepository#applyPendingStatus}), everything else
- *       (SUCCEEDED/FAILED) through the same absolute-value UPDATE ({@link
- *       PaymentRepository#updateStatus}) this use case has always used - see that method's
- *       javadoc for why an ABSOLUTE value is what makes redelivery of a terminal outcome safe;
+ *       conditional UPDATE ({@link PaymentRepository#applyPendingStatus}), SUCCEEDED/FAILED
+ *       through the same absolute-value UPDATE ({@link PaymentRepository#updateStatus}) this use
+ *       case has always used (see that method's javadoc for why an ABSOLUTE value is what makes
+ *       redelivery of a terminal outcome safe) - M21: skipped entirely when {@link
+ *       ApplyPaymentOutcomeCommand#domainStatus()} is {@code null} (IPN_RECEIVED/VERIFIED,
+ *       history-only stage 3/4 trail events - see that record's javadoc);
  *   <li>append one row to the {@code payment_status_history} trail ({@link
- *       PaymentStatusHistoryRepository#tryRecord}) - every received event gets a row, terminal or
- *       not, deduplicated on {@code eventId} by the table's own UNIQUE constraint (V9), never by a
- *       check-then-act read here.
+ *       PaymentStatusHistoryRepository#tryRecord}) - every received event gets a row,
+ *       unconditionally (terminal, non-terminal, or history-only alike), deduplicated on
+ *       {@code eventId} by the table's own UNIQUE constraint (V9), never by a check-then-act read
+ *       here.
  * </ul>
  *
- * <p>Both writes happen for every call, including a call this method's own guard/dedup logic ends
- * up treating as a no-op (a downgraded PENDING, a duplicate eventId) - there is no "did the status
- * actually change" branch here on purpose: each write is independently idempotent by construction
- * (a conditional UPDATE whose WHERE clause simply matches zero rows; an INSERT whose UNIQUE
- * constraint simply rejects it), so this use case doesn't need to first ask a question whose
- * answer the repository layer already enforces.
+ * <p>The history write happens for every call, including a call this method's own guard/dedup
+ * logic ends up treating as a no-op (a downgraded PENDING, a duplicate eventId, a history-only
+ * status) - there is no "did the status actually change" branch here on purpose: each write is
+ * independently idempotent by construction (a conditional UPDATE whose WHERE clause simply
+ * matches zero rows; an INSERT whose UNIQUE constraint simply rejects it), so this use case
+ * doesn't need to first ask a question whose answer the repository layer already enforces. The
+ * {@code payments.status} write is the one exception - M21 makes it conditional on
+ * {@code domainStatus != null} rather than unconditional, since IPN_RECEIVED/VERIFIED have no
+ * value to apply there at all.
  *
  * <p>{@code @Transactional} covers both writes as one unit for the same structural reason as
  * {@code CreatePaymentUseCase}: {@link PaymentRepository#updateStatus}/{@code applyPendingStatus}
@@ -65,19 +71,27 @@ public class ApplyPaymentOutcomeUseCase {
     @Transactional
     public void execute(ApplyPaymentOutcomeCommand command) {
         log.info(
-                "Applying payment outcome paymentId={} status={} eventId={}",
+                "Applying payment outcome paymentId={} rawStatus={} domainStatus={} eventId={}",
                 command.paymentId(),
-                command.status(),
+                command.rawStatus(),
+                command.domainStatus(),
                 command.eventId());
 
-        if (command.status() == PaymentStatus.PENDING) {
+        // M21: domainStatus == null means IPN_RECEIVED/VERIFIED - history-only, payments.status is
+        // left untouched. Every other status (PENDING/SUCCEEDED/FAILED) still applies exactly as
+        // before M21.
+        if (command.domainStatus() == PaymentStatus.PENDING) {
             paymentRepository.applyPendingStatus(command.paymentId());
-        } else {
-            paymentRepository.updateStatus(command.paymentId(), command.status());
+        } else if (command.domainStatus() != null) {
+            paymentRepository.updateStatus(command.paymentId(), command.domainStatus());
         }
 
         historyRepository.tryRecord(
                 PaymentStatusHistoryEntry.record(
-                        command.paymentId(), command.status(), command.eventId(), command.occurredAt()));
+                        command.paymentId(),
+                        command.rawStatus(),
+                        command.providerReference(),
+                        command.eventId(),
+                        command.occurredAt()));
     }
 }

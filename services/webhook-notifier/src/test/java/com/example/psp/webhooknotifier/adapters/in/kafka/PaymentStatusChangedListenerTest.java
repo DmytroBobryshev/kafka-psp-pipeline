@@ -24,15 +24,30 @@ import org.springframework.kafka.support.Acknowledgment;
  * {@code PaymentStatusChangedMapperImpl} has no framework dependency at construction time, so it
  * is instantiated directly, alongside a real {@link PlanWebhookDeliveryUseCase} backed by fakes.
  *
- * <p>Proves the PENDING guard: a non-terminal {@code payments.payment-status-changed.v1} event
- * (psp-connector's pre-provider-call status) must never reach the planner - nothing to tell a
- * merchant yet - but the record must still be acknowledged so the consumer group advances past it
- * instead of redelivering it forever.
+ * <p>Proves the terminal ALLOWLIST guard (M21): every non-terminal {@code
+ * payments.payment-status-changed.v1} status - PENDING (M20's pre-provider-call event),
+ * IPN_RECEIVED, VERIFIED (M21's stage 3/4 trail events) - must never reach the planner, nothing to
+ * tell a merchant about any of them yet - but the record must still be acknowledged so the consumer
+ * group advances past it instead of redelivering it forever.
  */
 class PaymentStatusChangedListenerTest {
 
     @Test
     void pendingStatusIsSkippedAndAcknowledgedWithoutPlanningADelivery() {
+        assertSkippedAndAcknowledged("PENDING");
+    }
+
+    @Test
+    void ipnReceivedStatusIsSkippedAndAcknowledgedWithoutPlanningADelivery() {
+        assertSkippedAndAcknowledged("IPN_RECEIVED");
+    }
+
+    @Test
+    void verifiedStatusIsSkippedAndAcknowledgedWithoutPlanningADelivery() {
+        assertSkippedAndAcknowledged("VERIFIED");
+    }
+
+    private static void assertSkippedAndAcknowledged(String status) {
         RecordingPublisher publisher = new RecordingPublisher();
         RetryChain chain =
                 new RetryChain("base", List.of(new RetryChain.Tier("retry5s", Duration.ofSeconds(5))), "dlq");
@@ -41,13 +56,13 @@ class PaymentStatusChangedListenerTest {
                 new PaymentStatusChangedListener(useCase, new PaymentStatusChangedMapperImpl());
         RecordingAcknowledgment ack = new RecordingAcknowledgment();
 
-        listener.onMessage(pendingEvent(), ack);
+        listener.onMessage(eventWithStatus(status), ack);
 
         assertThat(publisher.published).isEmpty();
         assertThat(ack.acknowledged).isTrue();
     }
 
-    private static PaymentStatusChanged pendingEvent() {
+    private static PaymentStatusChanged eventWithStatus(String status) {
         UUID paymentId = UUID.randomUUID();
         return PaymentStatusChanged.newBuilder()
                 .setEnvelope(
@@ -67,7 +82,7 @@ class PaymentStatusChangedListenerTest {
                 .setMerchantId("merchant-1")
                 .setAmount(BigDecimal.TEN)
                 .setCurrency("EUR")
-                .setStatus("PENDING")
+                .setStatus(status)
                 .setProviderReference("")
                 .setDeclineReason(null)
                 .build();
